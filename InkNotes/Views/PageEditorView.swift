@@ -52,7 +52,7 @@ struct PageEditorView: View {
           set: { store.updateCurrentDrawing($0) }
         ),
         inputPolicy: pencilOnly ? .pencilOnly : .anyInput,
-        isEditable: !store.isReadOnly,
+        isEditable: !store.isReadOnly && !store.isBackupTransferInProgress,
         controller: canvasController
       )
       .id(page.id)
@@ -71,14 +71,14 @@ struct PageEditorView: View {
       } label: {
         Label("撤销", systemImage: "arrow.uturn.backward")
       }
-      .disabled(store.isReadOnly)
+      .disabled(store.isReadOnly || store.isBackupTransferInProgress)
 
       Button {
         canvasController.redo()
       } label: {
         Label("重做", systemImage: "arrow.uturn.forward")
       }
-      .disabled(store.isReadOnly)
+      .disabled(store.isReadOnly || store.isBackupTransferInProgress)
 
       Menu {
         ForEach(PageBackground.allCases) { background in
@@ -91,7 +91,7 @@ struct PageEditorView: View {
       } label: {
         Label("纸张", systemImage: "square.grid.3x3")
       }
-      .disabled(store.isReadOnly)
+      .disabled(store.isReadOnly || store.isBackupTransferInProgress)
 
       Button {
         pencilOnly.toggle()
@@ -101,14 +101,16 @@ struct PageEditorView: View {
           systemImage: pencilOnly ? "pencil.tip" : "hand.draw"
         )
       }
-      .disabled(store.isReadOnly)
+      .disabled(store.isReadOnly || store.isBackupTransferInProgress)
 
       Button(role: .destructive) {
         showingClearConfirmation = true
       } label: {
         Label("清空当前页", systemImage: "trash")
       }
-      .disabled(store.selectedPage == nil || store.isReadOnly)
+      .disabled(
+        store.selectedPage == nil || store.isReadOnly || store.isBackupTransferInProgress
+      )
     }
   }
 }

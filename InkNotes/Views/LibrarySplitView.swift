@@ -6,6 +6,7 @@ struct LibrarySplitView: View {
   @State private var namingAction: NamingAction?
   @State private var draftTitle = ""
   @State private var deletionTarget: DeletionTarget?
+  @State private var showingBackupTransfer = false
 
   var body: some View {
     NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -64,6 +65,10 @@ struct LibrarySplitView: View {
     } message: {
       Text(store.persistenceError ?? "")
     }
+    .sheet(isPresented: $showingBackupTransfer) {
+      BackupTransferView()
+        .environmentObject(store)
+    }
   }
 
   private var notebookSidebar: some View {
@@ -96,18 +101,26 @@ struct LibrarySplitView: View {
             }
           }
         }
-        .disabled(store.isDrawingLoading)
+        .disabled(store.isDrawingLoading || store.isBackupTransferInProgress)
       }
     }
     .navigationTitle("笔记本")
     .toolbar {
+      ToolbarItem(placement: .secondaryAction) {
+        Button {
+          showingBackupTransfer = true
+        } label: {
+          Label("备份与恢复", systemImage: "externaldrive.badge.timemachine")
+        }
+        .disabled(!store.canManageBackups)
+      }
       ToolbarItem(placement: .primaryAction) {
         Button {
           beginNaming(.addNotebook, currentTitle: "")
         } label: {
           Label("新建笔记本", systemImage: "plus")
         }
-        .disabled(store.isReadOnly || store.isLoading || store.isDrawingLoading)
+        .disabled(!store.canManageBackups)
       }
     }
   }
@@ -141,7 +154,7 @@ struct LibrarySplitView: View {
             }
           }
         }
-        .disabled(store.isDrawingLoading)
+        .disabled(store.isDrawingLoading || store.isBackupTransferInProgress)
       } else {
         ContentUnavailableView("没有页面", systemImage: "doc")
       }
@@ -154,7 +167,7 @@ struct LibrarySplitView: View {
         } label: {
           Label("新建页面", systemImage: "doc.badge.plus")
         }
-        .disabled(store.selectedNotebook == nil || store.isReadOnly || store.isDrawingLoading)
+        .disabled(store.selectedNotebook == nil || !store.canManageBackups)
       }
     }
   }

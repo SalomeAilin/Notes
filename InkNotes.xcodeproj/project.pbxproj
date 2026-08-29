@@ -19,6 +19,7 @@
 		D0000000000000000000000A /* BackupArchive.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000000C /* BackupArchive.swift */; };
 		D0000000000000000000000B /* BackupArchiveCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000000D /* BackupArchiveCodec.swift */; };
 		D0000000000000000000000C /* BackupSnapshotRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000000E /* BackupSnapshotRepository.swift */; };
+		D0000000000000000000000D /* BackupTransferView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000000F /* BackupTransferView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -36,6 +37,7 @@
 		C0000000000000000000000C /* BackupArchive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupArchive.swift; sourceTree = "<group>"; };
 		C0000000000000000000000D /* BackupArchiveCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupArchiveCodec.swift; sourceTree = "<group>"; };
 		C0000000000000000000000E /* BackupSnapshotRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupSnapshotRepository.swift; sourceTree = "<group>"; };
+		C0000000000000000000000F /* BackupTransferView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupTransferView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -117,6 +119,7 @@
 		B00000000000000000000008 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				C0000000000000000000000F /* BackupTransferView.swift */,
 				C00000000000000000000005 /* LibrarySplitView.swift */,
 				C00000000000000000000006 /* PageEditorView.swift */,
 				B00000000000000000000009 /* Canvas */,
@@ -210,6 +213,7 @@
 				D0000000000000000000000C /* BackupSnapshotRepository.swift in Sources */,
 				D00000000000000000000003 /* DrawingRepository.swift in Sources */,
 				D00000000000000000000004 /* LibraryStore.swift in Sources */,
+				D0000000000000000000000D /* BackupTransferView.swift in Sources */,
 				D00000000000000000000005 /* LibrarySplitView.swift in Sources */,
 				D00000000000000000000006 /* PageEditorView.swift in Sources */,
 				D00000000000000000000007 /* PencilCanvas.swift in Sources */,
