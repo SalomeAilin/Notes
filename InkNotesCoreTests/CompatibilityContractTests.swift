@@ -8,6 +8,7 @@ import Testing
 @Suite("InkNotes compatibility contract")
 struct CompatibilityContractTests {
   private let expectedBundleIdentifier = "com.salomeailin.InkNotes"
+  private let expectedInternalDisplayName = "InkNotes Dev"
   private let backupID = UUID(uuidString: "A1000000-0000-0000-0000-000000000001")!
   private let notebookID = UUID(uuidString: "B2000000-0000-0000-0000-000000000001")!
   private let blankPageID = UUID(uuidString: "C3000000-0000-0000-0000-000000000001")!
@@ -100,6 +101,20 @@ struct CompatibilityContractTests {
         as? [String: Any]
     )
     _ = try validateMainAppBundleIdentifiers(in: project)
+  }
+
+  @Test("Buildable product uses the explicit internal display name")
+  func buildableProductUsesInternalDisplayName() throws {
+    let plistURL = repositoryRootURL().appendingPathComponent("InkNotes/Info.plist")
+    let plistData = try Data(contentsOf: plistURL)
+    let plist = try #require(
+      try PropertyListSerialization.propertyList(from: plistData, options: [], format: nil)
+        as? [String: Any]
+    )
+    let displayName = try #require(plist["CFBundleDisplayName"] as? String)
+
+    #expect(displayName == expectedInternalDisplayName)
+    #expect(displayName != "墨记")
   }
 
   @Test("An orphan app target cannot hide a mounted main-app identifier drift")

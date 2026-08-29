@@ -4,6 +4,7 @@ set -euo pipefail
 notes_repository_root="${0:A:h:h}"
 notes_developer_dir="${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer}"
 notes_expected_bundle_id="com.salomeailin.InkNotes"
+notes_expected_display_name="InkNotes Dev"
 notes_expected_uti="com.salomeailin.notes.backup"
 notes_expected_extension="notesbackup"
 notes_expected_mime="application/vnd.salomeailin.notes-backup"
@@ -110,9 +111,11 @@ xcrun swift test
 assert_oauth_release_marker_scanner_detects_chinese_encodings
 
 notes_source_plist="InkNotes/Info.plist"
+notes_source_display_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$notes_source_plist")"
 notes_source_uti="$(/usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations:0:UTTypeIdentifier' "$notes_source_plist")"
 notes_source_extension="$(/usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations:0:UTTypeTagSpecification:public.filename-extension:0' "$notes_source_plist")"
 notes_source_mime="$(/usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations:0:UTTypeTagSpecification:public.mime-type' "$notes_source_plist")"
+assert_equal "$notes_source_display_name" "$notes_expected_display_name" "Source internal display name"
 assert_equal "$notes_source_uti" "$notes_expected_uti" "Source UTI"
 assert_equal "$notes_source_extension" "$notes_expected_extension" "Source filename extension"
 assert_equal "$notes_source_mime" "$notes_expected_mime" "Source MIME type"
@@ -180,6 +183,7 @@ for notes_configuration in Debug Release; do
   fi
 
   notes_built_bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$notes_built_plist")"
+  notes_built_display_name="$(plutil -extract CFBundleDisplayName raw -o - "$notes_built_plist")"
   notes_minimum_os="$(plutil -extract MinimumOSVersion raw -o - "$notes_built_plist")"
   notes_device_family="$(plutil -extract UIDeviceFamily json -o - "$notes_built_plist")"
   notes_built_uti="$(/usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations:0:UTTypeIdentifier' "$notes_built_plist")"
@@ -187,6 +191,7 @@ for notes_configuration in Debug Release; do
   notes_built_mime="$(/usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations:0:UTTypeTagSpecification:public.mime-type' "$notes_built_plist")"
 
   assert_equal "$notes_built_bundle_id" "$notes_expected_bundle_id" "$notes_configuration built bundle identifier"
+  assert_equal "$notes_built_display_name" "$notes_expected_display_name" "$notes_configuration built internal display name"
   assert_equal "$notes_minimum_os" "17.0" "$notes_configuration minimum iOS version"
   assert_equal "$notes_device_family" '[2]' "$notes_configuration device family"
   assert_equal "$notes_built_uti" "$notes_expected_uti" "$notes_configuration built UTI"
@@ -199,5 +204,5 @@ for notes_configuration in Debug Release; do
   assert_app_has_no_oauth_release_markers "${notes_built_plist:h}"
 done
 
-print "[5/5] Debug and Release products preserve iPadOS 17+, backup identities, and fail-closed OAuth"
+print "[5/5] Debug and Release products preserve the internal display name, iPadOS 17+, backup identities, and fail-closed OAuth"
 print "Compatibility gate passed"

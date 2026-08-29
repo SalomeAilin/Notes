@@ -2,7 +2,7 @@
 
 一个面向 iPad 和 Apple Pencil 的原生手写笔记应用。项目使用 SwiftUI + PencilKit，零第三方依赖，默认只在应用本地沙盒中保存笔记。
 
-> 当前开发包仍使用临时显示名“墨记”，仅供个人侧载验证。公开测试或上架前必须更换正式名称并完成商标、应用商店与公开市场检索。
+> 当前开发包使用内部占位显示名 `InkNotes Dev`，仅供个人侧载验证。已确认高碰撞的“墨记”不再进入可构建产品；`InkNotes Dev` 也不是正式品牌。公开测试或上架前必须选定正式名称，并完成商标、应用商店与公开市场检索。
 
 ## 当前功能
 
@@ -34,7 +34,7 @@
 3. 连接已开启开发者模式并信任此 Mac 的 iPad。
 4. 选择该 iPad，点击 Run。
 
-开发包显示名称暂为“墨记”，Bundle Identifier 为 `com.salomeailin.InkNotes`。Bundle Identifier 暂时保持不变，以免覆盖安装时丢失现有沙盒数据；正式显示名称另行确定。
+开发包显示名称暂为 `InkNotes Dev`，Bundle Identifier 为 `com.salomeailin.InkNotes`。这个名称只标识内部开发包，不代表正式品牌；Bundle Identifier 保持不变，以免覆盖安装时丢失现有沙盒数据。
 
 ## 验证命令
 
@@ -42,7 +42,7 @@
 ./scripts/verify-compatibility.sh
 ```
 
-门禁先执行全仓 Swift strict format lint，再运行 107 个测试，并分别构建 Debug、Release 两套 generic iOS 产物。除原有的元数据/笔迹往返、损坏数据保护、切页保存时序、备份编解码、边界限制和恢复副本测试外，还会验证系统无法提供 Application Support 时不会静默写入临时目录，而是让仓库读写失败并使应用进入只读保护；恢复门禁覆盖提交后重试不重复追加、同 ID 异内容冲突、部分导入失败关闭、相同孤立笔迹复用、不同孤立笔迹不覆盖、目录完整但笔迹缺失时安全补回、当前选中缺失页的 Store 重试、已有用户编辑与主动清空不被覆盖，以及重复操作不改变当前画布。门禁也验证异常内存笔迹不能在备份或恢复的持久化屏障前覆盖有效磁盘文件，同时保证有效的最新笔画会在无关页面导致全库校验失败前落盘。提交到 Git 的 v1 历史备份与真实 PencilKit 单笔画用于检查完整性、恢复、标识重映射和落盘链路。百度网盘上传门禁覆盖官方 Go SDK 流程字段、`return_type` 分支、4 MiB 分片、分片与最终 MD5 校验、流式响应上限、拒绝重定向、真实 URLSession Task 取消及凭据脱敏；还覆盖上传单飞、绑定操作标识的取消、严格进度状态机、任何 HTTP 前持久化、跨仓储实例原子 admission、取消/清理竞态、重启后的安装级屏障、内容身份冲突、秒传/结果未知对账门禁和安全进度快照。OAuth 临时隔离门禁会拒绝常见客户端密钥标记/配置、百度授权控制面地址、占位 broker、提前引入的授权 UI、回调/后台能力及任何从 App、View、Store 发起的百度直连；同时核对 iPad-only、最低 iOS 17.0、Bundle Identifier 及备份文件身份。
+门禁先执行全仓 Swift strict format lint，再运行 108 个测试，并分别构建 Debug、Release 两套 generic iOS 产物。源码和两套构建产物都必须使用内部占位显示名 `InkNotes Dev`，同时保持稳定技术身份不变。除原有的元数据/笔迹往返、损坏数据保护、切页保存时序、备份编解码、边界限制和恢复副本测试外，还会验证系统无法提供 Application Support 时不会静默写入临时目录，而是让仓库读写失败并使应用进入只读保护；恢复门禁覆盖提交后重试不重复追加、同 ID 异内容冲突、部分导入失败关闭、相同孤立笔迹复用、不同孤立笔迹不覆盖、目录完整但笔迹缺失时安全补回、当前选中缺失页的 Store 重试、已有用户编辑与主动清空不被覆盖，以及重复操作不改变当前画布。门禁也验证异常内存笔迹不能在备份或恢复的持久化屏障前覆盖有效磁盘文件，同时保证有效的最新笔画会在无关页面导致全库校验失败前落盘。提交到 Git 的 v1 历史备份与真实 PencilKit 单笔画用于检查完整性、恢复、标识重映射和落盘链路。百度网盘上传门禁覆盖官方 Go SDK 流程字段、`return_type` 分支、4 MiB 分片、分片与最终 MD5 校验、流式响应上限、拒绝重定向、真实 URLSession Task 取消及凭据脱敏；还覆盖上传单飞、绑定操作标识的取消、严格进度状态机、任何 HTTP 前持久化、跨仓储实例原子 admission、取消/清理竞态、重启后的安装级屏障、内容身份冲突、秒传/结果未知对账门禁和安全进度快照。OAuth 临时隔离门禁会拒绝常见客户端密钥标记/配置、百度授权控制面地址、占位 broker、提前引入的授权 UI、回调/后台能力及任何从 App、View、Store 发起的百度直连；同时核对 iPad-only、最低 iOS 17.0、Bundle Identifier 及备份文件身份。
 
 ## 本地数据
 
@@ -64,7 +64,7 @@ InkNotes/
 
 ## 更名兼容边界
 
-正式更名只应修改展示层，例如 `CFBundleDisplayName`、界面文字和备份类型说明。以下技术身份已经被兼容门禁固定，不能随品牌名称修改：
+`InkNotes Dev` 只是内部开发占位名。正式更名只应修改展示层，例如 `CFBundleDisplayName`、界面文字和备份类型说明。以下技术身份已经被兼容门禁固定，不能随品牌名称修改：
 
 - Bundle Identifier：`com.salomeailin.InkNotes`
 - 本地目录和文件：`InkNotes/library.json`、`InkNotes/Drawings/*.drawing`、`InkNotes/RestoreTransactions/*.json`、`InkNotes/UploadReconciliation/*.json`
