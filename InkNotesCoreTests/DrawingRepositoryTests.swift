@@ -10,7 +10,8 @@ struct DrawingRepositoryTests {
     let fileManager = ApplicationSupportUnavailableFileManager()
     let isolatedTemporaryDirectory = fileManager.temporaryDirectory
     defer { try? FileManager.default.removeItem(at: isolatedTemporaryDirectory) }
-    let temporaryFallback = isolatedTemporaryDirectory
+    let temporaryFallback =
+      isolatedTemporaryDirectory
       .appendingPathComponent(DrawingRepository.persistedDirectoryName, isDirectory: true)
 
     #expect(DrawingRepository.defaultRootURL(fileManager: fileManager) == nil)
@@ -30,7 +31,8 @@ struct DrawingRepositoryTests {
     let fileManager = ApplicationSupportUnavailableFileManager()
     let isolatedTemporaryDirectory = fileManager.temporaryDirectory
     defer { try? FileManager.default.removeItem(at: isolatedTemporaryDirectory) }
-    let temporaryFallback = isolatedTemporaryDirectory
+    let temporaryFallback =
+      isolatedTemporaryDirectory
       .appendingPathComponent(DrawingRepository.persistedDirectoryName, isDirectory: true)
     let repository = DrawingRepository(fileManager: fileManager)
     let store = LibraryStore(repository: repository)
@@ -70,6 +72,90 @@ struct DrawingRepositoryTests {
       abs(restored.notebooks[0].updatedAt.timeIntervalSince(library.notebooks[0].updatedAt)) < 0.001
     )
     #expect(try await repository.loadDrawing(pageID: pageID) == drawing)
+  }
+
+  @Test("Restore transactions are immutable sidecars and corrupt data fails closed")
+  func restoreTransactionRoundTrip() async throws {
+    let rootURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+
+    let repository = DrawingRepository(rootURL: rootURL)
+    let backupID = UUID(uuidString: "E7000000-0000-0000-0000-000000000001")!
+    let transaction = BackupRestoreTransaction(
+      backupID: backupID,
+      archiveChecksum: String(repeating: "0", count: 64),
+      importedAt: Date(timeIntervalSince1970: 1_700_020_000),
+      copiedNotebooks: LibraryDocument.starter().notebooks
+    )
+    let transactionURL =
+      rootURL
+      .appendingPathComponent(
+        DrawingRepository.restoreTransactionsDirectoryName,
+        isDirectory: true
+      )
+      .appendingPathComponent(
+        "\(backupID.uuidString.lowercased()).\(DrawingRepository.restoreTransactionFileExtension)"
+      )
+
+    try await repository.createRestoreTransaction(transaction)
+
+    let loadedTransaction = try #require(
+      try await repository.loadRestoreTransaction(backupID: backupID)
+    )
+    #expect(loadedTransaction.version == transaction.version)
+    #expect(loadedTransaction.backupID == transaction.backupID)
+    #expect(loadedTransaction.archiveChecksum == transaction.archiveChecksum)
+    #expect(
+      abs(loadedTransaction.importedAt.timeIntervalSince(transaction.importedAt)) < 0.001
+    )
+    #expect(loadedTransaction.copiedNotebooks.map(\.id) == transaction.copiedNotebooks.map(\.id))
+    #expect(
+      loadedTransaction.copiedNotebooks.flatMap(\.pages).map(\.id)
+        == transaction.copiedNotebooks.flatMap(\.pages).map(\.id)
+    )
+    #expect(FileManager.default.fileExists(atPath: transactionURL.path))
+    await #expect(throws: DrawingRepositoryError.restoreTransactionAlreadyExists) {
+      try await repository.createRestoreTransaction(transaction)
+    }
+
+    try Data("not-json".utf8).write(to: transactionURL, options: .atomic)
+    await #expect(throws: DrawingRepositoryError.invalidRestoreTransaction) {
+      _ = try await repository.loadRestoreTransaction(backupID: backupID)
+    }
+  }
+
+  @Test("Restore transaction history fails closed at its count limit")
+  func restoreTransactionCountIsBounded() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let transactionsURL = rootURL.appendingPathComponent(
+      DrawingRepository.restoreTransactionsDirectoryName,
+      isDirectory: true
+    )
+    try fileManager.createDirectory(at: transactionsURL, withIntermediateDirectories: true)
+    for index in 0..<DrawingRepository.maximumRestoreTransactionCount {
+      let markerURL = transactionsURL.appendingPathComponent("marker-\(index)")
+      #expect(fileManager.createFile(atPath: markerURL.path, contents: Data()))
+    }
+
+    let repository = DrawingRepository(rootURL: rootURL)
+    let transaction = BackupRestoreTransaction(
+      backupID: UUID(uuidString: "E7000000-0000-0000-0000-000000000002")!,
+      archiveChecksum: String(repeating: "0", count: 64),
+      importedAt: Date(timeIntervalSince1970: 1_700_020_100),
+      copiedNotebooks: LibraryDocument.starter().notebooks
+    )
+
+    await #expect(
+      throws: DrawingRepositoryError.tooManyRestoreTransactions(
+        maximum: DrawingRepository.maximumRestoreTransactionCount
+      )
+    ) {
+      try await repository.createRestoreTransaction(transaction)
+    }
   }
 
   @Test("A corrupt library is reported and remains untouched")

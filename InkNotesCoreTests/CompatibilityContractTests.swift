@@ -20,6 +20,8 @@ struct CompatibilityContractTests {
     #expect(DrawingRepository.libraryFilename == "library.json")
     #expect(DrawingRepository.drawingsDirectoryName == "Drawings")
     #expect(DrawingRepository.drawingFileExtension == "drawing")
+    #expect(DrawingRepository.restoreTransactionsDirectoryName == "RestoreTransactions")
+    #expect(DrawingRepository.restoreTransactionFileExtension == "json")
     #expect(DrawingRepository.defaultRootURL()?.lastPathComponent == "InkNotes")
 
     #expect(BackupArchiveCodec.uniformTypeIdentifier == "com.salomeailin.notes.backup")
@@ -219,6 +221,8 @@ struct CompatibilityContractTests {
     )
     #expect(restoreResult.importedNotebookCount == 1)
     #expect(restoreResult.importedPageCount == 3)
+    #expect(restoreResult.repairedDrawingCount == 0)
+    #expect(restoreResult.repairedPageIDs.isEmpty)
     #expect(restoreResult.selectedDrawingData.isEmpty)
     #expect(restoreResult.library.notebooks.count == 2)
     #expect(restoreResult.library.notebooks.first == currentNotebook)
