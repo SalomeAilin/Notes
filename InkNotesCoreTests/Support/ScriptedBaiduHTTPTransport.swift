@@ -116,12 +116,14 @@ final class ControlledBaiduURLProtocol: URLProtocol, @unchecked Sendable {
 
     switch scenario {
     case .response(let statusCode, let headers, let chunks):
-      guard let response = HTTPURLResponse(
-        url: url,
-        statusCode: statusCode,
-        httpVersion: "HTTP/1.1",
-        headerFields: headers
-      ) else {
+      guard
+        let response = HTTPURLResponse(
+          url: url,
+          statusCode: statusCode,
+          httpVersion: "HTTP/1.1",
+          headerFields: headers
+        )
+      else {
         client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
         return
       }
@@ -134,12 +136,14 @@ final class ControlledBaiduURLProtocol: URLProtocol, @unchecked Sendable {
       }
 
     case .hanging(let statusCode):
-      guard let response = HTTPURLResponse(
-        url: url,
-        statusCode: statusCode,
-        httpVersion: "HTTP/1.1",
-        headerFields: ["Content-Type": "application/json"]
-      ) else {
+      guard
+        let response = HTTPURLResponse(
+          url: url,
+          statusCode: statusCode,
+          httpVersion: "HTTP/1.1",
+          headerFields: ["Content-Type": "application/json"]
+        )
+      else {
         client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
         return
       }
