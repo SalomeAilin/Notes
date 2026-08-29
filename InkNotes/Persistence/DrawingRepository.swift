@@ -62,6 +62,12 @@ actor DrawingRepository {
     try data.write(to: drawingURL(for: pageID), options: .atomic)
   }
 
+  func removeDrawingIfPresent(pageID: UUID) throws {
+    let url = drawingURL(for: pageID)
+    guard fileManager.fileExists(atPath: url.path) else { return }
+    try fileManager.removeItem(at: url)
+  }
+
   private var libraryURL: URL {
     rootURL.appendingPathComponent("library.json", isDirectory: false)
   }

@@ -53,6 +53,29 @@ struct LibraryStoreTests {
     #expect(try await repository.loadDrawing(pageID: pageID) == invalidDrawing)
   }
 
+  @Test("An immediate backup contains the latest unsaved canvas state")
+  @MainActor
+  func immediateBackupContainsLatestDrawing() async throws {
+    let rootURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+
+    let repository = DrawingRepository(rootURL: rootURL)
+    let store = LibraryStore(repository: repository)
+    try await waitUntil { !store.isLoading }
+
+    let pageID = try #require(store.selectedPageID)
+    let drawing = PKDrawing().dataRepresentation()
+    store.updateCurrentDrawing(drawing)
+
+    let export = try await store.makeBackup()
+    let decoded = try BackupArchiveCodec.decode(export.data)
+
+    #expect(decoded.drawings[pageID] == drawing)
+    #expect(try await repository.loadDrawing(pageID: pageID) == drawing)
+    #expect(!store.isBackupTransferInProgress)
+  }
+
   @MainActor
   private func waitUntil(
     _ condition: @escaping @MainActor () -> Bool

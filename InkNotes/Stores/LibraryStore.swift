@@ -4,10 +4,23 @@ import PencilKit
 
 private enum LibraryStoreError: LocalizedError {
   case invalidStructure
+  case backupUnavailable
 
   var errorDescription: String? {
-    "笔记目录缺少笔记本或页面，原文件未被改写。"
+    switch self {
+    case .invalidStructure:
+      "笔记目录缺少笔记本或页面，原文件未被改写。"
+    case .backupUnavailable:
+      "当前正在读取、保存或保护笔记，请稍后再试。"
+    }
   }
+}
+
+struct BackupExportResult: Equatable, Sendable {
+  let data: Data
+  let createdAt: Date
+  let notebookCount: Int
+  let pageCount: Int
 }
 
 @MainActor
@@ -19,11 +32,13 @@ final class LibraryStore: ObservableObject {
   @Published private(set) var isLoading = true
   @Published private(set) var isDrawingLoading = false
   @Published private(set) var isReadOnly = false
+  @Published private(set) var isBackupTransferInProgress = false
   @Published private(set) var persistenceError: String?
 
   private let repository: DrawingRepository
   private var drawingSaveTask: Task<Void, Never>?
   private var librarySaveTask: Task<Void, Never>?
+  private var drawingTransitionTask: Task<Void, Never>?
   private var unsavedDrawings: [UUID: Data] = [:]
 
   init(repository: DrawingRepository = DrawingRepository()) {
@@ -43,8 +58,14 @@ final class LibraryStore: ObservableObject {
     selectedNotebook?.pages.first { $0.id == selectedPageID }
   }
 
+  var canManageBackups: Bool {
+    !isLoading && !isDrawingLoading && !isReadOnly && !isBackupTransferInProgress
+  }
+
   func selectNotebook(_ id: UUID) {
-    guard !isLoading, !isDrawingLoading, id != selectedNotebookID else { return }
+    guard !isLoading, !isDrawingLoading, !isBackupTransferInProgress,
+      id != selectedNotebookID
+    else { return }
     guard let notebook = library.notebooks.first(where: { $0.id == id }),
       let page = notebook.pages.first
     else { return }
@@ -61,7 +82,9 @@ final class LibraryStore: ObservableObject {
   }
 
   func selectPage(_ id: UUID) {
-    guard !isLoading, !isDrawingLoading, id != selectedPageID else { return }
+    guard !isLoading, !isDrawingLoading, !isBackupTransferInProgress,
+      id != selectedPageID
+    else { return }
     guard selectedNotebook?.pages.contains(where: { $0.id == id }) == true else { return }
 
     let previousPageID = selectedPageID
@@ -213,9 +236,62 @@ final class LibraryStore: ObservableObject {
     persistenceError = nil
   }
 
+  func makeBackup() async throws -> BackupExportResult {
+    try beginBackupTransfer()
+    defer { isBackupTransferInProgress = false }
+    await finishScheduledPersistence()
+
+    let snapshot = library
+    let drawingOverrides = drawingOverridesForSnapshot()
+    let createdAt = Date()
+    let data = try await repository.makeBackup(
+      library: snapshot,
+      drawingOverrides: drawingOverrides,
+      sourceAppVersion: bundleValue("CFBundleShortVersionString"),
+      sourceBuild: bundleValue("CFBundleVersion"),
+      createdAt: createdAt
+    )
+    clearSavedDrawings(matching: drawingOverrides)
+
+    return BackupExportResult(
+      data: data,
+      createdAt: createdAt,
+      notebookCount: snapshot.notebooks.count,
+      pageCount: snapshot.notebooks.reduce(0) { $0 + $1.pages.count }
+    )
+  }
+
+  func inspectBackup(_ data: Data) async throws -> BackupArchivePreview {
+    try beginBackupTransfer()
+    defer { isBackupTransferInProgress = false }
+    await finishScheduledPersistence()
+    return try await repository.inspectBackup(data)
+  }
+
+  func importBackupAsCopy(_ data: Data) async throws -> BackupRestoreResult {
+    try beginBackupTransfer()
+    defer { isBackupTransferInProgress = false }
+    await finishScheduledPersistence()
+
+    let drawingOverrides = drawingOverridesForSnapshot()
+    let result = try await repository.restoreBackupAsCopy(
+      data,
+      currentLibrary: library,
+      currentDrawingOverrides: drawingOverrides
+    )
+
+    library = result.library
+    selectedNotebookID = result.selectedNotebookID
+    selectedPageID = result.selectedPageID
+    currentDrawingData = result.selectedDrawingData
+    unsavedDrawings.removeAll()
+    persistenceError = nil
+    return result
+  }
+
   func flush() async {
-    drawingSaveTask?.cancel()
-    librarySaveTask?.cancel()
+    guard !isBackupTransferInProgress else { return }
+    await finishScheduledPersistence()
     guard !isLoading else { return }
 
     var drawingsToSave = unsavedDrawings
@@ -243,7 +319,7 @@ final class LibraryStore: ObservableObject {
   }
 
   private var canEdit: Bool {
-    !isLoading && !isDrawingLoading && !isReadOnly
+    canManageBackups
   }
 
   private var selectedNotebookIndex: Int? {
@@ -290,8 +366,9 @@ final class LibraryStore: ObservableObject {
     isDrawingLoading = true
     currentDrawingData = Data()
 
-    Task { [weak self, repository] in
+    drawingTransitionTask = Task { [weak self, repository] in
       guard let self else { return }
+      defer { drawingTransitionTask = nil }
 
       if shouldSavePrevious, let previousPageID {
         do {
@@ -350,6 +427,46 @@ final class LibraryStore: ObservableObject {
         self?.report(error, prefix: "目录保存失败")
       }
     }
+  }
+
+  private func beginBackupTransfer() throws {
+    guard canManageBackups else {
+      throw LibraryStoreError.backupUnavailable
+    }
+    isBackupTransferInProgress = true
+  }
+
+  private func finishScheduledPersistence() async {
+    let pendingDrawingSave = drawingSaveTask
+    let pendingLibrarySave = librarySaveTask
+    drawingSaveTask = nil
+    librarySaveTask = nil
+    pendingDrawingSave?.cancel()
+    pendingLibrarySave?.cancel()
+    await pendingDrawingSave?.value
+    await pendingLibrarySave?.value
+    await drawingTransitionTask?.value
+  }
+
+  private func drawingOverridesForSnapshot() -> [UUID: Data] {
+    let currentPageIDs = Set(library.notebooks.flatMap(\.pages).map(\.id))
+    var drawings = unsavedDrawings.filter { currentPageIDs.contains($0.key) }
+    if !isReadOnly, !isDrawingLoading, let pageID = selectedPageID,
+      currentPageIDs.contains(pageID)
+    {
+      drawings[pageID] = currentDrawingData
+    }
+    return drawings
+  }
+
+  private func clearSavedDrawings(matching savedDrawings: [UUID: Data]) {
+    for (pageID, data) in savedDrawings where unsavedDrawings[pageID] == data {
+      unsavedDrawings.removeValue(forKey: pageID)
+    }
+  }
+
+  private func bundleValue(_ key: String) -> String {
+    Bundle.main.object(forInfoDictionaryKey: key) as? String ?? ""
   }
 
   private func validatedDrawingData(pageID: UUID) async throws -> Data {

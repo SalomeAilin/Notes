@@ -13,7 +13,10 @@ let package = Package(
       path: "InkNotes",
       exclude: ["App", "Assets.xcassets", "Info.plist", "Views"],
       sources: [
+        "Models/BackupArchive.swift",
         "Models/LibraryDocument.swift",
+        "Persistence/BackupArchiveCodec.swift",
+        "Persistence/BackupSnapshotRepository.swift",
         "Persistence/DrawingRepository.swift",
         "Stores/LibraryStore.swift",
       ]
