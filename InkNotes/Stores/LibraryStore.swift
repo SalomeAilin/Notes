@@ -39,6 +39,7 @@ final class LibraryStore: ObservableObject {
   private var drawingSaveTask: Task<Void, Never>?
   private var librarySaveTask: Task<Void, Never>?
   private var drawingTransitionTask: Task<Void, Never>?
+  private var backupTransferWaiters: [CheckedContinuation<Void, Never>] = []
   private var unsavedDrawings: [UUID: Data] = [:]
 
   init(repository: DrawingRepository = DrawingRepository()) {
@@ -238,7 +239,7 @@ final class LibraryStore: ObservableObject {
 
   func makeBackup() async throws -> BackupExportResult {
     try beginBackupTransfer()
-    defer { isBackupTransferInProgress = false }
+    defer { finishBackupTransfer() }
     await finishScheduledPersistence()
 
     let snapshot = library
@@ -263,14 +264,13 @@ final class LibraryStore: ObservableObject {
 
   func inspectBackup(_ data: Data) async throws -> BackupArchivePreview {
     try beginBackupTransfer()
-    defer { isBackupTransferInProgress = false }
-    await finishScheduledPersistence()
+    defer { finishBackupTransfer() }
     return try await repository.inspectBackup(data)
   }
 
   func importBackupAsCopy(_ data: Data) async throws -> BackupRestoreResult {
     try beginBackupTransfer()
-    defer { isBackupTransferInProgress = false }
+    defer { finishBackupTransfer() }
     await finishScheduledPersistence()
 
     let drawingOverrides = drawingOverridesForSnapshot()
@@ -290,7 +290,7 @@ final class LibraryStore: ObservableObject {
   }
 
   func flush() async {
-    guard !isBackupTransferInProgress else { return }
+    await waitForBackupTransferToFinish()
     await finishScheduledPersistence()
     guard !isLoading else { return }
 
@@ -434,6 +434,22 @@ final class LibraryStore: ObservableObject {
       throw LibraryStoreError.backupUnavailable
     }
     isBackupTransferInProgress = true
+  }
+
+  private func finishBackupTransfer() {
+    isBackupTransferInProgress = false
+    let waiters = backupTransferWaiters
+    backupTransferWaiters.removeAll()
+    for waiter in waiters {
+      waiter.resume()
+    }
+  }
+
+  private func waitForBackupTransferToFinish() async {
+    guard isBackupTransferInProgress else { return }
+    await withCheckedContinuation { continuation in
+      backupTransferWaiters.append(continuation)
+    }
   }
 
   private func finishScheduledPersistence() async {

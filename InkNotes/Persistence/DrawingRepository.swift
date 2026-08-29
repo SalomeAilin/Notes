@@ -2,11 +2,14 @@ import Foundation
 
 enum DrawingRepositoryError: LocalizedError, Equatable {
   case unsupportedSchema(found: Int)
+  case drawingTooLarge(actual: Int, maximum: Int)
 
   var errorDescription: String? {
     switch self {
     case .unsupportedSchema(let found):
       "笔记数据版本 \(found) 暂不受支持，原文件未被改写。"
+    case .drawingTooLarge(_, let maximum):
+      "单页笔迹超过 \(maximum) 字节的安全读取上限。"
     }
   }
 }
@@ -55,6 +58,45 @@ actor DrawingRepository {
     let url = drawingURL(for: pageID)
     guard fileManager.fileExists(atPath: url.path) else { return nil }
     return try Data(contentsOf: url)
+  }
+
+  func loadDrawing(pageID: UUID, maximumByteCount: Int) throws -> Data? {
+    let url = drawingURL(for: pageID)
+    guard fileManager.fileExists(atPath: url.path) else { return nil }
+
+    let attributes = try fileManager.attributesOfItem(atPath: url.path)
+    if let size = (attributes[.size] as? NSNumber)?.uint64Value,
+      size > UInt64(maximumByteCount)
+    {
+      throw DrawingRepositoryError.drawingTooLarge(
+        actual: size > UInt64(Int.max) ? Int.max : Int(size),
+        maximum: maximumByteCount
+      )
+    }
+
+    let handle = try FileHandle(forReadingFrom: url)
+    defer { try? handle.close() }
+    var data = Data()
+    data.reserveCapacity(min((attributes[.size] as? NSNumber)?.intValue ?? 0, maximumByteCount))
+
+    let chunkByteCount = 1024 * 1024
+    while true {
+      try Task.checkCancellation()
+      let remainingByteCount = maximumByteCount - data.count
+      let requestedByteCount = min(chunkByteCount, remainingByteCount + 1)
+      let chunk = try handle.read(upToCount: requestedByteCount) ?? Data()
+      guard !chunk.isEmpty else { break }
+
+      let (nextByteCount, overflow) = data.count.addingReportingOverflow(chunk.count)
+      guard !overflow, nextByteCount <= maximumByteCount else {
+        throw DrawingRepositoryError.drawingTooLarge(
+          actual: overflow ? Int.max : nextByteCount,
+          maximum: maximumByteCount
+        )
+      }
+      data.append(chunk)
+    }
+    return data
   }
 
   func saveDrawing(_ data: Data, pageID: UUID) throws {

@@ -1,9 +1,9 @@
 import Foundation
 
 enum BackupArchiveLimits {
-  static let maximumArchiveByteCount = 64 * 1024 * 1024
-  static let maximumManifestByteCount = 4 * 1024 * 1024
-  static let maximumDrawingByteCount = 16 * 1024 * 1024
+  static let maximumArchiveByteCount = 32 * 1024 * 1024
+  static let maximumManifestByteCount = 2 * 1024 * 1024
+  static let maximumDrawingByteCount = 8 * 1024 * 1024
   static let maximumNotebookCount = 1_000
   static let maximumPageCount = 5_000
   static let maximumTitleUTF8ByteCount = 1_024

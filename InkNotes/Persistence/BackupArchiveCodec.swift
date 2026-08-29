@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 
 enum BackupArchiveCodec {
-  static let fileExtension = "inknotesbackup"
+  static let fileExtension = "notesbackup"
   static let formatVersion: UInt16 = 1
   static let headerByteCount = 56
 
@@ -211,7 +211,8 @@ enum BackupArchiveCodec {
     let drawings = try decodeDrawings(
       manifest.drawings,
       expectedPageIDs: pageIDs,
-      payload: data.subdata(in: manifestEnd..<expectedArchiveByteCount),
+      archiveData: data,
+      payloadStart: manifestEnd,
       declaredPayloadByteCount: encodedPayloadByteCount
     )
 
@@ -304,7 +305,8 @@ enum BackupArchiveCodec {
   private static func decodeDrawings(
     _ entries: [BackupDrawingEntry],
     expectedPageIDs: Set<UUID>,
-    payload: Data,
+    archiveData: Data,
+    payloadStart: Int,
     declaredPayloadByteCount: UInt64
   ) throws -> [UUID: Data] {
     var entryPageIDs = Set<UUID>()
@@ -346,9 +348,9 @@ enum BackupArchiveCodec {
         throw BackupArchiveError.invalidDrawingLayout
       }
 
-      let start = Int(expectedOffset)
-      let end = Int(nextOffset)
-      let drawing = payload.subdata(in: start..<end)
+      let start = payloadStart + Int(expectedOffset)
+      let end = payloadStart + Int(nextOffset)
+      let drawing = archiveData.subdata(in: start..<end)
       guard sha256Hex(drawing) == entry.sha256 else {
         throw BackupArchiveError.drawingChecksumMismatch(pageID: entry.pageID)
       }
@@ -357,7 +359,7 @@ enum BackupArchiveCodec {
     }
 
     guard expectedOffset == declaredPayloadByteCount,
-      payload.count == Int(declaredPayloadByteCount)
+      archiveData.count - payloadStart == Int(declaredPayloadByteCount)
     else {
       throw BackupArchiveError.invalidDrawingLayout
     }

@@ -37,25 +37,24 @@ extension DrawingRepository {
     sourceBuild: String,
     createdAt: Date = Date()
   ) throws -> Data {
+    let currentPageIDs = Set(library.notebooks.flatMap(\.pages).map(\.id))
+    try persistSnapshot(
+      library: library,
+      pageIDs: currentPageIDs,
+      drawingOverrides: drawingOverrides
+    )
     let pageIDs = try BackupArchiveCodec.validateLibrary(library)
     let drawings = try loadValidatedDrawings(
       pageIDs: pageIDs,
       drawingOverrides: drawingOverrides
     )
-    let archive = try BackupArchiveCodec.encode(
+    return try BackupArchiveCodec.encode(
       library: library,
       drawings: drawings,
       createdAt: createdAt,
       sourceAppVersion: sourceAppVersion,
       sourceBuild: sourceBuild
     )
-
-    try persistSnapshot(
-      library: library,
-      pageIDs: pageIDs,
-      drawingOverrides: drawingOverrides
-    )
-    return archive
   }
 
   func inspectBackup(_ data: Data) throws -> BackupArchivePreview {
@@ -75,22 +74,26 @@ extension DrawingRepository {
     currentDrawingOverrides: [UUID: Data],
     importedAt: Date = Date()
   ) throws -> BackupRestoreResult {
-    // Decode and validate the complete incoming archive before the first write.
-    let backup = try decodeAndValidateDrawings(data)
+    let persistedPageIDs = Set(currentLibrary.notebooks.flatMap(\.pages).map(\.id))
+    // Establish a strict persistence barrier for the user's current library.
+    try persistSnapshot(
+      library: currentLibrary,
+      pageIDs: persistedPageIDs,
+      drawingOverrides: currentDrawingOverrides
+    )
     let currentPageIDs = try BackupArchiveCodec.validateLibrary(currentLibrary)
     _ = try loadValidatedDrawings(
       pageIDs: currentPageIDs,
       drawingOverrides: currentDrawingOverrides
     )
 
-    // Establish a strict persistence barrier for the user's current library.
-    try persistSnapshot(
-      library: currentLibrary,
-      pageIDs: currentPageIDs,
-      drawingOverrides: currentDrawingOverrides
-    )
+    // Imported content is still fully decoded and validated before any imported
+    // page file is written. The only preceding writes persist the current notes.
+    let backup = try decodeAndValidateDrawings(data)
 
     var existingTitles = Set(currentLibrary.notebooks.map(\.title))
+    var usedNotebookIDs = Set(currentLibrary.notebooks.map(\.id))
+    var usedPageIDs = currentPageIDs
     var copiedNotebooks: [Notebook] = []
     var copiedDrawings: [UUID: Data] = [:]
     var createdPageIDs: [UUID] = []
@@ -103,7 +106,7 @@ extension DrawingRepository {
       var copiedPages: [NotePage] = []
 
       for sourcePage in sourceNotebook.pages {
-        let copiedPageID = UUID()
+        let copiedPageID = makeUniqueID(usedIDs: &usedPageIDs)
         let copiedPage = NotePage(
           id: copiedPageID,
           title: sourcePage.title,
@@ -118,7 +121,7 @@ extension DrawingRepository {
 
       copiedNotebooks.append(
         Notebook(
-          id: UUID(),
+          id: makeUniqueID(usedIDs: &usedNotebookIDs),
           title: copiedTitle,
           pages: copiedPages,
           createdAt: sourceNotebook.createdAt,
@@ -171,16 +174,47 @@ extension DrawingRepository {
   ) throws -> [UUID: Data] {
     var drawings: [UUID: Data] = [:]
     drawings.reserveCapacity(pageIDs.count)
+    var totalByteCount = 0
 
     for pageID in pageIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
       let data: Data
       if let drawingOverride = drawingOverrides[pageID] {
         data = drawingOverride
       } else {
-        data = try loadDrawing(pageID: pageID) ?? Data()
+        do {
+          let storedDrawing = try loadDrawing(
+            pageID: pageID,
+            maximumByteCount: BackupArchiveLimits.maximumDrawingByteCount
+          )
+          data = storedDrawing ?? Data()
+        } catch DrawingRepositoryError.drawingTooLarge(let actual, let maximum) {
+          throw BackupArchiveError.drawingTooLarge(
+            pageID: pageID,
+            actual: UInt64(actual),
+            maximum: maximum
+          )
+        }
+      }
+      guard data.count <= BackupArchiveLimits.maximumDrawingByteCount else {
+        throw BackupArchiveError.drawingTooLarge(
+          pageID: pageID,
+          actual: UInt64(data.count),
+          maximum: BackupArchiveLimits.maximumDrawingByteCount
+        )
+      }
+      let (nextTotalByteCount, overflow) = totalByteCount.addingReportingOverflow(data.count)
+      guard !overflow,
+        nextTotalByteCount <= BackupArchiveLimits.maximumArchiveByteCount
+          - BackupArchiveCodec.headerByteCount
+      else {
+        throw BackupArchiveError.archiveTooLarge(
+          actual: overflow ? Int.max : nextTotalByteCount,
+          maximum: BackupArchiveLimits.maximumArchiveByteCount
+        )
       }
       try Self.validatePencilKitDrawing(data)
       drawings[pageID] = data
+      totalByteCount = nextTotalByteCount
     }
     return drawings
   }
@@ -192,7 +226,9 @@ extension DrawingRepository {
   ) throws {
     for pageID in pageIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
       guard let drawing = drawingOverrides[pageID] else { continue }
-      try Self.validatePencilKitDrawing(drawing)
+      // Overrides originate from the live PencilKit canvas. Persist them before
+      // the slower whole-library validation so a backup operation cannot widen
+      // the durability window for the user's latest strokes.
       try saveDrawing(drawing, pageID: pageID)
     }
     try saveLibrary(library)
@@ -244,5 +280,14 @@ extension DrawingRepository {
       prefix.removeLast()
     }
     return prefix + suffix
+  }
+
+  private func makeUniqueID(usedIDs: inout Set<UUID>) -> UUID {
+    while true {
+      let candidate = UUID()
+      if usedIDs.insert(candidate).inserted {
+        return candidate
+      }
+    }
   }
 }

@@ -112,6 +112,34 @@ struct BackupSnapshotRepositoryTests {
     #expect(try await fixture.repository.loadDrawing(pageID: currentPageID) == currentDrawing)
   }
 
+  @Test("An oversized local drawing is rejected before backup reads it into memory")
+  func oversizedLocalDrawingIsBounded() async throws {
+    let fixture = makeRepository()
+    defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+    let library = LibraryDocument.starter()
+    let pageID = try #require(library.notebooks.first?.pages.first?.id)
+    let maximum = BackupArchiveLimits.maximumDrawingByteCount
+    let oversizedDrawing = Data(repeating: 0x00, count: maximum + 1)
+    try await fixture.repository.saveLibrary(library)
+    try await fixture.repository.saveDrawing(oversizedDrawing, pageID: pageID)
+
+    await #expect(
+      throws: BackupArchiveError.drawingTooLarge(
+        pageID: pageID,
+        actual: UInt64(maximum + 1),
+        maximum: maximum
+      )
+    ) {
+      try await fixture.repository.makeBackup(
+        library: library,
+        drawingOverrides: [:],
+        sourceAppVersion: "0.2.0",
+        sourceBuild: "2"
+      )
+    }
+  }
+
   private func makeRepository() -> (rootURL: URL, repository: DrawingRepository) {
     let rootURL = FileManager.default.temporaryDirectory
       .appendingPathComponent(UUID().uuidString, isDirectory: true)
