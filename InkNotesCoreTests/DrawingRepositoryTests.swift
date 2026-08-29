@@ -5,6 +5,47 @@ import Testing
 
 @Suite("InkNotes local persistence")
 struct DrawingRepositoryTests {
+  @Test("Default storage resolution fails closed without Application Support")
+  func defaultStorageResolutionFailsClosed() async {
+    let fileManager = ApplicationSupportUnavailableFileManager()
+    let isolatedTemporaryDirectory = fileManager.temporaryDirectory
+    defer { try? FileManager.default.removeItem(at: isolatedTemporaryDirectory) }
+    let temporaryFallback = isolatedTemporaryDirectory
+      .appendingPathComponent(DrawingRepository.persistedDirectoryName, isDirectory: true)
+
+    #expect(DrawingRepository.defaultRootURL(fileManager: fileManager) == nil)
+    let repository = DrawingRepository(fileManager: fileManager)
+    await #expect(throws: DrawingRepositoryError.persistenceDirectoryUnavailable) {
+      _ = try await repository.loadLibrary()
+    }
+    await #expect(throws: DrawingRepositoryError.persistenceDirectoryUnavailable) {
+      try await repository.saveLibrary(LibraryDocument.starter())
+    }
+    #expect(!FileManager.default.fileExists(atPath: temporaryFallback.path))
+  }
+
+  @Test("The store enters read-only protection when permanent storage is unavailable")
+  @MainActor
+  func storeProtectsUnavailablePermanentStorage() async throws {
+    let fileManager = ApplicationSupportUnavailableFileManager()
+    let isolatedTemporaryDirectory = fileManager.temporaryDirectory
+    defer { try? FileManager.default.removeItem(at: isolatedTemporaryDirectory) }
+    let temporaryFallback = isolatedTemporaryDirectory
+      .appendingPathComponent(DrawingRepository.persistedDirectoryName, isDirectory: true)
+    let repository = DrawingRepository(fileManager: fileManager)
+    let store = LibraryStore(repository: repository)
+
+    for _ in 0..<100 {
+      if !store.isLoading { break }
+      try await Task.sleep(for: .milliseconds(10))
+    }
+
+    #expect(!store.isLoading)
+    #expect(store.isReadOnly)
+    #expect(store.persistenceError?.contains("永久存储目录") == true)
+    #expect(!FileManager.default.fileExists(atPath: temporaryFallback.path))
+  }
+
   @Test("Library metadata and drawing bytes survive a round trip")
   func roundTrip() async throws {
     let rootURL = FileManager.default.temporaryDirectory
@@ -50,5 +91,21 @@ struct DrawingRepositoryTests {
     } catch {
       #expect(try Data(contentsOf: libraryURL) == original)
     }
+  }
+}
+
+private final class ApplicationSupportUnavailableFileManager: FileManager, @unchecked Sendable {
+  private let isolatedTemporaryDirectory = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+
+  override var temporaryDirectory: URL {
+    isolatedTemporaryDirectory
+  }
+
+  override func urls(
+    for directory: FileManager.SearchPathDirectory,
+    in domainMask: FileManager.SearchPathDomainMask
+  ) -> [URL] {
+    []
   }
 }
