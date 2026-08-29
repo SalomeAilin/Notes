@@ -162,6 +162,72 @@ struct BaiduNetdiskBackupUploaderTests {
     }
   }
 
+  @Test("Dispatch checkpoints follow precreate, part, and create order")
+  func dispatchCheckpointSequence() async throws {
+    let archive = try makeArchive()
+    let directory = try applicationDirectory()
+    let plan = try BaiduNetdiskBackupUploader.makeUploadPlan(
+      archive: archive,
+      applicationDirectory: directory
+    )
+    let transport = ScriptedBaiduHTTPTransport(
+      handlers: try successfulHandlers(plan: plan, requestedPartIndices: [0])
+    )
+    let recorder = BaiduProgressRecorder()
+
+    _ = try await BaiduNetdiskBackupUploader(transport: transport).upload(
+      archive: archive,
+      accessToken: accessToken(),
+      applicationDirectory: directory,
+      progress: { progress in
+        await recorder.append(progress)
+      }
+    )
+
+    #expect(
+      await recorder.values()
+        == [
+          .precreateDispatchPermitted,
+          .uploadPartDispatchPermitted(partIndex: 0, ordinal: 1, total: 1),
+          .createDispatchPermitted,
+        ]
+    )
+  }
+
+  @Test("A rejected create checkpoint prevents the create request")
+  func rejectedCreateCheckpointPreventsDispatch() async throws {
+    let archive = try makeArchive()
+    let directory = try applicationDirectory()
+    let plan = try BaiduNetdiskBackupUploader.makeUploadPlan(
+      archive: archive,
+      applicationDirectory: directory
+    )
+    let transport = ScriptedBaiduHTTPTransport(
+      handlers: Array(
+        try successfulHandlers(plan: plan, requestedPartIndices: [0]).dropLast()
+      )
+    )
+    var receivedCancellation = false
+
+    do {
+      _ = try await BaiduNetdiskBackupUploader(transport: transport).upload(
+        archive: archive,
+        accessToken: accessToken(),
+        applicationDirectory: directory,
+        progress: { progress in
+          if progress == .createDispatchPermitted {
+            throw CancellationError()
+          }
+        }
+      )
+    } catch is CancellationError {
+      receivedCancellation = true
+    }
+
+    #expect(receivedCancellation)
+    #expect(await transport.requestCount() == 2)
+  }
+
   @Test("Return type two finishes after precreate without inventing remote metadata")
   func rapidUploadStopsAfterPrecreate() async throws {
     let archive = try makeArchive()
@@ -621,7 +687,7 @@ struct BaiduNetdiskBackupUploaderTests {
       "block_list": requestedPartIndices,
     ])
     var handlers: [ScriptedBaiduHTTPTransport.Handler] = [
-      { _ in Self.response(body: precreate) },
+      { _ in Self.response(body: precreate) }
     ]
 
     for index in requestedPartIndices where (0..<plan.chunks.count).contains(index) {
@@ -662,9 +728,10 @@ struct BaiduNetdiskBackupUploaderTests {
     let url = try #require(request.url)
     let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
     let items = try #require(components.queryItems)
-    return Dictionary(uniqueKeysWithValues: items.compactMap { item in
-      item.value.map { (item.name, $0) }
-    })
+    return Dictionary(
+      uniqueKeysWithValues: items.compactMap { item in
+        item.value.map { (item.name, $0) }
+      })
   }
 
   private func formItems(_ request: URLRequest) throws -> [String: String] {
@@ -672,9 +739,10 @@ struct BaiduNetdiskBackupUploaderTests {
     let bodyString = try #require(String(data: body, encoding: .utf8))
     let components = try #require(URLComponents(string: "https://example.invalid/?\(bodyString)"))
     let items = try #require(components.queryItems)
-    return Dictionary(uniqueKeysWithValues: items.compactMap { item in
-      item.value.map { (item.name, $0) }
-    })
+    return Dictionary(
+      uniqueKeysWithValues: items.compactMap { item in
+        item.value.map { (item.name, $0) }
+      })
   }
 
   private func multipartPayload(_ request: URLRequest) throws -> Data {
@@ -691,4 +759,16 @@ struct BaiduNetdiskBackupUploaderTests {
 
 private enum BaiduUploaderTestError: Error {
   case couldNotCreateExactArchive
+}
+
+private actor BaiduProgressRecorder {
+  private var recorded: [BaiduBackupUploadProgress] = []
+
+  func append(_ progress: BaiduBackupUploadProgress) {
+    recorded.append(progress)
+  }
+
+  func values() -> [BaiduBackupUploadProgress] {
+    recorded
+  }
 }
