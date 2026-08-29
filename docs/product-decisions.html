@@ -88,7 +88,7 @@
   <header>
     <div class="eyebrow">Notes · 决策材料</div>
     <h1>产品命名与百度网盘接入</h1>
-    <p class="lede">结论先行：“墨记”只能继续作为未公开开发包的临时名，不适合公开测试或上架；百度网盘先走系统文件通道，直连版本再引入只保管凭据的小型 HTTPS 服务。</p>
+    <p class="lede">结论先行：“墨记”只能继续作为未公开开发包的临时名，不适合公开测试或上架；候选名称暂按“纸上屿”优先、“字成林”备选继续核查。百度网盘先走系统文件通道，直连版本再引入只保管凭据的小型 HTTPS 服务。</p>
     <div class="meta">
       <span class="chip">快照日期：2026-08-30</span>
       <span class="chip">基线：0.2.0 (2)</span>
@@ -100,7 +100,7 @@
   <section>
     <h2>1. “墨记”为什么有风险</h2>
     <div class="decision warning">
-      <strong>这是已经确认的同类市场重名，不只是抽象的法律担忧。</strong> 中国区 App Store 已有“墨记-精美日记本·笔记本”，并有大量公开评分；另有“Ink Note - 墨记”和“留白·墨记”。因此继续公开使用会造成来源混淆、商店命名冲突和潜在商标争议。
+      <strong>这是已经确认的同类市场重名，不只是抽象的法律担忧。</strong> 中国区 App Store 已有“墨记-精美日记本·笔记本”，并有大量公开评分；另有“Ink Note - 墨记”和“留白·墨记”。因此继续公开使用会显著增加来源混淆、商店名称不可用和商标争议风险。
     </div>
     <p>这个名称最初只是开发阶段对“墨水书写＋记录”的直观概括，没有经过市场清查，不代表正式品牌决定。当前仓库 README 已把它标注为临时显示名，Bundle ID 也刻意保持为技术身份。</p>
     <p>公开证据：<a href="https://apps.apple.com/cn/app/%E5%A2%A8%E8%AE%B0-%E7%B2%BE%E7%BE%8E%E6%97%A5%E8%AE%B0%E6%9C%AC-%E7%AC%94%E8%AE%B0%E6%9C%AC/id1221871966">App Store：墨记-精美日记本·笔记本</a>、<a href="https://apps.apple.com/cn/app/ink-note-%E5%A2%A8%E8%AE%B0/id6747617800">App Store：Ink Note - 墨记</a>、<a href="https://apps.apple.com/cn/app/%E7%95%99%E7%99%BD-%E5%A2%A8%E8%AE%B0/id6758817898">App Store：留白·墨记</a>。</p>
@@ -111,23 +111,25 @@
 
   <section>
     <h2>2. 候选名称初筛</h2>
-    <p>本轮以中文公开网页、中国区 App Store 索引和 GitHub 公开索引做精确词检索。风险分级只表示“是否发现明显同名/近名”，不是商标可注册性结论。</p>
+    <p>本轮以中文公开网页、Apple 中/美/港/台 App Store 官方 Search API 和 GitHub 公开索引做精确词检索。风险分级只表示“是否发现明显同名/近名”，不是商标可注册性结论，也不代表 App Store Connect 已预留名称。</p>
     <div class="table-wrap">
       <table>
         <thead><tr><th>候选</th><th>产品含义</th><th>公开初筛</th><th>本轮索引结果</th><th>建议</th></tr></thead>
         <tbody>
-          <tr><td><strong>纸上屿</strong><br><small>ZhiShangYu</small></td><td>每本笔记是一座纸上的私人小岛</td><td>本轮未检出同名笔记 App 或同名 GitHub 产品；三音节稍长</td><td class="risk-low">未见明显同名</td><td><strong>优先进入正式检索</strong></td></tr>
-          <tr><td><strong>字成林</strong><br><small>ZiChengLin</small></td><td>零散书写逐渐长成知识体系</td><td>本轮未检出同名笔记 App 或同名 GitHub 产品；语义偏“文字”</td><td class="risk-low">未见明显同名</td><td><strong>优先进入正式检索</strong></td></tr>
+          <tr><td><strong>纸上屿</strong><br><small>ZhiShangYu</small></td><td>每本笔记是一座纸上的私人小岛</td><td>四区 App Store 与 GitHub 均未检出精确同名；但“知屿写作”“心屿 Mood”“物屿”等说明“X屿/私人岛屿”语义场已较拥挤</td><td class="risk-mid">本轮公开索引未见精确同名</td><td><strong>第一顺位</strong></td></tr>
+          <tr><td><strong>字成林</strong><br><small>ZiChengLin</small></td><td>零散书写逐渐长成知识体系</td><td>四区 App Store 与 GitHub 均未检出精确同名；现实人名及“种字成林”文学表达会带来搜索噪声，含义也更接近功能描述</td><td class="risk-mid">语言辨识度和搜索独占性相对弱</td><td><strong>第二顺位</strong></td></tr>
           <tr><td><strong>笔澄</strong><br><small>BiCheng</small></td><td>落笔之后思路澄明</td><td>本轮未检出同名笔记 App；近音“必成”，也可能像人名或机构名</td><td class="risk-mid">需扩大检索</td><td>保留观察</td></tr>
-          <tr><td><strong>写隅</strong><br><small>XieYu</small></td><td>为书写与思考留一个安静角落</td><td>未检出精确同名 App，但“心隅”“物隅”等相邻命名已在同类应用中使用</td><td class="risk-mid">近名较多</td><td>保留观察</td></tr>
-          <tr><td><strong>素页</strong><br><small>SuYe</small></td><td>安静、克制、离线的空白页面</td><td>出现“素页归行”Android 阅读应用；“素”也可能被理解为功能简单</td><td class="risk-mid">发现近名</td><td>暂不优先</td></tr>
+          <tr><td><strong>写隅</strong><br><small>XieYu</small></td><td>为书写与思考留一个安静角落</td><td>未检出精确同名 App，但“心隅”“物隅”等相邻记录或数字工具命名已出现</td><td class="risk-mid">近名较多</td><td>保留观察</td></tr>
+          <tr><td><strong>素页</strong><br><small>SuYe</small></td><td>安静、克制、离线的空白页面</td><td>本轮未取得可复核的官方同类产品证据；“素”也可能被理解为功能简单</td><td class="risk-mid">官方证据不足</td><td>暂不优先</td></tr>
           <tr><td><strong>方寸页</strong><br><small>FangCunYe</small></td><td>在有限屏幕里安放个人心智空间</td><td>“方寸”广泛用于出版、AI 与其他数字产品，近名范围较拥挤</td><td class="risk-mid">词根拥挤</td><td>淘汰</td></tr>
-          <tr><td><strong>思序</strong><br><small>SiXu</small></td><td>思考形成次序</td><td>中国区 App Store 已有精确同名的记录/任务管理 App</td><td class="risk-high">发现精确同名</td><td>淘汰</td></tr>
-          <tr><td><strong>页栖</strong><br><small>YeQi</small></td><td>页面安稳栖居</td><td>Chrome 应用商店已有精确同名“Tabstead · 页栖”</td><td class="risk-high">发现精确同名</td><td>淘汰</td></tr>
+          <tr><td><strong>思序</strong><br><small>SiXu</small></td><td>思考形成次序</td><td>中国区 App Store 已有<a href="https://apps.apple.com/cn/app/%E6%80%9D%E5%BA%8F/id6752840396">精确同名的记录/任务管理 App</a></td><td class="risk-high">发现精确同名</td><td>淘汰</td></tr>
+          <tr><td><strong>页栖</strong><br><small>YeQi</small></td><td>页面安稳栖居</td><td>Chrome 应用商店已有精确同名<a href="https://chromewebstore.google.com/detail/tabstead-%C2%B7-%E9%A1%B5%E6%A0%96/fhaoginjfkhalilefdfbnfdkdnijedpi?hl=zh-CN">“Tabstead · 页栖”</a></td><td class="risk-high">发现精确同名</td><td>淘汰</td></tr>
         </tbody>
       </table>
     </div>
-    <div class="decision info"><strong>当前仅建议进入下一轮检索：</strong>“纸上屿”和“字成林”。“未见明显同名”不等于法律风险低；两者必须完成 CNIPA 近似检索、App Store Connect 名称可用性检查，以及域名/社交账号检查后才能定案。</div>
+    <p>二次初筛证据：Apple 官方目录对“纸上屿”的<a href="https://itunes.apple.com/search?term=%E7%BA%B8%E4%B8%8A%E5%B1%BF&amp;country=cn&amp;entity=software&amp;limit=200">中国</a>、<a href="https://itunes.apple.com/search?term=%E7%BA%B8%E4%B8%8A%E5%B1%BF&amp;country=us&amp;entity=software&amp;limit=200">美国</a>、<a href="https://itunes.apple.com/search?term=%E7%BA%B8%E4%B8%8A%E5%B1%BF&amp;country=hk&amp;entity=software&amp;limit=200">香港</a>、<a href="https://itunes.apple.com/search?term=%E7%BA%B8%E4%B8%8A%E5%B1%BF&amp;country=tw&amp;entity=software&amp;limit=200">台湾</a>查询，以及“字成林”的<a href="https://itunes.apple.com/search?term=%E5%AD%97%E6%88%90%E6%9E%97&amp;country=cn&amp;entity=software&amp;limit=200">中国</a>、<a href="https://itunes.apple.com/search?term=%E5%AD%97%E6%88%90%E6%9E%97&amp;country=us&amp;entity=software&amp;limit=200">美国</a>、<a href="https://itunes.apple.com/search?term=%E5%AD%97%E6%88%90%E6%9E%97&amp;country=hk&amp;entity=software&amp;limit=200">香港</a>、<a href="https://itunes.apple.com/search?term=%E5%AD%97%E6%88%90%E6%9E%97&amp;country=tw&amp;entity=software&amp;limit=200">台湾</a>查询均无精确或包含命中。GitHub 2026-08-30 快照中的“纸上屿”<a href="https://github.com/search?q=%22%E7%BA%B8%E4%B8%8A%E5%B1%BF%22&amp;type=code">代码</a>/<a href="https://github.com/search?q=%22%E7%BA%B8%E4%B8%8A%E5%B1%BF%22+in%3Aname&amp;type=repositories">仓库</a>与“字成林”<a href="https://github.com/search?q=%22%E5%AD%97%E6%88%90%E6%9E%97%22&amp;type=code">代码</a>/<a href="https://github.com/search?q=%22%E5%AD%97%E6%88%90%E6%9E%97%22+in%3Aname&amp;type=repositories">仓库</a>精确词也未命中。近邻证据包括<a href="https://github.com/fzc13306355765-glitch/omniisle-write">知屿写作</a>、<a href="https://apps.apple.com/cn/app/%E5%BF%83%E5%B1%BF-mood/id6774213095">心屿 Mood</a>、<a href="https://apps.apple.com/cn/app/%E7%89%A9%E5%B1%BF-%E6%94%B6%E7%BA%B3%E5%B1%8B-neathub-ai-%E7%89%A9%E5%93%81%E8%AE%B0%E5%BA%93%E5%AD%98%E5%8A%A9%E6%89%8B/id6496853919">物屿</a>、政府页面中的<a href="https://www.yncn.gov.cn/bmgkml/cncyyqgwh/fdzdgknr/zzjg.htm">现实人名“字成林”</a>和公共文化机构使用的<a href="https://www.nlpi.edu.tw/Publications/libpub/fc93fc86-82ee-4ac2-b285-f775096e3a2e/Journal/9c8e2944-819b-4f9f-90cc-a8c188ac6488/Articles?articleId=e270d017-e4c7-400b-8628-ad6d246e8a4d">“种字成林”主题</a>。</p>
+    <div class="decision info"><strong>条件性推荐顺序：</strong>“纸上屿”第一，“字成林”第二。“未见精确同名”不等于法律风险低；两者必须完成 CNIPA 第 9、42 类及近音、近形、拼音、英文检索，之后再做 App Store Connect 名称可用性检查和域名/社交账号检查。</div>
+    <div class="decision notice">2026-08-30 只读访问可以打开 CNIPA 查询首页，但进入近似查询会跳转统一身份认证；本轮没有登录、没有提交查询，也没有取得可复核的在先商标清单。国家企业信用信息公示系统和中国版权保护中心查询入口同样未取得可复核结果；搜索引擎未命中不能替代官方查询。参考<a href="https://sbj.cnipa.gov.cn/sbj/tzgg/202311/t20231128_31719.html">查询地址变更通知</a>和<a href="https://www.cnipa.gov.cn/jact/front/mailpubdetail.do?sysid=13&amp;transactId=502906">官方登录要求答复</a>。</div>
   </section>
 
   <section>
@@ -155,11 +157,11 @@
     <p>只改显示名称不会形成新的沙盒；改 Bundle ID 则会成为另一款 App，旧笔记会留在旧沙盒里，新 App 看起来像空库。改本地目录也会形成两套数据。因此首次品牌更名不重命名 Xcode project、target、scheme、Swift 模块和源目录。</p>
     <h3>安全提交顺序</h3>
     <ol>
-      <li><code>test(compat): pin persisted app and backup identities</code>：加入更名前的黄金备份样本，并锁定 Bundle ID、目录、UTI、扩展名和 magic。</li>
+      <li><code>test(compat): pin persisted app and backup identities</code>：已在 <code>test/brand-compatibility</code> 实现；v1 黄金备份含真实 PencilKit 笔画，并锁定 Bundle ID、目录、UTI、扩展名和 magic。</li>
       <li><code>feat(brand): update user-facing app identity</code>：只改显示层，版本建议递增到 <code>0.2.1 (3)</code>。</li>
       <li><code>docs(brand): document rename compatibility contract</code>：记录兼容边界与覆盖安装验收。</li>
     </ol>
-    <p>真机覆盖安装前必须先从 0.2.0 导出一份可识别的备份，保留旧 App、不卸载；覆盖后检查旧笔记、书写、重启读取和旧备份恢复。失败时用 <code>git revert</code> 和更高 build 覆盖回滚，不重写已推送历史。</p>
+    <p>兼容门禁已在 Xcode 27 beta 下通过 26 个测试及 Debug/Release generic iOS 构建，并经独立复核确认无 blocker/major；提交为 <code>7fb50ff</code>、<code>1368a95</code>、<code>789cd97</code> 与 <code>bdcc61f</code>。真机覆盖安装前仍必须先从 0.2.0 导出一份可识别的备份，保留旧 App、不卸载；覆盖后检查旧笔记、书写、重启读取和旧备份恢复。失败时用 <code>git revert</code> 和更高 build 覆盖回滚，不重写已推送历史。</p>
   </section>
 
   <section>
@@ -228,7 +230,7 @@
 
   <section>
     <h2>6. 现在需要的一个决定</h2>
-    <div class="decision"><strong>请选择更名方向：</strong>“纸上屿”或“字成林”。确认后再做 CNIPA 近似检索和 App Store Connect 名称检查，通过后才提交显示层更名；在此之前不以“墨记”创建百度开放平台应用。</div>
+    <div class="decision"><strong>请选择更名方向：</strong>当前建议“纸上屿”，备选“字成林”。确认后由商标代理人完成至少第 9、42 类的相同及近似检索并留存书面结果；用户自行查询仅作辅助。之后再做 App Store Connect 名称检查；通过后才提交显示层更名。在此之前不以“墨记”创建百度开放平台应用。</div>
     <p>不需要等待名称决定的工作可以继续：在 iPad 重新连通后，先完成 0.2.0 的安装、Apple Pencil 书写、备份导出/恢复，以及百度网盘系统文件位置测试。</p>
   </section>
 
@@ -237,8 +239,9 @@
     <ul>
       <li>Apple：<a href="https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html">CFBundleDisplayName</a>、<a href="https://developer.apple.com/documentation/bundleresources/information-property-list/cfbundleidentifier">CFBundleIdentifier</a>、<a href="https://developer.apple.com/documentation/uniformtypeidentifiers/defining-file-and-data-types-for-your-app">定义文件和数据类型</a>、<a href="https://developer.apple.com/documentation/DeviceCheck/establishing-your-app-s-integrity">App Attest</a>、<a href="https://developer.apple.com/documentation/security/ksecattraccessiblewhenunlockedthisdeviceonly">仅本机且解锁可用的 Keychain 属性</a>。</li>
       <li>百度：本文链接均指向百度开放平台/网盘开放平台官方文档；接口配额、审核要求和 SDK 状态可能变化，实施前需再次核对。</li>
-      <li>命名初筛为 2026-08-30 的公开索引快照，查询式包括 <code>"候选" app OR 软件 OR 笔记</code>、<code>site:apps.apple.com/cn/app "候选"</code> 和 <code>site:github.com "候选"</code>；未登录 CNIPA 做完整类别/近似查询，也未取得法律意见。</li>
-      <li>本分支 <code>docs/product-decisions</code> 从 <code>d116fad</code> 分出；<code>main</code> 与 <code>origin/main</code> 仍停在 <code>2926cae</code>。正式更名未执行，用户选名和兼容门禁通过前不得合并品牌改动。</li>
+      <li>命名初筛为 2026-08-30 的公开索引快照，除网页检索外还调用 Apple 官方 Search API 检查中、美、港、台四区目录，并查 GitHub 精确词；未登录 CNIPA 做完整类别/近似查询，也未取得法律意见。</li>
+      <li>2026 年申请适用尼斯分类第十三版 2026 文本；正式检索至少覆盖第 9 类的可下载移动应用、可下载或已录制软件，以及第 42 类的软件设计开发、SaaS/PaaS、云计算和电子数据存储等。第 16、38、41、35 类仅根据实体文具、传输、出版和商业路线分别评估，不暗示均须申请。参考<a href="https://sbj.cnipa.gov.cn/sbj/tzgg/202512/t20251226_36952.html">国家知识产权局商标局通知</a>。</li>
+      <li>本分支 <code>docs/product-decisions</code> 从 <code>d116fad</code> 分出；兼容性实现位于 <code>test/brand-compatibility</code>，两者均已推送。<code>main</code> 与 <code>origin/main</code> 仍停在 <code>2926cae</code>。正式更名未执行，用户选名并完成正式检索前不得合并品牌改动。</li>
     </ul>
   </section>
 
