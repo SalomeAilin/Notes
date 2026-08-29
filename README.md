@@ -38,19 +38,10 @@
 ## 验证命令
 
 ```bash
-DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer \
-  xcrun swift test
-
-DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer \
-  xcodebuild \
-  -project InkNotes.xcodeproj \
-  -scheme InkNotes \
-  -destination 'generic/platform=iOS Simulator' \
-  CODE_SIGNING_ALLOWED=NO \
-  build
+./scripts/verify-compatibility.sh
 ```
 
-`swift test` 当前包含 22 个测试，覆盖元数据/笔迹往返、损坏数据不覆盖、切页保存时序、备份编解码、摘要与长度/内存读取上限、标题边界、非法 PencilKit 数据拒绝，以及恢复副本不覆盖原笔记。Xcode 构建命令验证完整 iPadOS 应用可以编译和链接。
+门禁当前运行 26 个测试，并分别构建 Debug、Release 两套 generic iOS 产物。除原有的元数据/笔迹往返、损坏数据保护、切页保存时序、备份编解码、边界限制和恢复副本测试外，还会用提交到 Git 的 v1 历史备份与真实 PencilKit 单笔画验证完整检查、恢复、标识重映射和落盘链路；同时核对 iPad-only、最低 iOS 17.0、Bundle Identifier 及备份文件身份。
 
 ## 本地数据
 
@@ -65,6 +56,17 @@ InkNotes/
 
 删除笔记本或页面后，当前版本会保留对应的孤立笔迹文件，避免立即破坏数据；暂未提供“最近删除”恢复界面。
 
+## 更名兼容边界
+
+正式更名只应修改展示层，例如 `CFBundleDisplayName`、界面文字和备份类型说明。以下技术身份已经被兼容门禁固定，不能随品牌名称修改：
+
+- Bundle Identifier：`com.salomeailin.InkNotes`
+- 本地目录和文件：`InkNotes/library.json`、`InkNotes/Drawings/*.drawing`
+- 备份 UTI、扩展名和 MIME：`com.salomeailin.notes.backup`、`.notesbackup`、`application/vnd.salomeailin.notes-backup`
+- 备份 magic/格式版本与本地 schema 版本
+
+若未来确实需要修改任一稳定身份，必须先设计显式迁移，并用旧真机数据和已提交的 v1 黄金备份验收。
+
 ## 备份与网盘
 
 - 备份文件扩展名为 `.notesbackup`，首版上限为 32 MiB；单页笔迹上限为 8 MiB。
@@ -75,7 +77,7 @@ InkNotes/
 ## 已知边界
 
 - 当前 Mac 没有安装 iOS Simulator runtime，因此本次已完成源码检查、核心测试和 generic iOS 构建，尚未做模拟器启动。
-- 0.2.0 已完成面向 iPadOS 27 真机的签名构建；当前设备连接通道不可用，安装与启动仍待设备解锁/重新连接后复验。
+- 0.2.0 基线已完成面向 iPadOS 27 真机的签名构建；当前兼容性和隐私提示更新尚未签名安装。设备连接通道仍不可用，安装与启动待设备解锁/重新连接后复验。
 - 尚未完成 Apple Pencil 的压感、倾斜、掌触防误触、旋转、分屏，以及百度网盘“文件位置/分享扩展”两条路径的真机验收。
 - 暂无 iCloud 同步、PDF 导入/导出、文本识别、搜索、自定义应用图标和 App Store 配置。
 - MVP 明确关闭多窗口，避免两个画布同时编辑同一页造成覆盖；后续如需 Stage Manager 多窗口，应先实现文件协调或笔迹合并。
