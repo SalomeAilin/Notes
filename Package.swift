@@ -21,6 +21,7 @@ let package = Package(
         "Networking/BaiduNetdiskBackupUploader.swift",
         "Persistence/BackupArchiveCodec.swift",
         "Persistence/BackupSnapshotRepository.swift",
+        "Persistence/BaiduUploadReconciliationRepository.swift",
         "Persistence/DrawingRepository.swift",
         "Stores/LibraryStore.swift",
       ]
