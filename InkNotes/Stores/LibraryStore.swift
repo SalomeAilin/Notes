@@ -1,0 +1,398 @@
+import Combine
+import Foundation
+import PencilKit
+
+private enum LibraryStoreError: LocalizedError {
+  case invalidStructure
+
+  var errorDescription: String? {
+    "笔记目录缺少笔记本或页面，原文件未被改写。"
+  }
+}
+
+@MainActor
+final class LibraryStore: ObservableObject {
+  @Published private(set) var library = LibraryDocument.starter()
+  @Published private(set) var selectedNotebookID: UUID?
+  @Published private(set) var selectedPageID: UUID?
+  @Published private(set) var currentDrawingData = Data()
+  @Published private(set) var isLoading = true
+  @Published private(set) var isDrawingLoading = false
+  @Published private(set) var isReadOnly = false
+  @Published private(set) var persistenceError: String?
+
+  private let repository: DrawingRepository
+  private var drawingSaveTask: Task<Void, Never>?
+  private var librarySaveTask: Task<Void, Never>?
+  private var unsavedDrawings: [UUID: Data] = [:]
+
+  init(repository: DrawingRepository = DrawingRepository()) {
+    self.repository = repository
+    Task { [weak self] in
+      await self?.load()
+    }
+  }
+
+  var notebooks: [Notebook] { library.notebooks }
+
+  var selectedNotebook: Notebook? {
+    library.notebooks.first { $0.id == selectedNotebookID }
+  }
+
+  var selectedPage: NotePage? {
+    selectedNotebook?.pages.first { $0.id == selectedPageID }
+  }
+
+  func selectNotebook(_ id: UUID) {
+    guard !isLoading, !isDrawingLoading, id != selectedNotebookID else { return }
+    guard let notebook = library.notebooks.first(where: { $0.id == id }),
+      let page = notebook.pages.first
+    else { return }
+
+    let previousPageID = selectedPageID
+    let previousDrawing = currentDrawingData
+    selectedNotebookID = id
+    selectedPageID = page.id
+    transitionDrawing(
+      from: previousPageID,
+      previousDrawing: previousDrawing,
+      to: page.id
+    )
+  }
+
+  func selectPage(_ id: UUID) {
+    guard !isLoading, !isDrawingLoading, id != selectedPageID else { return }
+    guard selectedNotebook?.pages.contains(where: { $0.id == id }) == true else { return }
+
+    let previousPageID = selectedPageID
+    let previousDrawing = currentDrawingData
+    selectedPageID = id
+    transitionDrawing(
+      from: previousPageID,
+      previousDrawing: previousDrawing,
+      to: id
+    )
+  }
+
+  func addNotebook(title: String? = nil) {
+    guard canEdit else { return }
+    let notebookTitle = cleaned(title) ?? uniqueNotebookTitle()
+    let page = NotePage(title: "第 1 页")
+    let notebook = Notebook(title: notebookTitle, pages: [page])
+    let previousPageID = selectedPageID
+    let previousDrawing = currentDrawingData
+
+    library.notebooks.append(notebook)
+    selectedNotebookID = notebook.id
+    selectedPageID = page.id
+    scheduleLibrarySave()
+    transitionDrawing(
+      from: previousPageID,
+      previousDrawing: previousDrawing,
+      to: page.id
+    )
+  }
+
+  func addPage(title: String? = nil) {
+    guard canEdit, let notebookIndex = selectedNotebookIndex else { return }
+    let nextNumber = library.notebooks[notebookIndex].pages.count + 1
+    let page = NotePage(title: cleaned(title) ?? "第 \(nextNumber) 页")
+    let previousPageID = selectedPageID
+    let previousDrawing = currentDrawingData
+
+    library.notebooks[notebookIndex].pages.append(page)
+    library.notebooks[notebookIndex].updatedAt = Date()
+    selectedPageID = page.id
+    scheduleLibrarySave()
+    transitionDrawing(
+      from: previousPageID,
+      previousDrawing: previousDrawing,
+      to: page.id
+    )
+  }
+
+  func renameNotebook(id: UUID, title: String) {
+    guard canEdit, let title = cleaned(title),
+      let index = library.notebooks.firstIndex(where: { $0.id == id })
+    else { return }
+    library.notebooks[index].title = title
+    library.notebooks[index].updatedAt = Date()
+    scheduleLibrarySave()
+  }
+
+  func renamePage(id: UUID, title: String) {
+    guard canEdit, let title = cleaned(title),
+      let location = pageLocation(id: id)
+    else { return }
+    library.notebooks[location.notebook].pages[location.page].title = title
+    touch(notebookAt: location.notebook, pageAt: location.page)
+    scheduleLibrarySave()
+  }
+
+  func deleteNotebook(id: UUID) {
+    guard canEdit,
+      let index = library.notebooks.firstIndex(where: { $0.id == id })
+    else { return }
+
+    let deletingSelection = selectedNotebookID == id
+    let previousPageID = deletingSelection ? selectedPageID : nil
+    let previousDrawing = deletingSelection ? currentDrawingData : Data()
+    library.notebooks.remove(at: index)
+
+    if library.notebooks.isEmpty {
+      library = .starter()
+    }
+
+    if deletingSelection,
+      let notebook = library.notebooks.first,
+      let page = notebook.pages.first
+    {
+      selectedNotebookID = notebook.id
+      selectedPageID = page.id
+      transitionDrawing(
+        from: previousPageID,
+        previousDrawing: previousDrawing,
+        to: page.id
+      )
+    }
+    scheduleLibrarySave()
+  }
+
+  func deletePage(id: UUID) {
+    guard canEdit, let location = pageLocation(id: id) else { return }
+
+    let deletingSelection = selectedPageID == id
+    let previousDrawing = deletingSelection ? currentDrawingData : Data()
+    library.notebooks[location.notebook].pages.remove(at: location.page)
+
+    if library.notebooks[location.notebook].pages.isEmpty {
+      library.notebooks[location.notebook].pages = [NotePage(title: "第 1 页")]
+    }
+    library.notebooks[location.notebook].updatedAt = Date()
+
+    if deletingSelection,
+      let page = library.notebooks[location.notebook].pages.first
+    {
+      selectedPageID = page.id
+      transitionDrawing(
+        from: id,
+        previousDrawing: previousDrawing,
+        to: page.id
+      )
+    }
+    scheduleLibrarySave()
+  }
+
+  func updateCurrentDrawing(_ data: Data) {
+    guard canEdit, !isDrawingLoading, data != currentDrawingData,
+      let pageID = selectedPageID,
+      let location = pageLocation(id: pageID)
+    else { return }
+
+    currentDrawingData = data
+    unsavedDrawings[pageID] = data
+    touch(notebookAt: location.notebook, pageAt: location.page)
+    scheduleDrawingSave(data, pageID: pageID)
+    scheduleLibrarySave()
+  }
+
+  func clearCurrentDrawing() {
+    updateCurrentDrawing(Data())
+  }
+
+  func setCurrentPageBackground(_ background: PageBackground) {
+    guard canEdit, let pageID = selectedPageID,
+      let location = pageLocation(id: pageID)
+    else { return }
+    library.notebooks[location.notebook].pages[location.page].background = background
+    touch(notebookAt: location.notebook, pageAt: location.page)
+    scheduleLibrarySave()
+  }
+
+  func clearPersistenceError() {
+    persistenceError = nil
+  }
+
+  func flush() async {
+    drawingSaveTask?.cancel()
+    librarySaveTask?.cancel()
+    guard !isLoading else { return }
+
+    var drawingsToSave = unsavedDrawings
+    if !isReadOnly, !isDrawingLoading, let pageID = selectedPageID {
+      drawingsToSave[pageID] = currentDrawingData
+    }
+
+    for (pageID, data) in drawingsToSave {
+      do {
+        try await repository.saveDrawing(data, pageID: pageID)
+        if unsavedDrawings[pageID] == data {
+          unsavedDrawings.removeValue(forKey: pageID)
+        }
+      } catch {
+        report(error, prefix: "笔迹保存失败")
+      }
+    }
+
+    guard !isReadOnly else { return }
+    do {
+      try await repository.saveLibrary(library)
+    } catch {
+      report(error, prefix: "目录保存失败")
+    }
+  }
+
+  private var canEdit: Bool {
+    !isLoading && !isDrawingLoading && !isReadOnly
+  }
+
+  private var selectedNotebookIndex: Int? {
+    library.notebooks.firstIndex { $0.id == selectedNotebookID }
+  }
+
+  private func load() async {
+    isLoading = true
+    do {
+      if let existing = try await repository.loadLibrary() {
+        guard !existing.notebooks.isEmpty,
+          existing.notebooks.allSatisfy({ !$0.pages.isEmpty })
+        else {
+          throw LibraryStoreError.invalidStructure
+        }
+        library = existing
+      } else {
+        library = .starter()
+        try await repository.saveLibrary(library)
+      }
+
+      selectedNotebookID = library.notebooks.first?.id
+      selectedPageID = library.notebooks.first?.pages.first?.id
+      if let pageID = selectedPageID {
+        currentDrawingData = try await validatedDrawingData(pageID: pageID)
+      }
+      isLoading = false
+    } catch {
+      isReadOnly = true
+      isLoading = false
+      selectedNotebookID = library.notebooks.first?.id
+      selectedPageID = library.notebooks.first?.pages.first?.id
+      report(error, prefix: "无法读取本地笔记")
+    }
+  }
+
+  private func transitionDrawing(
+    from previousPageID: UUID?,
+    previousDrawing: Data,
+    to nextPageID: UUID
+  ) {
+    drawingSaveTask?.cancel()
+    let shouldSavePrevious = !isReadOnly
+    isDrawingLoading = true
+    currentDrawingData = Data()
+
+    Task { [weak self, repository] in
+      guard let self else { return }
+
+      if shouldSavePrevious, let previousPageID {
+        do {
+          try await repository.saveDrawing(previousDrawing, pageID: previousPageID)
+          if unsavedDrawings[previousPageID] == previousDrawing {
+            unsavedDrawings.removeValue(forKey: previousPageID)
+          }
+        } catch {
+          unsavedDrawings[previousPageID] = previousDrawing
+          report(error, prefix: "上一页保存失败")
+        }
+      }
+
+      do {
+        let loaded = try await validatedDrawingData(pageID: nextPageID)
+        guard selectedPageID == nextPageID else { return }
+        currentDrawingData = loaded
+        isDrawingLoading = false
+      } catch {
+        isReadOnly = true
+        isDrawingLoading = false
+        report(error, prefix: "页面载入失败")
+      }
+    }
+  }
+
+  private func scheduleDrawingSave(_ data: Data, pageID: UUID) {
+    drawingSaveTask?.cancel()
+    drawingSaveTask = Task { [weak self, repository] in
+      do {
+        try await Task.sleep(for: .milliseconds(400))
+        try Task.checkCancellation()
+        try await repository.saveDrawing(data, pageID: pageID)
+        if self?.unsavedDrawings[pageID] == data {
+          self?.unsavedDrawings.removeValue(forKey: pageID)
+        }
+      } catch is CancellationError {
+        return
+      } catch {
+        self?.report(error, prefix: "笔迹保存失败")
+      }
+    }
+  }
+
+  private func scheduleLibrarySave() {
+    let snapshot = library
+    librarySaveTask?.cancel()
+    librarySaveTask = Task { [weak self, repository] in
+      do {
+        try await Task.sleep(for: .milliseconds(400))
+        try Task.checkCancellation()
+        try await repository.saveLibrary(snapshot)
+      } catch is CancellationError {
+        return
+      } catch {
+        self?.report(error, prefix: "目录保存失败")
+      }
+    }
+  }
+
+  private func validatedDrawingData(pageID: UUID) async throws -> Data {
+    let data = try await repository.loadDrawing(pageID: pageID) ?? Data()
+    if !data.isEmpty {
+      _ = try PKDrawing(data: data)
+    }
+    return data
+  }
+
+  private func touch(notebookAt notebookIndex: Int, pageAt pageIndex: Int) {
+    let now = Date()
+    library.notebooks[notebookIndex].pages[pageIndex].updatedAt = now
+    library.notebooks[notebookIndex].updatedAt = now
+  }
+
+  private func pageLocation(id: UUID) -> (notebook: Int, page: Int)? {
+    for notebookIndex in library.notebooks.indices {
+      if let pageIndex = library.notebooks[notebookIndex].pages.firstIndex(where: { $0.id == id }) {
+        return (notebookIndex, pageIndex)
+      }
+    }
+    return nil
+  }
+
+  private func cleaned(_ text: String?) -> String? {
+    guard let text else { return nil }
+    let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    return cleaned.isEmpty ? nil : cleaned
+  }
+
+  private func uniqueNotebookTitle() -> String {
+    let base = "新笔记本"
+    let names = Set(library.notebooks.map(\.title))
+    guard names.contains(base) else { return base }
+    var number = 2
+    while names.contains("\(base) \(number)") {
+      number += 1
+    }
+    return "\(base) \(number)"
+  }
+
+  private func report(_ error: Error, prefix: String) {
+    persistenceError = "\(prefix)：\(error.localizedDescription)"
+  }
+}
