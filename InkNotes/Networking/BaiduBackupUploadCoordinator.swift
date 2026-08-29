@@ -4,6 +4,7 @@ enum BaiduBackupUploadCoordinatorPhase: Equatable, Sendable {
   case idle
   case preparing
   case precreateDispatchPermitted
+  case precreateUploadRequiredConfirmed
   case uploadPartDispatchPermitted(partIndex: Int, ordinal: Int, total: Int)
   case createDispatchPermitted
 }
@@ -257,8 +258,11 @@ actor BaiduBackupUploadCoordinator {
     case (.preparing, .precreateDispatchPermitted):
       return .precreateDispatchPermitted
 
+    case (.precreateDispatchPermitted, .precreateUploadRequiredConfirmed):
+      return .precreateUploadRequiredConfirmed
+
     case (
-      .precreateDispatchPermitted,
+      .precreateUploadRequiredConfirmed,
       .uploadPartDispatchPermitted(let partIndex, let ordinal, let total)
     ) where partIndex >= 0 && total > 0 && (1...total).contains(ordinal):
       return .uploadPartDispatchPermitted(
@@ -279,8 +283,7 @@ actor BaiduBackupUploadCoordinator {
         total: total
       )
 
-    case (.precreateDispatchPermitted, .createDispatchPermitted),
-      (.uploadPartDispatchPermitted, .createDispatchPermitted):
+    case (.uploadPartDispatchPermitted, .createDispatchPermitted):
       return .createDispatchPermitted
 
     default:

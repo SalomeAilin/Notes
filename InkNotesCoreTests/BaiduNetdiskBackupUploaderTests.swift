@@ -188,10 +188,45 @@ struct BaiduNetdiskBackupUploaderTests {
       await recorder.values()
         == [
           .precreateDispatchPermitted,
+          .precreateUploadRequiredConfirmed,
           .uploadPartDispatchPermitted(partIndex: 0, ordinal: 1, total: 1),
           .createDispatchPermitted,
         ]
     )
+  }
+
+  @Test("A rejected upload-required checkpoint prevents part dispatch")
+  func rejectedUploadRequiredCheckpointPreventsPartDispatch() async throws {
+    let archive = try makeArchive()
+    let directory = try applicationDirectory()
+    let plan = try BaiduNetdiskBackupUploader.makeUploadPlan(
+      archive: archive,
+      applicationDirectory: directory
+    )
+    let transport = ScriptedBaiduHTTPTransport(
+      handlers: Array(
+        try successfulHandlers(plan: plan, requestedPartIndices: [0]).prefix(1)
+      )
+    )
+    var receivedCancellation = false
+
+    do {
+      _ = try await BaiduNetdiskBackupUploader(transport: transport).upload(
+        archive: archive,
+        accessToken: accessToken(),
+        applicationDirectory: directory,
+        progress: { progress in
+          if progress == .precreateUploadRequiredConfirmed {
+            throw CancellationError()
+          }
+        }
+      )
+    } catch is CancellationError {
+      receivedCancellation = true
+    }
+
+    #expect(receivedCancellation)
+    #expect(await transport.requestCount() == 1)
   }
 
   @Test("A rejected create checkpoint prevents the create request")

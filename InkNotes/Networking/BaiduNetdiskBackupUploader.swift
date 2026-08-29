@@ -173,6 +173,7 @@ struct BaiduNetdiskBackupUploader: BaiduBackupUploading, Sendable {
     if returnType == 2 {
       return PrecreateResult(returnType: returnType, uploadID: "", blockList: [])
     }
+    try await progress(.precreateUploadRequiredConfirmed)
     guard let uploadID = response.uploadid,
       !uploadID.isEmpty,
       uploadID.utf8.count <= 4_096,

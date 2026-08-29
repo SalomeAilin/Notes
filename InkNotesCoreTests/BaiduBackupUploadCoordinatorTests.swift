@@ -53,7 +53,7 @@ struct BaiduBackupUploadCoordinatorTests {
         applicationDirectory: directory
       )
     }
-    try await waitForPhase(.precreateDispatchPermitted, coordinator: coordinator)
+    try await waitForPhase(.precreateUploadRequiredConfirmed, coordinator: coordinator)
     let firstSnapshot = await coordinator.snapshot()
 
     let concurrent = await coordinator.upload(
@@ -103,7 +103,7 @@ struct BaiduBackupUploadCoordinatorTests {
           applicationDirectory: directory
         )
       }
-      try await waitForPhase(.precreateDispatchPermitted, coordinator: coordinator)
+      try await waitForPhase(.precreateUploadRequiredConfirmed, coordinator: coordinator)
 
       if source == .caller {
         task.cancel()
@@ -133,7 +133,10 @@ struct BaiduBackupUploadCoordinatorTests {
         applicationDirectory: directory
       )
     }
-    try await waitForPhase(.precreateDispatchPermitted, coordinator: coordinator)
+    try await waitForPhase(
+      .uploadPartDispatchPermitted(partIndex: 0, ordinal: 1, total: 1),
+      coordinator: coordinator
+    )
 
     _ = await coordinator.cancelActiveUpload()
 
@@ -366,7 +369,7 @@ struct BaiduBackupUploadCoordinatorTests {
         applicationDirectory: directory
       )
     }
-    try await waitForPhase(.precreateDispatchPermitted, coordinator: coordinator)
+    try await waitForPhase(.precreateUploadRequiredConfirmed, coordinator: coordinator)
     let oldOperationID = try #require(await coordinator.snapshot().operationID)
     _ = await coordinator.cancelActiveUpload()
     #expect(await first.value == .cancelled(.explicit))
@@ -378,7 +381,7 @@ struct BaiduBackupUploadCoordinatorTests {
         applicationDirectory: directory
       )
     }
-    try await waitForPhase(.precreateDispatchPermitted, coordinator: coordinator)
+    try await waitForPhase(.precreateUploadRequiredConfirmed, coordinator: coordinator)
     let newOperationID = try #require(await coordinator.snapshot().operationID)
     #expect(newOperationID != oldOperationID)
 
@@ -414,7 +417,7 @@ struct BaiduBackupUploadCoordinatorTests {
     }
 
     var snapshots: [BaiduBackupUploadCoordinatorSnapshot] = []
-    for _ in 0..<7 {
+    for _ in 0..<8 {
       if let snapshot = await iterator.next() {
         snapshots.append(snapshot)
       }
@@ -427,6 +430,7 @@ struct BaiduBackupUploadCoordinatorTests {
           .idle,
           .preparing,
           .precreateDispatchPermitted,
+          .precreateUploadRequiredConfirmed,
           .uploadPartDispatchPermitted(partIndex: 0, ordinal: 1, total: 2),
           .uploadPartDispatchPermitted(partIndex: 1, ordinal: 2, total: 2),
           .createDispatchPermitted,
@@ -506,6 +510,7 @@ struct BaiduBackupUploadCoordinatorTests {
   private func suspendingBeforeCreateHandler() -> ScriptedCoordinatorUploader.Handler {
     { _, _, _, progress in
       try await progress(.precreateDispatchPermitted)
+      try await progress(.precreateUploadRequiredConfirmed)
       try await Task.sleep(for: .seconds(60))
       throw CoordinatorTestError.timedOut
     }
@@ -516,6 +521,8 @@ struct BaiduBackupUploadCoordinatorTests {
   {
     { _, _, _, progress in
       try await progress(.precreateDispatchPermitted)
+      try await progress(.precreateUploadRequiredConfirmed)
+      try await progress(.uploadPartDispatchPermitted(partIndex: 0, ordinal: 1, total: 1))
       do {
         try await Task.sleep(for: .seconds(60))
       } catch is CancellationError {
@@ -529,6 +536,8 @@ struct BaiduBackupUploadCoordinatorTests {
   private func suspendingAfterCreateHandler() -> ScriptedCoordinatorUploader.Handler {
     { _, _, _, progress in
       try await progress(.precreateDispatchPermitted)
+      try await progress(.precreateUploadRequiredConfirmed)
+      try await progress(.uploadPartDispatchPermitted(partIndex: 0, ordinal: 1, total: 1))
       try await progress(.createDispatchPermitted)
       try await Task.sleep(for: .seconds(60))
       throw CoordinatorTestError.timedOut
@@ -540,6 +549,8 @@ struct BaiduBackupUploadCoordinatorTests {
   ) -> ScriptedCoordinatorUploader.Handler {
     { _, _, _, progress in
       try await progress(.precreateDispatchPermitted)
+      try await progress(.precreateUploadRequiredConfirmed)
+      try await progress(.uploadPartDispatchPermitted(partIndex: 0, ordinal: 1, total: 1))
       try await progress(.createDispatchPermitted)
       throw error
     }
@@ -551,6 +562,8 @@ struct BaiduBackupUploadCoordinatorTests {
   ) -> ScriptedCoordinatorUploader.Handler {
     { _, _, _, progress in
       try await progress(.precreateDispatchPermitted)
+      try await progress(.precreateUploadRequiredConfirmed)
+      try await progress(.uploadPartDispatchPermitted(partIndex: 0, ordinal: 1, total: 1))
       try await progress(.createDispatchPermitted)
       await gate.wait()
       return .uploaded(remote)
@@ -578,6 +591,7 @@ struct BaiduBackupUploadCoordinatorTests {
   ) -> ScriptedCoordinatorUploader.Handler {
     { _, _, _, progress in
       try await progress(.precreateDispatchPermitted)
+      try await progress(.precreateUploadRequiredConfirmed)
       try await progress(.uploadPartDispatchPermitted(partIndex: 0, ordinal: 1, total: 1))
       try await progress(.createDispatchPermitted)
       return .uploaded(remote)
@@ -589,6 +603,7 @@ struct BaiduBackupUploadCoordinatorTests {
   ) -> ScriptedCoordinatorUploader.Handler {
     { _, _, _, progress in
       try await progress(.precreateDispatchPermitted)
+      try await progress(.precreateUploadRequiredConfirmed)
       try await progress(.uploadPartDispatchPermitted(partIndex: 0, ordinal: 1, total: 2))
       try await progress(.uploadPartDispatchPermitted(partIndex: 1, ordinal: 2, total: 2))
       try await progress(.createDispatchPermitted)
