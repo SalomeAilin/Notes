@@ -391,7 +391,8 @@ struct BackupArchiveCodecTests {
     let manifestData = try encoder.encode(manifest)
 
     var prefix = Data([0x49, 0x4E, 0x4B, 0x4E, 0x4F, 0x54, 0x45, 0x00])
-    appendBigEndian(BackupArchiveCodec.formatVersion, to: &prefix)
+    // Keep the handcrafted archive independent from the production version constant.
+    appendBigEndian(UInt16(1), to: &prefix)
     appendBigEndian(UInt16(0), to: &prefix)
     appendBigEndian(UInt32(manifestData.count), to: &prefix)
     appendBigEndian(UInt64(payload.count), to: &prefix)

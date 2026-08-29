@@ -24,7 +24,8 @@ let package = Package(
     .testTarget(
       name: "InkNotesCoreTests",
       dependencies: ["InkNotesCore"],
-      path: "InkNotesCoreTests"
+      path: "InkNotesCoreTests",
+      resources: [.copy("Fixtures")]
     ),
   ]
 )

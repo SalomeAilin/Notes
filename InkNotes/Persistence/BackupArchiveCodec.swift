@@ -2,11 +2,13 @@ import CryptoKit
 import Foundation
 
 enum BackupArchiveCodec {
+  static let uniformTypeIdentifier = "com.salomeailin.notes.backup"
   static let fileExtension = "notesbackup"
+  static let mimeType = "application/vnd.salomeailin.notes-backup"
   static let formatVersion: UInt16 = 1
   static let headerByteCount = 56
 
-  private static let magic = Data([0x49, 0x4E, 0x4B, 0x4E, 0x4F, 0x54, 0x45, 0x00])
+  static let magic = Data([0x49, 0x4E, 0x4B, 0x4E, 0x4F, 0x54, 0x45, 0x00])
   private static let supportedFlags: UInt16 = 0
 
   static func encode(

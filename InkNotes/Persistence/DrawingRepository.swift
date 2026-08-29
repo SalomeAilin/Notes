@@ -15,6 +15,11 @@ enum DrawingRepositoryError: LocalizedError, Equatable {
 }
 
 actor DrawingRepository {
+  static let persistedDirectoryName = "InkNotes"
+  static let libraryFilename = "library.json"
+  static let drawingsDirectoryName = "Drawings"
+  static let drawingFileExtension = "drawing"
+
   private let fileManager: FileManager
   private let rootURL: URL
 
@@ -33,7 +38,7 @@ actor DrawingRepository {
         in: .userDomainMask
       ).first ?? fileManager.temporaryDirectory
 
-    return applicationSupport.appendingPathComponent("InkNotes", isDirectory: true)
+    return applicationSupport.appendingPathComponent(persistedDirectoryName, isDirectory: true)
   }
 
   func loadLibrary() throws -> LibraryDocument? {
@@ -111,15 +116,18 @@ actor DrawingRepository {
   }
 
   private var libraryURL: URL {
-    rootURL.appendingPathComponent("library.json", isDirectory: false)
+    rootURL.appendingPathComponent(Self.libraryFilename, isDirectory: false)
   }
 
   private var drawingsURL: URL {
-    rootURL.appendingPathComponent("Drawings", isDirectory: true)
+    rootURL.appendingPathComponent(Self.drawingsDirectoryName, isDirectory: true)
   }
 
   private func drawingURL(for pageID: UUID) -> URL {
-    drawingsURL.appendingPathComponent("\(pageID.uuidString).drawing", isDirectory: false)
+    drawingsURL.appendingPathComponent(
+      "\(pageID.uuidString).\(Self.drawingFileExtension)",
+      isDirectory: false
+    )
   }
 
   private func prepareDirectories() throws {
