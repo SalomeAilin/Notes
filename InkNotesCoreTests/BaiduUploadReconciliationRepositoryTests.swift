@@ -153,6 +153,154 @@ struct BaiduUploadReconciliationRepositoryTests {
     #expect(persisted == firstRecord || persisted == secondRecord)
   }
 
+  @Test("A restart removes a canonical restricted temporary record before admission")
+  func canonicalTemporaryRecordIsRecoveredAfterRestart() async throws {
+    let fileManager = FileManager.default
+    let rootURL = makeRootURL(fileManager: fileManager)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let directoryURL = rootURL.appendingPathComponent(
+      BaiduUploadReconciliationRepository.reconciliationDirectoryName,
+      isDirectory: true
+    )
+    try fileManager.createDirectory(
+      at: directoryURL,
+      withIntermediateDirectories: true,
+      attributes: [.posixPermissions: 0o700]
+    )
+    try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directoryURL.path)
+    let temporaryURL = directoryURL.appendingPathComponent(
+      ".\(UUID().uuidString.lowercased()).tmp"
+    )
+    #expect(
+      fileManager.createFile(
+        atPath: temporaryURL.path,
+        contents: Data("partial-record".utf8),
+        attributes: [.posixPermissions: 0o600]
+      )
+    )
+
+    let repository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    #expect(try await repository.admit(record()) == .created)
+    #expect(!fileManager.fileExists(atPath: temporaryURL.path))
+    #expect(try await repository.load(backupID: backupID) == record())
+  }
+
+  @Test("Unknown or insecure temporary entries remain fail-closed")
+  func invalidTemporaryEntriesAreNeverRemoved() async throws {
+    let fileManager = FileManager.default
+    let cases = [
+      (".tmp", 0o600),
+      ("..tmp", 0o600),
+      (".not-a-uuid.tmp", 0o600),
+      (".A2000000-0000-0000-0000-000000000001.tmp", 0o600),
+      (".\(UUID().uuidString.lowercased()).tmp", 0o644),
+    ]
+
+    for (filename, permissions) in cases {
+      let rootURL = makeRootURL(fileManager: fileManager)
+      defer { try? fileManager.removeItem(at: rootURL) }
+      let directoryURL = rootURL.appendingPathComponent(
+        BaiduUploadReconciliationRepository.reconciliationDirectoryName,
+        isDirectory: true
+      )
+      try fileManager.createDirectory(
+        at: directoryURL,
+        withIntermediateDirectories: true,
+        attributes: [.posixPermissions: 0o700]
+      )
+      try fileManager.setAttributes(
+        [.posixPermissions: 0o700],
+        ofItemAtPath: directoryURL.path
+      )
+      let temporaryURL = directoryURL.appendingPathComponent(filename)
+      #expect(
+        fileManager.createFile(
+          atPath: temporaryURL.path,
+          contents: Data(),
+          attributes: [.posixPermissions: permissions]
+        )
+      )
+
+      let repository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+      await #expect(throws: BaiduUploadReconciliationRepositoryError.invalidStoreLayout) {
+        try await repository.admit(self.record())
+      }
+      #expect(fileManager.fileExists(atPath: temporaryURL.path))
+    }
+  }
+
+  @Test("A canonical temporary symlink remains fail-closed")
+  func temporarySymlinkIsNeverRemoved() async throws {
+    let fileManager = FileManager.default
+    let rootURL = makeRootURL(fileManager: fileManager)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let directoryURL = rootURL.appendingPathComponent(
+      BaiduUploadReconciliationRepository.reconciliationDirectoryName,
+      isDirectory: true
+    )
+    try fileManager.createDirectory(
+      at: directoryURL,
+      withIntermediateDirectories: true,
+      attributes: [.posixPermissions: 0o700]
+    )
+    try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directoryURL.path)
+    let targetURL = rootURL.appendingPathComponent("temporary-target")
+    try writeRestricted(Data("do-not-remove".utf8), to: targetURL, fileManager: fileManager)
+    let temporaryURL = directoryURL.appendingPathComponent(
+      ".\(UUID().uuidString.lowercased()).tmp"
+    )
+    try fileManager.createSymbolicLink(at: temporaryURL, withDestinationURL: targetURL)
+
+    let repository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    await #expect(throws: BaiduUploadReconciliationRepositoryError.invalidStoreLayout) {
+      try await repository.admit(self.record())
+    }
+    #expect(fileManager.fileExists(atPath: temporaryURL.path))
+    #expect(try Data(contentsOf: targetURL) == Data("do-not-remove".utf8))
+  }
+
+  @Test("Temporary recovery is bounded by the global directory entry limit")
+  func excessiveTemporaryEntriesFailClosed() async throws {
+    let fileManager = FileManager.default
+    let rootURL = makeRootURL(fileManager: fileManager)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let directoryURL = rootURL.appendingPathComponent(
+      BaiduUploadReconciliationRepository.reconciliationDirectoryName,
+      isDirectory: true
+    )
+    try fileManager.createDirectory(
+      at: directoryURL,
+      withIntermediateDirectories: true,
+      attributes: [.posixPermissions: 0o700]
+    )
+    try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directoryURL.path)
+    for _ in 0...BaiduUploadReconciliationRepository.maximumRecordCount {
+      let temporaryURL = directoryURL.appendingPathComponent(
+        ".\(UUID().uuidString.lowercased()).tmp"
+      )
+      #expect(
+        fileManager.createFile(
+          atPath: temporaryURL.path,
+          contents: Data(),
+          attributes: [.posixPermissions: 0o600]
+        )
+      )
+    }
+
+    let repository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    await #expect(
+      throws: BaiduUploadReconciliationRepositoryError.tooManyRecords(
+        maximum: BaiduUploadReconciliationRepository.maximumRecordCount
+      )
+    ) {
+      try await repository.admit(self.record())
+    }
+    #expect(
+      try fileManager.contentsOfDirectory(atPath: directoryURL.path).count
+        == BaiduUploadReconciliationRepository.maximumRecordCount + 1
+    )
+  }
+
   @Test("Invalid digests, sizes, and noncanonical paths are rejected before writing")
   func invalidIdentityBoundariesFailClosed() async throws {
     let fileManager = FileManager.default

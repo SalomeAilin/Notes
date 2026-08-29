@@ -79,6 +79,15 @@ enum BaiduUploadReconciliationAdmission: Equatable, Sendable {
   case identityConflict
 }
 
+protocol BaiduUploadReconciliationStoring: Sendable {
+  func admit(
+    _ record: BaiduUploadReconciliationRecord
+  ) async throws -> BaiduUploadReconciliationAdmission
+
+  @discardableResult
+  func removeOwned(_ record: BaiduUploadReconciliationRecord) async throws -> Bool
+}
+
 enum BaiduUploadReconciliationRepositoryError: LocalizedError, Equatable, Sendable {
   case persistenceDirectoryUnavailable
   case invalidStoreLayout
@@ -122,6 +131,7 @@ actor BaiduUploadReconciliationRepository {
   private static let directoryPermissions = 0o700
   private static let filePermissions = 0o600
   private static let lockFilename = ".UploadReconciliation.lock"
+  private static let maximumDirectoryEntryCount = maximumRecordCount
   private static let processLock = NSLock()
 
   private let fileManager: FileManager
@@ -165,7 +175,7 @@ actor BaiduUploadReconciliationRepository {
       }
 
       let directoryURL = try prepareReconciliationDirectory()
-      let recordCount = try countAndValidateRecordFiles(in: directoryURL)
+      let recordCount = try recoverTemporaryFilesAndCountRecords(in: directoryURL)
       guard recordCount < Self.maximumRecordCount else {
         throw BaiduUploadReconciliationRepositoryError.tooManyRecords(
           maximum: Self.maximumRecordCount
@@ -238,6 +248,7 @@ actor BaiduUploadReconciliationRepository {
 
       do {
         try fileManager.removeItem(at: recordURL)
+        try synchronizeDirectory(at: recordURL.deletingLastPathComponent())
         return true
       } catch let error as NSError where Self.isMissingFileError(error) {
         return false
@@ -270,6 +281,22 @@ actor BaiduUploadReconciliationRepository {
 
   private static func recordFilename(backupID: UUID) -> String {
     "\(backupID.uuidString.lowercased()).\(recordFileExtension)"
+  }
+
+  private static func isCanonicalTemporaryFilename(_ filename: String) -> Bool {
+    let bytes = Array(filename.utf8)
+    guard bytes.count == 41,
+      bytes[0] == 0x2E,
+      bytes[37] == 0x2E,
+      bytes[38] == 0x74,
+      bytes[39] == 0x6D,
+      bytes[40] == 0x70
+    else {
+      return false
+    }
+    let uuidString = String(decoding: bytes[1..<37], as: UTF8.self)
+    guard let uuid = UUID(uuidString: uuidString) else { return false }
+    return filename == ".\(uuid.uuidString.lowercased()).tmp"
   }
 
   private func prepareRootDirectory() throws {
@@ -355,6 +382,7 @@ actor BaiduUploadReconciliationRepository {
     } catch {
       if let attributes = try attributesIfPresent(at: url) {
         try validateDirectoryAttributes(attributes, requiredPermissions: requiredPermissions)
+        try synchronizeDirectory(at: url.deletingLastPathComponent())
         return
       }
       throw BaiduUploadReconciliationRepositoryError.persistenceFailure
@@ -364,6 +392,7 @@ actor BaiduUploadReconciliationRepository {
       throw BaiduUploadReconciliationRepositoryError.persistenceFailure
     }
     try validateDirectoryAttributes(attributes, requiredPermissions: requiredPermissions)
+    try synchronizeDirectory(at: url.deletingLastPathComponent())
   }
 
   private func writeNewRecordData(_ data: Data, to recordURL: URL) throws {
@@ -506,33 +535,73 @@ actor BaiduUploadReconciliationRepository {
     return record
   }
 
-  private func countAndValidateRecordFiles(in directoryURL: URL) throws -> Int {
-    let entries: [URL]
-    do {
-      entries = try fileManager.contentsOfDirectory(
+  private func recoverTemporaryFilesAndCountRecords(in directoryURL: URL) throws -> Int {
+    var enumerationFailed = false
+    guard
+      let enumerator = fileManager.enumerator(
         at: directoryURL,
         includingPropertiesForKeys: nil,
-        options: []
+        options: [.skipsSubdirectoryDescendants],
+        errorHandler: { _, _ in
+          enumerationFailed = true
+          return false
+        }
       )
-    } catch {
+    else {
       throw BaiduUploadReconciliationRepositoryError.persistenceFailure
     }
 
-    guard entries.count <= Self.maximumRecordCount else {
-      throw BaiduUploadReconciliationRepositoryError.tooManyRecords(
-        maximum: Self.maximumRecordCount
-      )
+    var entries: [URL] = []
+    while let value = enumerator.nextObject() {
+      guard let entry = value as? URL else {
+        throw BaiduUploadReconciliationRepositoryError.persistenceFailure
+      }
+      entries.append(entry)
+      guard entries.count <= Self.maximumDirectoryEntryCount else {
+        throw BaiduUploadReconciliationRepositoryError.tooManyRecords(
+          maximum: Self.maximumDirectoryEntryCount
+        )
+      }
     }
+    guard !enumerationFailed else {
+      throw BaiduUploadReconciliationRepositoryError.persistenceFailure
+    }
+
+    var recordCount = 0
+    var temporaryFiles: [URL] = []
     for entry in entries {
-      guard entry.pathExtension == Self.recordFileExtension,
+      if entry.pathExtension == Self.recordFileExtension,
         let backupID = UUID(uuidString: entry.deletingPathExtension().lastPathComponent),
         entry.lastPathComponent == Self.recordFilename(backupID: backupID)
-      else {
+      {
+        try validateFile(at: entry)
+        recordCount += 1
+        guard recordCount <= Self.maximumRecordCount else {
+          throw BaiduUploadReconciliationRepositoryError.tooManyRecords(
+            maximum: Self.maximumRecordCount
+          )
+        }
+        continue
+      }
+
+      guard Self.isCanonicalTemporaryFilename(entry.lastPathComponent) else {
         throw BaiduUploadReconciliationRepositoryError.invalidStoreLayout
       }
       try validateFile(at: entry)
+      temporaryFiles.append(entry)
     }
-    return entries.count
+
+    for temporaryFile in temporaryFiles {
+      do {
+        try fileManager.removeItem(at: temporaryFile)
+      } catch {
+        throw BaiduUploadReconciliationRepositoryError.persistenceFailure
+      }
+    }
+    if !temporaryFiles.isEmpty {
+      try synchronizeDirectory(at: directoryURL)
+    }
+    return recordCount
   }
 
   private func validateFile(at url: URL) throws {
@@ -706,6 +775,8 @@ actor BaiduUploadReconciliationRepository {
     JSONDecoder()
   }
 }
+
+extension BaiduUploadReconciliationRepository: BaiduUploadReconciliationStoring {}
 
 private struct BaiduUploadReconciliationCodingKey: CodingKey, Hashable {
   let stringValue: String

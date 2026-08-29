@@ -44,6 +44,7 @@ struct BaiduAuthSecurityContractTests {
       "InkNotes/Networking/BaiduBackupUploadCoordinator.swift",
       "InkNotes/Networking/BaiduHTTPTransport.swift",
       "InkNotes/Networking/BaiduNetdiskBackupUploader.swift",
+      "InkNotes/Persistence/BaiduUploadReconciliationRepository.swift",
     ])
 
     for inputURL in try productionSwiftURLs(repositoryRoot: rootURL) {

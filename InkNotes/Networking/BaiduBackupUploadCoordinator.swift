@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 enum BaiduBackupUploadCoordinatorPhase: Equatable, Sendable {
@@ -24,6 +25,7 @@ struct BaiduBackupUploadCoordinatorSnapshot: Equatable, Sendable {
 
 struct BaiduBackupUploadAttemptReceipt: Equatable, Sendable {
   let backupID: UUID
+  let archiveSHA256: String
   let requestedPath: String
   let localByteCount: UInt64
   let localMD5: String
@@ -37,6 +39,7 @@ enum BaiduBackupUploadUnknownReason: Equatable, Sendable {
 
 enum BaiduBackupUploadCoordinatorFailure: Equatable, Sendable {
   case invalidBackup(BackupArchiveError)
+  case reconciliation(BaiduUploadReconciliationRepositoryError)
   case upload(BaiduNetdiskUploadError)
   case unexpected
 }
@@ -44,6 +47,7 @@ enum BaiduBackupUploadCoordinatorFailure: Equatable, Sendable {
 enum BaiduBackupUploadRejection: Equatable, Sendable {
   case alreadyRunning(operationID: UUID)
   case remoteVerificationRequired(backupID: UUID)
+  case reconciliationIdentityConflict(backupID: UUID)
   case alreadyCompletedThisSession(backupID: UUID)
 }
 
@@ -60,6 +64,10 @@ enum BaiduBackupUploadTerminalOutcome: Equatable, Sendable {
 }
 
 actor BaiduBackupUploadCoordinator {
+  private enum CheckpointError: Error {
+    case invalidProgress
+  }
+
   private enum WorkerResult: Sendable {
     case success(BaiduBackupUploadOutcome)
     case cancelled
@@ -71,20 +79,30 @@ actor BaiduBackupUploadCoordinator {
     let operationID: UUID
     let backupID: UUID
     let receipt: BaiduBackupUploadAttemptReceipt
+    let record: BaiduUploadReconciliationRecord
+    let archiveChunkCount: Int
     var phase: BaiduBackupUploadCoordinatorPhase
     var cancellationSource: BaiduBackupUploadCancellationSource?
-    let worker: Task<WorkerResult, Never>
+    var dispatchedPartIndices: Set<Int>
+    var ownsRecord: Bool
+    var worker: Task<WorkerResult, Never>?
   }
 
   private let uploader: any BaiduBackupUploading
+  private let reconciliationStore: any BaiduUploadReconciliationStoring
   private var active: ActiveUpload?
-  private var backupsAwaitingRemoteVerification = Set<UUID>()
-  private var completedBackups = Set<UUID>()
+  private var backupsAwaitingRemoteVerification: [UUID: BaiduBackupUploadAttemptReceipt] = [:]
+  private var completedBackups: [UUID: BaiduBackupUploadAttemptReceipt] = [:]
   private var snapshotContinuations:
     [UUID: AsyncStream<BaiduBackupUploadCoordinatorSnapshot>.Continuation] = [:]
 
-  init(uploader: any BaiduBackupUploading = BaiduNetdiskBackupUploader()) {
+  init(
+    uploader: any BaiduBackupUploading = BaiduNetdiskBackupUploader(),
+    reconciliationStore: any BaiduUploadReconciliationStoring =
+      BaiduUploadReconciliationRepository()
+  ) {
     self.uploader = uploader
+    self.reconciliationStore = reconciliationStore
   }
 
   func upload(
@@ -104,6 +122,7 @@ actor BaiduBackupUploadCoordinator {
       let validated = try BackupArchiveCodec.decode(archive)
       receipt = BaiduBackupUploadAttemptReceipt(
         backupID: validated.backupID,
+        archiveSHA256: Self.sha256Hex(archive),
         requestedPath: applicationDirectory.backupPath(backupID: validated.backupID),
         localByteCount: UInt64(archive.count),
         localMD5: BaiduNetdiskBackupUploader.md5Hex(archive)
@@ -117,14 +136,131 @@ actor BaiduBackupUploadCoordinator {
     if Task.isCancelled {
       return .cancelled(.caller)
     }
-    if backupsAwaitingRemoteVerification.contains(receipt.backupID) {
-      return .rejected(.remoteVerificationRequired(backupID: receipt.backupID))
+    if let pendingReceipt = backupsAwaitingRemoteVerification[receipt.backupID] {
+      return .rejected(
+        receiptHasSameUploadIdentity(pendingReceipt, receipt)
+          ? .remoteVerificationRequired(backupID: receipt.backupID)
+          : .reconciliationIdentityConflict(backupID: receipt.backupID)
+      )
     }
-    if completedBackups.contains(receipt.backupID) {
-      return .rejected(.alreadyCompletedThisSession(backupID: receipt.backupID))
+    if let completedReceipt = completedBackups[receipt.backupID] {
+      return .rejected(
+        receiptHasSameUploadIdentity(completedReceipt, receipt)
+          ? .alreadyCompletedThisSession(backupID: receipt.backupID)
+          : .reconciliationIdentityConflict(backupID: receipt.backupID)
+      )
     }
 
     let operationID = UUID()
+    let record = BaiduUploadReconciliationRecord(
+      attemptID: operationID,
+      backupID: receipt.backupID,
+      archiveSHA256: receipt.archiveSHA256,
+      localMD5: receipt.localMD5,
+      localByteCount: receipt.localByteCount,
+      requestedPath: receipt.requestedPath
+    )
+
+    active = ActiveUpload(
+      operationID: operationID,
+      backupID: receipt.backupID,
+      receipt: receipt,
+      record: record,
+      archiveChunkCount: (archive.count + BaiduNetdiskBackupUploader.chunkByteCount - 1)
+        / BaiduNetdiskBackupUploader.chunkByteCount,
+      phase: .preparing,
+      cancellationSource: nil,
+      dispatchedPartIndices: [],
+      ownsRecord: false,
+      worker: nil
+    )
+    publishCurrentSnapshot()
+
+    return await withTaskCancellationHandler {
+      await admitAndRun(
+        archive: archive,
+        accessToken: accessToken,
+        applicationDirectory: applicationDirectory,
+        operationID: operationID
+      )
+    } onCancel: { [weak self] in
+      Task { [weak self] in
+        await self?.requestCancellation(
+          operationID: operationID,
+          source: .caller
+        )
+      }
+    }
+
+  }
+
+  private func admitAndRun(
+    archive: Data,
+    accessToken: BaiduAccessToken,
+    applicationDirectory: BaiduNetdiskAppDirectory,
+    operationID: UUID
+  ) async -> BaiduBackupUploadTerminalOutcome {
+    if Task.isCancelled {
+      _ = requestCancellation(operationID: operationID, source: .caller)
+    }
+    guard let reservation = active, reservation.operationID == operationID else {
+      return .failed(.unexpected)
+    }
+    if let cancellationSource = reservation.cancellationSource {
+      return finishReservation(
+        operationID: operationID,
+        terminal: .cancelled(cancellationSource)
+      )
+    }
+
+    let admission: BaiduUploadReconciliationAdmission
+    do {
+      admission = try await reconciliationStore.admit(reservation.record)
+    } catch let error as BaiduUploadReconciliationRepositoryError {
+      return finishReservation(
+        operationID: operationID,
+        terminal: .failed(.reconciliation(error))
+      )
+    } catch {
+      return finishReservation(
+        operationID: operationID,
+        terminal: .failed(.reconciliation(.persistenceFailure))
+      )
+    }
+
+    guard var admitted = active, admitted.operationID == operationID else {
+      return .failed(.unexpected)
+    }
+    switch admission {
+    case .existing:
+      backupsAwaitingRemoteVerification[admitted.backupID] = admitted.receipt
+      return finishReservation(
+        operationID: operationID,
+        terminal: .rejected(.remoteVerificationRequired(backupID: admitted.backupID))
+      )
+    case .identityConflict:
+      return finishReservation(
+        operationID: operationID,
+        terminal: .rejected(.reconciliationIdentityConflict(backupID: admitted.backupID))
+      )
+    case .created:
+      admitted.ownsRecord = true
+      active = admitted
+    }
+
+    if Task.isCancelled {
+      _ = requestCancellation(operationID: operationID, source: .caller)
+    }
+    guard let ready = active, ready.operationID == operationID else {
+      return .failed(.unexpected)
+    }
+    if let cancellationSource = ready.cancellationSource {
+      return await finishBeforeNetwork(
+        operationID: operationID,
+        terminal: .cancelled(cancellationSource)
+      )
+    }
+
     let uploader = self.uploader
     let worker: Task<WorkerResult, Never> = Task.detached { [self] in
       do {
@@ -147,28 +283,15 @@ actor BaiduBackupUploadCoordinator {
       }
     }
 
-    active = ActiveUpload(
-      operationID: operationID,
-      backupID: receipt.backupID,
-      receipt: receipt,
-      phase: .preparing,
-      cancellationSource: nil,
-      worker: worker
-    )
-    publishCurrentSnapshot()
-
-    let result = await withTaskCancellationHandler {
-      await worker.value
-    } onCancel: { [weak self] in
-      Task.detached { [weak self] in
-        await self?.requestCancellation(
-          operationID: operationID,
-          source: .caller
-        )
-      }
+    guard var started = active, started.operationID == operationID else {
+      worker.cancel()
+      return .failed(.unexpected)
     }
+    started.worker = worker
+    active = started
 
-    return finish(result, operationID: operationID)
+    let result = await worker.value
+    return await finish(result, operationID: operationID)
   }
 
   func snapshot() -> BaiduBackupUploadCoordinatorSnapshot {
@@ -240,10 +363,27 @@ actor BaiduBackupUploadCoordinator {
     guard active.cancellationSource == nil else {
       throw CancellationError()
     }
+    if case .uploadPartDispatchPermitted(let partIndex, _, let total) = progress {
+      guard (0..<active.archiveChunkCount).contains(partIndex),
+        total <= active.archiveChunkCount,
+        !active.dispatchedPartIndices.contains(partIndex)
+      else {
+        throw CheckpointError.invalidProgress
+      }
+    }
+    if case .createDispatchPermitted = progress,
+      case .uploadPartDispatchPermitted(_, _, let total) = active.phase,
+      active.dispatchedPartIndices.count != total
+    {
+      throw CheckpointError.invalidProgress
+    }
     guard
       let nextPhase = nextPhase(after: active.phase, for: progress)
     else {
-      throw CancellationError()
+      throw CheckpointError.invalidProgress
+    }
+    if case .uploadPartDispatchPermitted(let partIndex, _, _) = progress {
+      active.dispatchedPartIndices.insert(partIndex)
     }
     active.phase = nextPhase
     self.active = active
@@ -264,7 +404,7 @@ actor BaiduBackupUploadCoordinator {
     case (
       .precreateUploadRequiredConfirmed,
       .uploadPartDispatchPermitted(let partIndex, let ordinal, let total)
-    ) where partIndex >= 0 && total > 0 && (1...total).contains(ordinal):
+    ) where partIndex >= 0 && total > 0 && ordinal == 1:
       return .uploadPartDispatchPermitted(
         partIndex: partIndex,
         ordinal: ordinal,
@@ -283,7 +423,10 @@ actor BaiduBackupUploadCoordinator {
         total: total
       )
 
-    case (.uploadPartDispatchPermitted, .createDispatchPermitted):
+    case (
+      .uploadPartDispatchPermitted(_, let previousOrdinal, let previousTotal),
+      .createDispatchPermitted
+    ) where previousOrdinal == previousTotal:
       return .createDispatchPermitted
 
     default:
@@ -300,15 +443,65 @@ actor BaiduBackupUploadCoordinator {
       active.cancellationSource = source
     }
     self.active = active
-    active.worker.cancel()
+    active.worker?.cancel()
     publishCurrentSnapshot()
     return true
+  }
+
+  private func finishReservation(
+    operationID: UUID,
+    terminal: BaiduBackupUploadTerminalOutcome
+  ) -> BaiduBackupUploadTerminalOutcome {
+    guard let active, active.operationID == operationID else {
+      return .failed(.unexpected)
+    }
+    self.active = nil
+    publishCurrentSnapshot()
+    return terminal
+  }
+
+  private func finishBeforeNetwork(
+    operationID: UUID,
+    terminal: BaiduBackupUploadTerminalOutcome
+  ) async -> BaiduBackupUploadTerminalOutcome {
+    guard let active, active.operationID == operationID else {
+      return .failed(.unexpected)
+    }
+    guard active.phase == .preparing, active.ownsRecord else {
+      return finishReservation(operationID: operationID, terminal: .failed(.unexpected))
+    }
+
+    do {
+      guard try await reconciliationStore.removeOwned(active.record) else {
+        return finishReservation(
+          operationID: operationID,
+          terminal: .failed(.reconciliation(.persistenceFailure))
+        )
+      }
+    } catch let error as BaiduUploadReconciliationRepositoryError {
+      return finishReservation(
+        operationID: operationID,
+        terminal: .failed(.reconciliation(error))
+      )
+    } catch {
+      return finishReservation(
+        operationID: operationID,
+        terminal: .failed(.reconciliation(.persistenceFailure))
+      )
+    }
+
+    guard let current = self.active, current.operationID == operationID,
+      current.phase == .preparing
+    else {
+      return .failed(.unexpected)
+    }
+    return finishReservation(operationID: operationID, terminal: terminal)
   }
 
   private func finish(
     _ result: WorkerResult,
     operationID: UUID
-  ) -> BaiduBackupUploadTerminalOutcome {
+  ) async -> BaiduBackupUploadTerminalOutcome {
     guard let active, active.operationID == operationID else {
       return .failed(.unexpected)
     }
@@ -316,68 +509,75 @@ actor BaiduBackupUploadCoordinator {
     let terminal: BaiduBackupUploadTerminalOutcome
     switch result {
     case .success(.uploaded(let remoteBackup)):
-      if remoteBackupMatchesReceipt(remoteBackup, receipt: active.receipt) {
-        completedBackups.insert(active.backupID)
+      if active.phase == .createDispatchPermitted,
+        remoteBackupMatchesReceipt(remoteBackup, receipt: active.receipt)
+      {
+        completedBackups[active.backupID] = active.receipt
         terminal = .verifiedRemote(remoteBackup)
       } else {
-        backupsAwaitingRemoteVerification.insert(active.backupID)
+        backupsAwaitingRemoteVerification[active.backupID] = active.receipt
         terminal = .outcomeUnknown(
           receipt: active.receipt,
           reason: .unverifiedResponse
         )
       }
 
-    case .success(.rapidUpload):
-      backupsAwaitingRemoteVerification.insert(active.backupID)
-      terminal = .needsRemoteVerification(
-        BaiduRapidUploadReceipt(
-          backupID: active.receipt.backupID,
-          requestedPath: active.receipt.requestedPath,
-          localByteCount: active.receipt.localByteCount,
-          localMD5: active.receipt.localMD5
+    case .success(.rapidUpload(let rapidReceipt)):
+      if active.phase == .precreateDispatchPermitted,
+        rapidReceiptMatchesReceipt(rapidReceipt, receipt: active.receipt)
+      {
+        backupsAwaitingRemoteVerification[active.backupID] = active.receipt
+        terminal = .needsRemoteVerification(rapidReceipt)
+      } else {
+        backupsAwaitingRemoteVerification[active.backupID] = active.receipt
+        terminal = .outcomeUnknown(
+          receipt: active.receipt,
+          reason: .unverifiedResponse
         )
-      )
+      }
 
     case .cancelled:
       let source = active.cancellationSource ?? .upstream
-      if active.phase == .createDispatchPermitted {
-        backupsAwaitingRemoteVerification.insert(active.backupID)
-        terminal = .outcomeUnknown(
-          receipt: active.receipt,
-          reason: .cancelled(source)
+      if active.phase == .preparing {
+        return await finishBeforeNetwork(
+          operationID: operationID,
+          terminal: .cancelled(source)
         )
-      } else {
-        terminal = .cancelled(source)
       }
+      backupsAwaitingRemoteVerification[active.backupID] = active.receipt
+      terminal = .outcomeUnknown(
+        receipt: active.receipt,
+        reason: .cancelled(source)
+      )
 
     case .uploadFailure(let error):
-      if active.phase == .createDispatchPermitted,
-        !isDefiniteCreateRejection(error)
-      {
-        backupsAwaitingRemoteVerification.insert(active.backupID)
-        terminal = .outcomeUnknown(
-          receipt: active.receipt,
-          reason: unknownReason(for: error)
+      if active.phase == .preparing {
+        return await finishBeforeNetwork(
+          operationID: operationID,
+          terminal: .failed(.upload(error))
         )
-      } else {
-        terminal = .failed(.upload(error))
       }
+      backupsAwaitingRemoteVerification[active.backupID] = active.receipt
+      terminal = .outcomeUnknown(
+        receipt: active.receipt,
+        reason: unknownReason(for: error)
+      )
 
     case .unexpectedFailure:
-      if active.phase == .createDispatchPermitted {
-        backupsAwaitingRemoteVerification.insert(active.backupID)
-        terminal = .outcomeUnknown(
-          receipt: active.receipt,
-          reason: .unverifiedResponse
+      if active.phase == .preparing {
+        return await finishBeforeNetwork(
+          operationID: operationID,
+          terminal: .failed(.unexpected)
         )
-      } else {
-        terminal = .failed(.unexpected)
       }
+      backupsAwaitingRemoteVerification[active.backupID] = active.receipt
+      terminal = .outcomeUnknown(
+        receipt: active.receipt,
+        reason: .unverifiedResponse
+      )
     }
 
-    self.active = nil
-    publishCurrentSnapshot()
-    return terminal
+    return finishReservation(operationID: operationID, terminal: terminal)
   }
 
   private func remoteBackupMatchesReceipt(
@@ -390,25 +590,43 @@ actor BaiduBackupUploadCoordinator {
       && remoteBackup.md5 == receipt.localMD5
   }
 
-  private func isDefiniteCreateRejection(_ error: BaiduNetdiskUploadError) -> Bool {
-    if case .api(stage: .create, code: _) = error {
-      return true
-    }
-    return false
+  private func receiptHasSameUploadIdentity(
+    _ lhs: BaiduBackupUploadAttemptReceipt,
+    _ rhs: BaiduBackupUploadAttemptReceipt
+  ) -> Bool {
+    lhs.backupID == rhs.backupID
+      && lhs.archiveSHA256 == rhs.archiveSHA256
+      && lhs.requestedPath == rhs.requestedPath
+      && lhs.localByteCount == rhs.localByteCount
+      && lhs.localMD5 == rhs.localMD5
+  }
+
+  private func rapidReceiptMatchesReceipt(
+    _ rapidReceipt: BaiduRapidUploadReceipt,
+    receipt: BaiduBackupUploadAttemptReceipt
+  ) -> Bool {
+    rapidReceipt.backupID == receipt.backupID
+      && rapidReceipt.requestedPath == receipt.requestedPath
+      && rapidReceipt.localByteCount == receipt.localByteCount
+      && rapidReceipt.localMD5 == receipt.localMD5
   }
 
   private func unknownReason(
     for error: BaiduNetdiskUploadError
   ) -> BaiduBackupUploadUnknownReason {
     switch error {
-    case .transport(.create),
-      .invalidHTTPResponse(.create),
-      .httpStatus(stage: .create, statusCode: _),
-      .responseTooLarge(stage: .create, maximum: _):
+    case .transport,
+      .invalidHTTPResponse,
+      .httpStatus,
+      .responseTooLarge:
       return .responseUnavailable
     default:
       return .unverifiedResponse
     }
+  }
+
+  private static func sha256Hex(_ data: Data) -> String {
+    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
   }
 
   private func publishCurrentSnapshot() {

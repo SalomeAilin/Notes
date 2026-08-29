@@ -23,6 +23,13 @@ struct CompatibilityContractTests {
     #expect(DrawingRepository.restoreTransactionsDirectoryName == "RestoreTransactions")
     #expect(DrawingRepository.restoreTransactionFileExtension == "json")
     #expect(DrawingRepository.defaultRootURL()?.lastPathComponent == "InkNotes")
+    #expect(BaiduUploadReconciliationRepository.persistedDirectoryName == "InkNotes")
+    #expect(
+      BaiduUploadReconciliationRepository.reconciliationDirectoryName
+        == "UploadReconciliation"
+    )
+    #expect(BaiduUploadReconciliationRepository.recordFileExtension == "json")
+    #expect(BaiduUploadReconciliationRepository.defaultRootURL()?.lastPathComponent == "InkNotes")
 
     #expect(BackupArchiveCodec.uniformTypeIdentifier == "com.salomeailin.notes.backup")
     #expect(BackupArchiveCodec.fileExtension == "notesbackup")

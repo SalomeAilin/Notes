@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 
@@ -13,7 +14,7 @@ struct BaiduBackupUploadCoordinatorTests {
     let uploader = ScriptedCoordinatorUploader(handlers: [
       suspendingBeforeCreateHandler()
     ])
-    let coordinator = BaiduBackupUploadCoordinator(uploader: uploader)
+    let coordinator = makeCoordinator(uploader: uploader)
 
     let task = Task {
       while !Task.isCancelled {
@@ -41,10 +42,10 @@ struct BaiduBackupUploadCoordinatorTests {
     let receipt = makeReceipt(archive: archive, backupID: backupID, directory: directory)
     let remote = makeRemote(receipt: receipt)
     let uploader = ScriptedCoordinatorUploader(handlers: [
-      suspendingBeforeCreateHandler(),
+      suspendingBeforePrecreateHandler(),
       verifiedHandler(remote: remote),
     ])
-    let coordinator = BaiduBackupUploadCoordinator(uploader: uploader)
+    let coordinator = makeCoordinator(uploader: uploader)
 
     let first = Task {
       await coordinator.upload(
@@ -53,7 +54,7 @@ struct BaiduBackupUploadCoordinatorTests {
         applicationDirectory: directory
       )
     }
-    try await waitForPhase(.precreateUploadRequiredConfirmed, coordinator: coordinator)
+    try await waitForInvocationCount(1, uploader: uploader)
     let firstSnapshot = await coordinator.snapshot()
 
     let concurrent = await coordinator.upload(
@@ -82,8 +83,487 @@ struct BaiduBackupUploadCoordinatorTests {
     #expect(await uploader.invocationCount() == 2)
   }
 
-  @Test("Caller and background cancellation sources are preserved before create")
-  func cancellationSourcesBeforeCreate() async throws {
+  @Test("The admission reservation is single-flight and cancellation removes an unsent record")
+  func admissionReservationIsSingleFlightAndCancellationCleansRecord() async throws {
+    let backupID = UUID()
+    let archive = try makeArchive(backupID: backupID)
+    let directory = try applicationDirectory()
+    let token = try accessToken()
+    let gate = CoordinatorTestGate()
+    let store = CoordinatorGatedReconciliationStore(gate: gate)
+    let uploader = ScriptedCoordinatorUploader(handlers: [])
+    let coordinator = BaiduBackupUploadCoordinator(
+      uploader: uploader,
+      reconciliationStore: store
+    )
+
+    let task = Task {
+      await coordinator.upload(
+        archive: archive,
+        accessToken: token,
+        applicationDirectory: directory
+      )
+    }
+    try await waitForPhase(.preparing, coordinator: coordinator)
+    let operationID = try #require(await coordinator.snapshot().operationID)
+
+    #expect(
+      await coordinator.upload(
+        archive: archive,
+        accessToken: token,
+        applicationDirectory: directory
+      ) == .rejected(.alreadyRunning(operationID: operationID))
+    )
+    #expect(await uploader.invocationCount() == 0)
+    #expect(await coordinator.cancel(operationID: operationID))
+
+    await gate.open()
+
+    #expect(await task.value == .cancelled(.explicit))
+    #expect(await store.recordCount() == 0)
+    #expect(await uploader.invocationCount() == 0)
+    #expect(await coordinator.snapshot().phase == .idle)
+  }
+
+  @Test("A reconciliation admission failure never starts network work")
+  func admissionFailureDoesNotStartUploader() async throws {
+    let archive = try makeArchive(backupID: UUID())
+    let uploader = ScriptedCoordinatorUploader(handlers: [])
+    let coordinator = BaiduBackupUploadCoordinator(
+      uploader: uploader,
+      reconciliationStore: CoordinatorFailingReconciliationStore(
+        error: .invalidStoreLayout
+      )
+    )
+
+    #expect(
+      await coordinator.upload(
+        archive: archive,
+        accessToken: try accessToken(),
+        applicationDirectory: try applicationDirectory()
+      ) == .failed(.reconciliation(.invalidStoreLayout))
+    )
+    #expect(await uploader.invocationCount() == 0)
+    #expect(await coordinator.snapshot().phase == .idle)
+  }
+
+  @Test("A failure before precreate removes the owned record and permits a safe retry")
+  func failureBeforePrecreateCanRetry() async throws {
+    let backupID = UUID()
+    let archive = try makeArchive(backupID: backupID)
+    let directory = try applicationDirectory()
+    let receipt = makeReceipt(archive: archive, backupID: backupID, directory: directory)
+    let remote = makeRemote(receipt: receipt)
+    let error = BaiduNetdiskUploadError.transport(.precreate)
+    let uploader = ScriptedCoordinatorUploader(handlers: [
+      failureBeforePrecreateHandler(error: error),
+      verifiedHandler(remote: remote),
+    ])
+    let store = CoordinatorInMemoryReconciliationStore()
+    let coordinator = BaiduBackupUploadCoordinator(
+      uploader: uploader,
+      reconciliationStore: store
+    )
+
+    #expect(
+      await coordinator.upload(
+        archive: archive,
+        accessToken: try accessToken(),
+        applicationDirectory: directory
+      ) == .failed(.upload(error))
+    )
+    #expect(await store.recordCount() == 0)
+    #expect(
+      await coordinator.upload(
+        archive: archive,
+        accessToken: try accessToken(),
+        applicationDirectory: directory
+      ) == .verifiedRemote(remote)
+    )
+    #expect(await uploader.invocationCount() == 2)
+  }
+
+  @Test("A precreate uncertainty blocks the same upload after a repository restart")
+  func precreateUncertaintyPersistsAcrossRestart() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString,
+      isDirectory: true
+    )
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let backupID = UUID()
+    let archive = try makeArchive(backupID: backupID)
+    let directory = try applicationDirectory()
+    let receipt = makeReceipt(archive: archive, backupID: backupID, directory: directory)
+    let firstUploader = ScriptedCoordinatorUploader(handlers: [
+      failureAfterPrecreateHandler(error: .transport(.precreate))
+    ])
+    let firstCoordinator = BaiduBackupUploadCoordinator(
+      uploader: firstUploader,
+      reconciliationStore: BaiduUploadReconciliationRepository(rootURL: rootURL)
+    )
+
+    #expect(
+      await firstCoordinator.upload(
+        archive: archive,
+        accessToken: try accessToken(),
+        applicationDirectory: directory
+      ) == .outcomeUnknown(receipt: receipt, reason: .responseUnavailable)
+    )
+
+    let restartedUploader = ScriptedCoordinatorUploader(handlers: [])
+    let restartedCoordinator = BaiduBackupUploadCoordinator(
+      uploader: restartedUploader,
+      reconciliationStore: BaiduUploadReconciliationRepository(rootURL: rootURL)
+    )
+    #expect(
+      await restartedCoordinator.upload(
+        archive: archive,
+        accessToken: try BaiduAccessToken("different-account-token"),
+        applicationDirectory: directory
+      ) == .rejected(.remoteVerificationRequired(backupID: backupID))
+    )
+    #expect(await firstUploader.invocationCount() == 1)
+    #expect(await restartedUploader.invocationCount() == 0)
+  }
+
+  @Test("A changed archive for the same backup ID fails closed before network")
+  func changedArchiveIdentityIsRejectedAfterRestart() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString,
+      isDirectory: true
+    )
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let backupID = UUID()
+    let originalArchive = try makeArchive(backupID: backupID)
+    let changedArchive = try makeArchive(backupID: backupID, sourceBuild: "3")
+    let directory = try applicationDirectory()
+    let firstUploader = ScriptedCoordinatorUploader(handlers: [
+      failureAfterPrecreateHandler(error: .transport(.precreate))
+    ])
+    let firstCoordinator = BaiduBackupUploadCoordinator(
+      uploader: firstUploader,
+      reconciliationStore: BaiduUploadReconciliationRepository(rootURL: rootURL)
+    )
+    _ = await firstCoordinator.upload(
+      archive: originalArchive,
+      accessToken: try accessToken(),
+      applicationDirectory: directory
+    )
+
+    let restartedUploader = ScriptedCoordinatorUploader(handlers: [])
+    let restartedCoordinator = BaiduBackupUploadCoordinator(
+      uploader: restartedUploader,
+      reconciliationStore: BaiduUploadReconciliationRepository(rootURL: rootURL)
+    )
+    #expect(
+      await restartedCoordinator.upload(
+        archive: changedArchive,
+        accessToken: try accessToken(),
+        applicationDirectory: directory
+      ) == .rejected(.reconciliationIdentityConflict(backupID: backupID))
+    )
+    #expect(await restartedUploader.invocationCount() == 0)
+  }
+
+  @Test("A changed archive identity is also distinguished within the current session")
+  func changedArchiveIdentityIsRejectedInSession() async throws {
+    let backupID = UUID()
+    let originalArchive = try makeArchive(backupID: backupID)
+    let changedArchive = try makeArchive(backupID: backupID, sourceBuild: "3")
+    let directory = try applicationDirectory()
+
+    let pendingUploader = ScriptedCoordinatorUploader(handlers: [
+      failureAfterPrecreateHandler(error: .transport(.precreate))
+    ])
+    let pendingCoordinator = makeCoordinator(uploader: pendingUploader)
+    _ = await pendingCoordinator.upload(
+      archive: originalArchive,
+      accessToken: try accessToken(),
+      applicationDirectory: directory
+    )
+    #expect(
+      await pendingCoordinator.upload(
+        archive: changedArchive,
+        accessToken: try accessToken(),
+        applicationDirectory: directory
+      ) == .rejected(.reconciliationIdentityConflict(backupID: backupID))
+    )
+    #expect(await pendingUploader.invocationCount() == 1)
+
+    let originalReceipt = makeReceipt(
+      archive: originalArchive,
+      backupID: backupID,
+      directory: directory
+    )
+    let completedUploader = ScriptedCoordinatorUploader(handlers: [
+      verifiedHandler(remote: makeRemote(receipt: originalReceipt))
+    ])
+    let completedCoordinator = makeCoordinator(uploader: completedUploader)
+    _ = await completedCoordinator.upload(
+      archive: originalArchive,
+      accessToken: try accessToken(),
+      applicationDirectory: directory
+    )
+    #expect(
+      await completedCoordinator.upload(
+        archive: changedArchive,
+        accessToken: try accessToken(),
+        applicationDirectory: directory
+      ) == .rejected(.reconciliationIdentityConflict(backupID: backupID))
+    )
+    #expect(await completedUploader.invocationCount() == 1)
+  }
+
+  @Test("A cleanup failure preserves the barrier and never encourages a blind retry")
+  func cleanupFailureKeepsBarrier() async throws {
+    let backupID = UUID()
+    let archive = try makeArchive(backupID: backupID)
+    let directory = try applicationDirectory()
+    let error = BaiduNetdiskUploadError.transport(.precreate)
+    let uploader = ScriptedCoordinatorUploader(handlers: [
+      failureBeforePrecreateHandler(error: error)
+    ])
+    let coordinator = BaiduBackupUploadCoordinator(
+      uploader: uploader,
+      reconciliationStore: CoordinatorCleanupFailingReconciliationStore()
+    )
+
+    #expect(
+      await coordinator.upload(
+        archive: archive,
+        accessToken: try accessToken(),
+        applicationDirectory: directory
+      ) == .failed(.reconciliation(.persistenceFailure))
+    )
+    #expect(
+      await coordinator.upload(
+        archive: archive,
+        accessToken: try accessToken(),
+        applicationDirectory: directory
+      ) == .rejected(.remoteVerificationRequired(backupID: backupID))
+    )
+    #expect(await uploader.invocationCount() == 1)
+  }
+
+  @Test("A verified upload remains an installation-wide at-most-once barrier after restart")
+  func verifiedUploadBarrierPersistsAcrossRestart() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString,
+      isDirectory: true
+    )
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let backupID = UUID()
+    let archive = try makeArchive(backupID: backupID)
+    let directory = try applicationDirectory()
+    let receipt = makeReceipt(archive: archive, backupID: backupID, directory: directory)
+    let remote = makeRemote(receipt: receipt)
+    let firstUploader = ScriptedCoordinatorUploader(handlers: [
+      verifiedHandler(remote: remote)
+    ])
+    let firstCoordinator = BaiduBackupUploadCoordinator(
+      uploader: firstUploader,
+      reconciliationStore: BaiduUploadReconciliationRepository(rootURL: rootURL)
+    )
+
+    #expect(
+      await firstCoordinator.upload(
+        archive: archive,
+        accessToken: try accessToken(),
+        applicationDirectory: directory
+      ) == .verifiedRemote(remote)
+    )
+
+    let restartedUploader = ScriptedCoordinatorUploader(handlers: [])
+    let restartedCoordinator = BaiduBackupUploadCoordinator(
+      uploader: restartedUploader,
+      reconciliationStore: BaiduUploadReconciliationRepository(rootURL: rootURL)
+    )
+    #expect(
+      await restartedCoordinator.upload(
+        archive: archive,
+        accessToken: try accessToken(),
+        applicationDirectory: directory
+      ) == .rejected(.remoteVerificationRequired(backupID: backupID))
+    )
+    #expect(await restartedUploader.invocationCount() == 0)
+  }
+
+  @Test("Invalid part progress cannot skip the first or final part")
+  func invalidPartProgressFailsClosed() async throws {
+    let twoChunkDrawingByteCount = BaiduNetdiskBackupUploader.chunkByteCount
+    let invalidCases: [(drawingByteCount: Int, handler: ScriptedCoordinatorUploader.Handler)] = [
+      (
+        twoChunkDrawingByteCount,
+        { _, _, _, progress in
+          try await progress(.precreateDispatchPermitted)
+          try await progress(.precreateUploadRequiredConfirmed)
+          try await progress(.uploadPartDispatchPermitted(partIndex: 1, ordinal: 2, total: 2))
+          throw CoordinatorTestError.unexpectedUpload
+        }
+      ),
+      (
+        twoChunkDrawingByteCount,
+        { _, _, _, progress in
+          try await progress(.precreateDispatchPermitted)
+          try await progress(.precreateUploadRequiredConfirmed)
+          try await progress(.uploadPartDispatchPermitted(partIndex: 0, ordinal: 1, total: 2))
+          try await progress(.createDispatchPermitted)
+          throw CoordinatorTestError.unexpectedUpload
+        }
+      ),
+      (
+        0,
+        { _, _, _, progress in
+          try await progress(.precreateDispatchPermitted)
+          try await progress(.precreateUploadRequiredConfirmed)
+          try await progress(.uploadPartDispatchPermitted(partIndex: 1, ordinal: 1, total: 1))
+          throw CoordinatorTestError.unexpectedUpload
+        }
+      ),
+      (
+        0,
+        { _, _, _, progress in
+          try await progress(.precreateDispatchPermitted)
+          try await progress(.precreateUploadRequiredConfirmed)
+          try await progress(.uploadPartDispatchPermitted(partIndex: 0, ordinal: 1, total: 2))
+          throw CoordinatorTestError.unexpectedUpload
+        }
+      ),
+    ]
+
+    for invalidCase in invalidCases {
+      let backupID = UUID()
+      let archive = try makeArchive(
+        backupID: backupID,
+        drawingByteCount: invalidCase.drawingByteCount
+      )
+      let directory = try applicationDirectory()
+      let receipt = makeReceipt(archive: archive, backupID: backupID, directory: directory)
+      let uploader = ScriptedCoordinatorUploader(handlers: [invalidCase.handler])
+      let coordinator = makeCoordinator(uploader: uploader)
+
+      #expect(
+        await coordinator.upload(
+          archive: archive,
+          accessToken: try accessToken(),
+          applicationDirectory: directory
+        ) == .outcomeUnknown(receipt: receipt, reason: .unverifiedResponse)
+      )
+      #expect(
+        await coordinator.upload(
+          archive: archive,
+          accessToken: try accessToken(),
+          applicationDirectory: directory
+        ) == .rejected(.remoteVerificationRequired(backupID: backupID))
+      )
+      #expect(await uploader.invocationCount() == 1)
+    }
+  }
+
+  @Test("A duplicate part index cannot advance a two-chunk upload")
+  func duplicatePartProgressFailsClosed() async throws {
+    let backupID = UUID()
+    let archive = try makeArchive(
+      backupID: backupID,
+      drawingByteCount: BaiduNetdiskBackupUploader.chunkByteCount
+    )
+    #expect(archive.count > BaiduNetdiskBackupUploader.chunkByteCount)
+    let directory = try applicationDirectory()
+    let receipt = makeReceipt(archive: archive, backupID: backupID, directory: directory)
+    let uploader = ScriptedCoordinatorUploader(handlers: [
+      { _, _, _, progress in
+        try await progress(.precreateDispatchPermitted)
+        try await progress(.precreateUploadRequiredConfirmed)
+        try await progress(.uploadPartDispatchPermitted(partIndex: 0, ordinal: 1, total: 2))
+        try await progress(.uploadPartDispatchPermitted(partIndex: 0, ordinal: 2, total: 2))
+        throw CoordinatorTestError.unexpectedUpload
+      }
+    ])
+    let coordinator = makeCoordinator(uploader: uploader)
+
+    #expect(
+      await coordinator.upload(
+        archive: archive,
+        accessToken: try accessToken(),
+        applicationDirectory: directory
+      ) == .outcomeUnknown(receipt: receipt, reason: .unverifiedResponse)
+    )
+    #expect(
+      await coordinator.upload(
+        archive: archive,
+        accessToken: try accessToken(),
+        applicationDirectory: directory
+      ) == .rejected(.remoteVerificationRequired(backupID: backupID))
+    )
+    #expect(await uploader.invocationCount() == 1)
+  }
+
+  @Test("A server-requested subset may complete a multi-chunk archive")
+  func requestedPartSubsetCanComplete() async throws {
+    let backupID = UUID()
+    let archive = try makeArchive(
+      backupID: backupID,
+      drawingByteCount: BaiduNetdiskBackupUploader.chunkByteCount
+    )
+    #expect(archive.count > BaiduNetdiskBackupUploader.chunkByteCount)
+    let directory = try applicationDirectory()
+    let receipt = makeReceipt(archive: archive, backupID: backupID, directory: directory)
+    let remote = makeRemote(receipt: receipt)
+    let uploader = ScriptedCoordinatorUploader(handlers: [
+      { _, _, _, progress in
+        try await progress(.precreateDispatchPermitted)
+        try await progress(.precreateUploadRequiredConfirmed)
+        try await progress(.uploadPartDispatchPermitted(partIndex: 1, ordinal: 1, total: 1))
+        try await progress(.createDispatchPermitted)
+        return .uploaded(remote)
+      }
+    ])
+    let coordinator = makeCoordinator(uploader: uploader)
+
+    #expect(
+      await coordinator.upload(
+        archive: archive,
+        accessToken: try accessToken(),
+        applicationDirectory: directory
+      ) == .verifiedRemote(remote)
+    )
+    #expect(await uploader.invocationCount() == 1)
+  }
+
+  @Test("A success returned without dispatch checkpoints is never trusted")
+  func uncheckedSuccessRequiresVerification() async throws {
+    let backupID = UUID()
+    let archive = try makeArchive(backupID: backupID)
+    let directory = try applicationDirectory()
+    let receipt = makeReceipt(archive: archive, backupID: backupID, directory: directory)
+    let remote = makeRemote(receipt: receipt)
+    let uploader = ScriptedCoordinatorUploader(handlers: [
+      { _, _, _, _ in .uploaded(remote) }
+    ])
+    let coordinator = makeCoordinator(uploader: uploader)
+
+    #expect(
+      await coordinator.upload(
+        archive: archive,
+        accessToken: try accessToken(),
+        applicationDirectory: directory
+      ) == .outcomeUnknown(receipt: receipt, reason: .unverifiedResponse)
+    )
+    #expect(
+      await coordinator.upload(
+        archive: archive,
+        accessToken: try accessToken(),
+        applicationDirectory: directory
+      ) == .rejected(.remoteVerificationRequired(backupID: backupID))
+    )
+    #expect(await uploader.invocationCount() == 1)
+  }
+
+  @Test("Caller and background cancellation after precreate require remote verification")
+  func cancellationSourcesAfterPrecreateRequireVerification() async throws {
     for source in [
       BaiduBackupUploadCancellationSource.caller,
       .background,
@@ -92,10 +572,11 @@ struct BaiduBackupUploadCoordinatorTests {
       let archive = try makeArchive(backupID: backupID)
       let directory = try applicationDirectory()
       let token = try accessToken()
+      let receipt = makeReceipt(archive: archive, backupID: backupID, directory: directory)
       let uploader = ScriptedCoordinatorUploader(handlers: [
         suspendingBeforeCreateHandler()
       ])
-      let coordinator = BaiduBackupUploadCoordinator(uploader: uploader)
+      let coordinator = makeCoordinator(uploader: uploader)
       let task = Task {
         await coordinator.upload(
           archive: archive,
@@ -111,7 +592,17 @@ struct BaiduBackupUploadCoordinatorTests {
         _ = await coordinator.cancelForBackgroundTransition()
       }
 
-      #expect(await task.value == .cancelled(source))
+      #expect(
+        await task.value
+          == .outcomeUnknown(receipt: receipt, reason: .cancelled(source))
+      )
+      #expect(
+        await coordinator.upload(
+          archive: archive,
+          accessToken: token,
+          applicationDirectory: directory
+        ) == .rejected(.remoteVerificationRequired(backupID: backupID))
+      )
       #expect(await coordinator.snapshot().phase == .idle)
     }
   }
@@ -122,10 +613,11 @@ struct BaiduBackupUploadCoordinatorTests {
     let archive = try makeArchive(backupID: backupID)
     let directory = try applicationDirectory()
     let token = try accessToken()
+    let receipt = makeReceipt(archive: archive, backupID: backupID, directory: directory)
     let uploader = ScriptedCoordinatorUploader(handlers: [
       createCheckpointAfterCancellationHandler()
     ])
-    let coordinator = BaiduBackupUploadCoordinator(uploader: uploader)
+    let coordinator = makeCoordinator(uploader: uploader)
     let task = Task {
       await coordinator.upload(
         archive: archive,
@@ -140,7 +632,10 @@ struct BaiduBackupUploadCoordinatorTests {
 
     _ = await coordinator.cancelActiveUpload()
 
-    #expect(await task.value == .cancelled(.explicit))
+    #expect(
+      await task.value
+        == .outcomeUnknown(receipt: receipt, reason: .cancelled(.explicit))
+    )
     #expect(await coordinator.snapshot().phase == .idle)
   }
 
@@ -154,7 +649,7 @@ struct BaiduBackupUploadCoordinatorTests {
     let uploader = ScriptedCoordinatorUploader(handlers: [
       suspendingAfterCreateHandler()
     ])
-    let coordinator = BaiduBackupUploadCoordinator(uploader: uploader)
+    let coordinator = makeCoordinator(uploader: uploader)
     let task = Task {
       await coordinator.upload(
         archive: archive,
@@ -193,7 +688,7 @@ struct BaiduBackupUploadCoordinatorTests {
     let uploader = ScriptedCoordinatorUploader(handlers: [
       validatedSuccessAfterGateHandler(remote: remote, gate: gate)
     ])
-    let coordinator = BaiduBackupUploadCoordinator(uploader: uploader)
+    let coordinator = makeCoordinator(uploader: uploader)
     let task = Task {
       await coordinator.upload(
         archive: archive,
@@ -237,7 +732,7 @@ struct BaiduBackupUploadCoordinatorTests {
       let uploader = ScriptedCoordinatorUploader(handlers: [
         failureAfterCreateHandler(error: error)
       ])
-      let coordinator = BaiduBackupUploadCoordinator(uploader: uploader)
+      let coordinator = makeCoordinator(uploader: uploader)
 
       let outcome = await coordinator.upload(
         archive: archive,
@@ -258,30 +753,35 @@ struct BaiduBackupUploadCoordinatorTests {
     }
   }
 
-  @Test("An explicit create API rejection remains retryable")
-  func explicitCreateRejectionCanRetry() async throws {
+  @Test("An explicit create API rejection remains conservatively blocked")
+  func explicitCreateRejectionRequiresVerification() async throws {
     let backupID = UUID(uuidString: "C1000000-0000-0000-0000-000000000004")!
     let archive = try makeArchive(backupID: backupID)
     let directory = try applicationDirectory()
     let token = try accessToken()
+    let receipt = makeReceipt(archive: archive, backupID: backupID, directory: directory)
     let error = BaiduNetdiskUploadError.api(stage: .create, code: 31061)
     let uploader = ScriptedCoordinatorUploader(handlers: [
       failureAfterCreateHandler(error: error),
       failureAfterCreateHandler(error: error),
     ])
-    let coordinator = BaiduBackupUploadCoordinator(uploader: uploader)
+    let coordinator = makeCoordinator(uploader: uploader)
 
-    for _ in 0..<2 {
-      #expect(
-        await coordinator.upload(
-          archive: archive,
-          accessToken: token,
-          applicationDirectory: directory
-        )
-          == .failed(.upload(error))
-      )
-    }
-    #expect(await uploader.invocationCount() == 2)
+    #expect(
+      await coordinator.upload(
+        archive: archive,
+        accessToken: token,
+        applicationDirectory: directory
+      ) == .outcomeUnknown(receipt: receipt, reason: .unverifiedResponse)
+    )
+    #expect(
+      await coordinator.upload(
+        archive: archive,
+        accessToken: token,
+        applicationDirectory: directory
+      ) == .rejected(.remoteVerificationRequired(backupID: backupID))
+    )
+    #expect(await uploader.invocationCount() == 1)
   }
 
   @Test("Rapid upload needs verification while a matched create is verified")
@@ -298,7 +798,7 @@ struct BaiduBackupUploadCoordinatorTests {
     let rapidUploader = ScriptedCoordinatorUploader(handlers: [
       rapidHandler(receipt: rapidReceipt)
     ])
-    let rapidCoordinator = BaiduBackupUploadCoordinator(uploader: rapidUploader)
+    let rapidCoordinator = makeCoordinator(uploader: rapidUploader)
     let expectedRapidReceipt = BaiduRapidUploadReceipt(
       backupID: rapidReceipt.backupID,
       requestedPath: rapidReceipt.requestedPath,
@@ -332,7 +832,7 @@ struct BaiduBackupUploadCoordinatorTests {
     let verifiedUploader = ScriptedCoordinatorUploader(handlers: [
       verifiedHandler(remote: remote)
     ])
-    let verifiedCoordinator = BaiduBackupUploadCoordinator(uploader: verifiedUploader)
+    let verifiedCoordinator = makeCoordinator(uploader: verifiedUploader)
 
     #expect(
       await verifiedCoordinator.upload(
@@ -352,15 +852,27 @@ struct BaiduBackupUploadCoordinatorTests {
 
   @Test("A late cancellation for an old operation cannot cancel the next upload")
   func oldOperationIDCannotCancelNewUpload() async throws {
-    let firstArchive = try makeArchive(backupID: UUID())
-    let secondArchive = try makeArchive(backupID: UUID())
+    let firstBackupID = UUID()
+    let secondBackupID = UUID()
+    let firstArchive = try makeArchive(backupID: firstBackupID)
+    let secondArchive = try makeArchive(backupID: secondBackupID)
     let directory = try applicationDirectory()
     let token = try accessToken()
+    let firstReceipt = makeReceipt(
+      archive: firstArchive,
+      backupID: firstBackupID,
+      directory: directory
+    )
+    let secondReceipt = makeReceipt(
+      archive: secondArchive,
+      backupID: secondBackupID,
+      directory: directory
+    )
     let uploader = ScriptedCoordinatorUploader(handlers: [
       suspendingBeforeCreateHandler(),
       suspendingBeforeCreateHandler(),
     ])
-    let coordinator = BaiduBackupUploadCoordinator(uploader: uploader)
+    let coordinator = makeCoordinator(uploader: uploader)
 
     let first = Task {
       await coordinator.upload(
@@ -372,7 +884,10 @@ struct BaiduBackupUploadCoordinatorTests {
     try await waitForPhase(.precreateUploadRequiredConfirmed, coordinator: coordinator)
     let oldOperationID = try #require(await coordinator.snapshot().operationID)
     _ = await coordinator.cancelActiveUpload()
-    #expect(await first.value == .cancelled(.explicit))
+    #expect(
+      await first.value
+        == .outcomeUnknown(receipt: firstReceipt, reason: .cancelled(.explicit))
+    )
 
     let second = Task {
       await coordinator.upload(
@@ -389,22 +904,28 @@ struct BaiduBackupUploadCoordinatorTests {
     #expect(await coordinator.snapshot().cancellationSource == nil)
 
     #expect(await coordinator.cancel(operationID: newOperationID))
-    #expect(await second.value == .cancelled(.explicit))
+    #expect(
+      await second.value
+        == .outcomeUnknown(receipt: secondReceipt, reason: .cancelled(.explicit))
+    )
   }
 
   @Test("Progress snapshots are monotonic and contain no credentials or remote metadata")
   func progressSnapshotsAreSafeAndMonotonic() async throws {
     let backupID = UUID(uuidString: "C1000000-0000-0000-0000-000000000007")!
-    let archive = try makeArchive(backupID: backupID)
+    let archive = try makeArchive(
+      backupID: backupID,
+      drawingByteCount: BaiduNetdiskBackupUploader.chunkByteCount
+    )
+    #expect(archive.count > BaiduNetdiskBackupUploader.chunkByteCount)
     let directory = try applicationDirectory()
     let receipt = makeReceipt(archive: archive, backupID: backupID, directory: directory)
     let remote = makeRemote(receipt: receipt)
     let uploader = ScriptedCoordinatorUploader(handlers: [
       verifiedTwoPartHandler(remote: remote)
     ])
-    let coordinator = BaiduBackupUploadCoordinator(uploader: uploader)
+    let coordinator = makeCoordinator(uploader: uploader)
     let stream = await coordinator.progressSnapshots()
-    var iterator = stream.makeAsyncIterator()
     let secret = "snapshot-secret-token"
     let token = try BaiduAccessToken(secret)
 
@@ -416,12 +937,7 @@ struct BaiduBackupUploadCoordinatorTests {
       )
     }
 
-    var snapshots: [BaiduBackupUploadCoordinatorSnapshot] = []
-    for _ in 0..<8 {
-      if let snapshot = await iterator.next() {
-        snapshots.append(snapshot)
-      }
-    }
+    let snapshots = try await collectSnapshots(from: stream, count: 8)
 
     #expect(await task.value == .verifiedRemote(remote))
     #expect(
@@ -449,22 +965,40 @@ struct BaiduBackupUploadCoordinatorTests {
     try BaiduAccessToken("coordinator.test-access-token")
   }
 
+  private func makeCoordinator(
+    uploader: any BaiduBackupUploading
+  ) -> BaiduBackupUploadCoordinator {
+    BaiduBackupUploadCoordinator(
+      uploader: uploader,
+      reconciliationStore: CoordinatorInMemoryReconciliationStore()
+    )
+  }
+
   private func applicationDirectory() throws -> BaiduNetdiskAppDirectory {
     try BaiduNetdiskAppDirectory(folderName: "测试应用")
   }
 
-  private func makeArchive(backupID: UUID) throws -> Data {
+  private func makeArchive(
+    backupID: UUID,
+    sourceBuild: String = "2",
+    drawingByteCount: Int = 0
+  ) throws -> Data {
     let library = LibraryDocument.starter()
-    let drawings = Dictionary(
+    var drawings = Dictionary(
       uniqueKeysWithValues: library.notebooks.flatMap(\.pages).map { ($0.id, Data()) }
     )
+    if drawingByteCount > 0,
+      let firstPageID = library.notebooks.first?.pages.first?.id
+    {
+      drawings[firstPageID] = Data(repeating: 0x42, count: drawingByteCount)
+    }
     return try BackupArchiveCodec.encode(
       library: library,
       drawings: drawings,
       createdAt: Date(timeIntervalSince1970: 1_700_000_000),
       backupID: backupID,
       sourceAppVersion: "0.2.0",
-      sourceBuild: "2"
+      sourceBuild: sourceBuild
     )
   }
 
@@ -475,6 +1009,7 @@ struct BaiduBackupUploadCoordinatorTests {
   ) -> BaiduBackupUploadAttemptReceipt {
     BaiduBackupUploadAttemptReceipt(
       backupID: backupID,
+      archiveSHA256: SHA256.hash(data: archive).map { String(format: "%02x", $0) }.joined(),
       requestedPath: directory.backupPath(backupID: backupID),
       localByteCount: UInt64(archive.count),
       localMD5: BaiduNetdiskBackupUploader.md5Hex(archive)
@@ -505,6 +1040,73 @@ struct BaiduBackupUploadCoordinatorTests {
       try await Task.sleep(for: .milliseconds(5))
     }
     throw CoordinatorTestError.timedOut
+  }
+
+  private func waitForInvocationCount(
+    _ expected: Int,
+    uploader: ScriptedCoordinatorUploader
+  ) async throws {
+    for _ in 0..<200 {
+      if await uploader.invocationCount() == expected {
+        return
+      }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    throw CoordinatorTestError.timedOut
+  }
+
+  private func collectSnapshots(
+    from stream: AsyncStream<BaiduBackupUploadCoordinatorSnapshot>,
+    count: Int
+  ) async throws -> [BaiduBackupUploadCoordinatorSnapshot] {
+    try await withThrowingTaskGroup(
+      of: [BaiduBackupUploadCoordinatorSnapshot].self
+    ) { group in
+      group.addTask {
+        var snapshots: [BaiduBackupUploadCoordinatorSnapshot] = []
+        for await snapshot in stream {
+          snapshots.append(snapshot)
+          if snapshots.count == count {
+            return snapshots
+          }
+        }
+        throw CoordinatorTestError.timedOut
+      }
+      group.addTask {
+        try await Task.sleep(for: .seconds(1))
+        throw CoordinatorTestError.timedOut
+      }
+
+      guard let snapshots = try await group.next() else {
+        throw CoordinatorTestError.timedOut
+      }
+      group.cancelAll()
+      return snapshots
+    }
+  }
+
+  private func suspendingBeforePrecreateHandler() -> ScriptedCoordinatorUploader.Handler {
+    { _, _, _, _ in
+      try await Task.sleep(for: .seconds(60))
+      throw CoordinatorTestError.timedOut
+    }
+  }
+
+  private func failureBeforePrecreateHandler(
+    error: BaiduNetdiskUploadError
+  ) -> ScriptedCoordinatorUploader.Handler {
+    { _, _, _, _ in
+      throw error
+    }
+  }
+
+  private func failureAfterPrecreateHandler(
+    error: BaiduNetdiskUploadError
+  ) -> ScriptedCoordinatorUploader.Handler {
+    { _, _, _, progress in
+      try await progress(.precreateDispatchPermitted)
+      throw error
+    }
   }
 
   private func suspendingBeforeCreateHandler() -> ScriptedCoordinatorUploader.Handler {
@@ -673,5 +1275,116 @@ private actor ScriptedCoordinatorUploader: BaiduBackupUploading {
 
   func invocationCount() -> Int {
     uploads
+  }
+}
+
+private actor CoordinatorInMemoryReconciliationStore: BaiduUploadReconciliationStoring {
+  private var records: [UUID: BaiduUploadReconciliationRecord] = [:]
+
+  func admit(
+    _ record: BaiduUploadReconciliationRecord
+  ) -> BaiduUploadReconciliationAdmission {
+    guard let existing = records[record.backupID] else {
+      records[record.backupID] = record
+      return .created
+    }
+    return hasSameUploadIdentity(existing, record) ? .existing : .identityConflict
+  }
+
+  func removeOwned(_ record: BaiduUploadReconciliationRecord) throws -> Bool {
+    guard let existing = records[record.backupID] else { return false }
+    guard existing == record else {
+      throw BaiduUploadReconciliationRepositoryError.identityConflict
+    }
+    records.removeValue(forKey: record.backupID)
+    return true
+  }
+
+  func recordCount() -> Int {
+    records.count
+  }
+
+  private func hasSameUploadIdentity(
+    _ lhs: BaiduUploadReconciliationRecord,
+    _ rhs: BaiduUploadReconciliationRecord
+  ) -> Bool {
+    lhs.backupID == rhs.backupID
+      && lhs.archiveSHA256 == rhs.archiveSHA256
+      && lhs.localMD5 == rhs.localMD5
+      && lhs.localByteCount == rhs.localByteCount
+      && lhs.requestedPath == rhs.requestedPath
+  }
+}
+
+private actor CoordinatorGatedReconciliationStore: BaiduUploadReconciliationStoring {
+  private let gate: CoordinatorTestGate
+  private var records: [UUID: BaiduUploadReconciliationRecord] = [:]
+
+  init(gate: CoordinatorTestGate) {
+    self.gate = gate
+  }
+
+  func admit(
+    _ record: BaiduUploadReconciliationRecord
+  ) async -> BaiduUploadReconciliationAdmission {
+    await gate.wait()
+    guard let existing = records[record.backupID] else {
+      records[record.backupID] = record
+      return .created
+    }
+    return existing == record ? .existing : .identityConflict
+  }
+
+  func removeOwned(_ record: BaiduUploadReconciliationRecord) throws -> Bool {
+    guard let existing = records[record.backupID] else { return false }
+    guard existing == record else {
+      throw BaiduUploadReconciliationRepositoryError.identityConflict
+    }
+    records.removeValue(forKey: record.backupID)
+    return true
+  }
+
+  func recordCount() -> Int {
+    records.count
+  }
+}
+
+private struct CoordinatorFailingReconciliationStore: BaiduUploadReconciliationStoring {
+  let error: BaiduUploadReconciliationRepositoryError
+
+  func admit(
+    _ record: BaiduUploadReconciliationRecord
+  ) async throws -> BaiduUploadReconciliationAdmission {
+    throw error
+  }
+
+  func removeOwned(_ record: BaiduUploadReconciliationRecord) async throws -> Bool {
+    throw error
+  }
+}
+
+private actor CoordinatorCleanupFailingReconciliationStore:
+  BaiduUploadReconciliationStoring
+{
+  private var record: BaiduUploadReconciliationRecord?
+
+  func admit(
+    _ requested: BaiduUploadReconciliationRecord
+  ) -> BaiduUploadReconciliationAdmission {
+    guard let existing = record else {
+      record = requested
+      return .created
+    }
+    let hasSameIdentity =
+      existing.backupID == requested.backupID
+      && existing.archiveSHA256 == requested.archiveSHA256
+      && existing.localMD5 == requested.localMD5
+      && existing.localByteCount == requested.localByteCount
+      && existing.requestedPath == requested.requestedPath
+    return hasSameIdentity ? .existing : .identityConflict
+  }
+
+  func removeOwned(_ record: BaiduUploadReconciliationRecord) throws -> Bool {
+    throw BaiduUploadReconciliationRepositoryError.persistenceFailure
   }
 }
