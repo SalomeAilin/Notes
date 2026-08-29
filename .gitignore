@@ -15,5 +15,11 @@ xcuserdata/
 # Local signing and environment files
 *.mobileprovision
 *.p12
+*.cer
+*.key
+*.pem
+AuthKey_*.p8
+Local.xcconfig
+Secrets.xcconfig
 .env
 .env.*
