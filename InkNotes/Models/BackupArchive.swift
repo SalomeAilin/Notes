@@ -29,11 +29,36 @@ struct BackupArchiveManifest: Codable, Equatable, Sendable {
 
 struct ValidatedBackupArchive: Equatable, Sendable {
   let backupID: UUID
+  let archiveChecksum: String
   let createdAt: Date
   let sourceAppVersion: String
   let sourceBuild: String
   let library: LibraryDocument
   let drawings: [UUID: Data]
+}
+
+struct BackupRestoreTransaction: Codable, Equatable, Sendable {
+  static let currentVersion = 1
+
+  let version: Int
+  let backupID: UUID
+  let archiveChecksum: String
+  let importedAt: Date
+  let copiedNotebooks: [Notebook]
+
+  init(
+    version: Int = BackupRestoreTransaction.currentVersion,
+    backupID: UUID,
+    archiveChecksum: String,
+    importedAt: Date,
+    copiedNotebooks: [Notebook]
+  ) {
+    self.version = version
+    self.backupID = backupID
+    self.archiveChecksum = archiveChecksum
+    self.importedAt = importedAt
+    self.copiedNotebooks = copiedNotebooks
+  }
 }
 
 enum BackupArchiveError: LocalizedError, Equatable {

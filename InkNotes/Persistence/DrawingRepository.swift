@@ -4,6 +4,10 @@ enum DrawingRepositoryError: LocalizedError, Equatable {
   case persistenceDirectoryUnavailable
   case unsupportedSchema(found: Int)
   case drawingTooLarge(actual: Int, maximum: Int)
+  case restoreTransactionTooLarge(actual: Int, maximum: Int)
+  case tooManyRestoreTransactions(maximum: Int)
+  case restoreTransactionAlreadyExists
+  case invalidRestoreTransaction
 
   var errorDescription: String? {
     switch self {
@@ -13,6 +17,14 @@ enum DrawingRepositoryError: LocalizedError, Equatable {
       "笔记数据版本 \(found) 暂不受支持，原文件未被改写。"
     case .drawingTooLarge(_, let maximum):
       "单页笔迹超过 \(maximum) 字节的安全读取上限。"
+    case .restoreTransactionTooLarge(_, let maximum):
+      "备份恢复记录超过 \(maximum) 字节的安全读取上限。"
+    case .tooManyRestoreTransactions(let maximum):
+      "本地备份恢复记录已达到 \(maximum) 份的安全上限。"
+    case .restoreTransactionAlreadyExists:
+      "这份备份的恢复记录已存在，未覆盖原记录。"
+    case .invalidRestoreTransaction:
+      "备份恢复记录损坏，已停止导入以保护现有笔记。"
     }
   }
 }
@@ -22,6 +34,10 @@ actor DrawingRepository {
   static let libraryFilename = "library.json"
   static let drawingsDirectoryName = "Drawings"
   static let drawingFileExtension = "drawing"
+  static let restoreTransactionsDirectoryName = "RestoreTransactions"
+  static let restoreTransactionFileExtension = "json"
+  static let maximumRestoreTransactionByteCount = BackupArchiveLimits.maximumManifestByteCount
+  static let maximumRestoreTransactionCount = 1_000
 
   private let fileManager: FileManager
   private let rootURL: URL?
@@ -126,6 +142,70 @@ actor DrawingRepository {
     try fileManager.removeItem(at: url)
   }
 
+  func drawingExists(pageID: UUID) throws -> Bool {
+    try fileManager.fileExists(atPath: drawingURL(for: pageID).path)
+  }
+
+  func loadRestoreTransaction(backupID: UUID) throws -> BackupRestoreTransaction? {
+    let url = try restoreTransactionURL(backupID: backupID)
+    guard fileManager.fileExists(atPath: url.path) else { return nil }
+
+    let attributes = try fileManager.attributesOfItem(atPath: url.path)
+    if let size = (attributes[.size] as? NSNumber)?.uint64Value,
+      size > UInt64(Self.maximumRestoreTransactionByteCount)
+    {
+      throw DrawingRepositoryError.restoreTransactionTooLarge(
+        actual: size > UInt64(Int.max) ? Int.max : Int(size),
+        maximum: Self.maximumRestoreTransactionByteCount
+      )
+    }
+
+    let data = try Data(contentsOf: url)
+    guard data.count <= Self.maximumRestoreTransactionByteCount else {
+      throw DrawingRepositoryError.restoreTransactionTooLarge(
+        actual: data.count,
+        maximum: Self.maximumRestoreTransactionByteCount
+      )
+    }
+    do {
+      return try Self.makeDecoder().decode(BackupRestoreTransaction.self, from: data)
+    } catch {
+      throw DrawingRepositoryError.invalidRestoreTransaction
+    }
+  }
+
+  func createRestoreTransaction(_ transaction: BackupRestoreTransaction) throws {
+    let data: Data
+    do {
+      data = try Self.makeEncoder().encode(transaction)
+    } catch {
+      throw DrawingRepositoryError.invalidRestoreTransaction
+    }
+    guard data.count <= Self.maximumRestoreTransactionByteCount else {
+      throw DrawingRepositoryError.restoreTransactionTooLarge(
+        actual: data.count,
+        maximum: Self.maximumRestoreTransactionByteCount
+      )
+    }
+
+    let directoryURL = try restoreTransactionsURL()
+    let transactionURL = try restoreTransactionURL(backupID: transaction.backupID)
+    try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+    guard !fileManager.fileExists(atPath: transactionURL.path) else {
+      throw DrawingRepositoryError.restoreTransactionAlreadyExists
+    }
+    let entries = try fileManager.contentsOfDirectory(
+      at: directoryURL,
+      includingPropertiesForKeys: nil
+    )
+    guard entries.count < Self.maximumRestoreTransactionCount else {
+      throw DrawingRepositoryError.tooManyRestoreTransactions(
+        maximum: Self.maximumRestoreTransactionCount
+      )
+    }
+    try data.write(to: transactionURL, options: .atomic)
+  }
+
   private func requiredRootURL() throws -> URL {
     guard let rootURL else {
       throw DrawingRepositoryError.persistenceDirectoryUnavailable
@@ -139,6 +219,20 @@ actor DrawingRepository {
 
   private func drawingsURL() throws -> URL {
     try requiredRootURL().appendingPathComponent(Self.drawingsDirectoryName, isDirectory: true)
+  }
+
+  private func restoreTransactionsURL() throws -> URL {
+    try requiredRootURL().appendingPathComponent(
+      Self.restoreTransactionsDirectoryName,
+      isDirectory: true
+    )
+  }
+
+  private func restoreTransactionURL(backupID: UUID) throws -> URL {
+    try restoreTransactionsURL().appendingPathComponent(
+      "\(backupID.uuidString.lowercased()).\(Self.restoreTransactionFileExtension)",
+      isDirectory: false
+    )
   }
 
   private func drawingURL(for pageID: UUID) throws -> URL {

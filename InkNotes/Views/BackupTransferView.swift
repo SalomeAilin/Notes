@@ -373,10 +373,30 @@ struct BackupTransferView: View {
     do {
       let result = try await store.importBackupAsCopy(pendingImport.data)
       preparedBackup = nil
-      notice = BackupTransferNotice(
-        title: "导入完成",
-        message: "已新增 \(result.importedNotebookCount) 个笔记本、\(result.importedPageCount) 页；原有笔记未被覆盖。"
-      )
+      switch result.disposition {
+      case .imported:
+        let message =
+          "已新增 \(result.importedNotebookCount) 个笔记本、"
+          + "\(result.importedPageCount) 页；原有笔记未被覆盖。"
+        notice = BackupTransferNotice(
+          title: "导入完成",
+          message: message
+        )
+      case .alreadyImported:
+        if result.repairedDrawingCount > 0 {
+          notice = BackupTransferNotice(
+            title: "恢复完成",
+            message:
+              "这份备份此前已导入；本次补回 \(result.repairedDrawingCount) 页缺失笔迹，"
+              + "未新增笔记本或页面，也未覆盖已有笔迹。"
+          )
+        } else {
+          notice = BackupTransferNotice(
+            title: "无需重复导入",
+            message: "这份备份此前已导入，本次未新增笔记本或页面，也未覆盖已有笔迹。"
+          )
+        }
+      }
     } catch {
       presentError(error, action: "导入备份失败")
     }

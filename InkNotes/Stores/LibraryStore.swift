@@ -265,7 +265,7 @@ final class LibraryStore: ObservableObject {
     await finishScheduledPersistence()
 
     let snapshot = library
-    let drawingOverrides = drawingOverridesForSnapshot()
+    let drawingOverrides = drawingOverridesForBackupSnapshot()
     let createdAt = Date()
     let data = try await repository.makeBackup(
       library: snapshot,
@@ -295,7 +295,7 @@ final class LibraryStore: ObservableObject {
     defer { finishBackupTransfer() }
     await finishScheduledPersistence()
 
-    let drawingOverrides = drawingOverridesForSnapshot()
+    let drawingOverrides = unsavedDrawingOverrides()
     let result = try await repository.restoreBackupAsCopy(
       data,
       currentLibrary: library,
@@ -303,9 +303,13 @@ final class LibraryStore: ObservableObject {
     )
 
     library = result.library
-    selectedNotebookID = result.selectedNotebookID
-    selectedPageID = result.selectedPageID
-    currentDrawingData = result.selectedDrawingData
+    if result.disposition == .imported {
+      selectedNotebookID = result.selectedNotebookID
+      selectedPageID = result.selectedPageID
+      currentDrawingData = result.selectedDrawingData
+    } else if let pageID = selectedPageID, result.repairedPageIDs.contains(pageID) {
+      currentDrawingData = try await validatedDrawingData(pageID: pageID)
+    }
     unsavedDrawings.removeAll()
     persistenceError = nil
     return result
@@ -486,15 +490,24 @@ final class LibraryStore: ObservableObject {
     await drawingTransitionTask?.value
   }
 
-  private func drawingOverridesForSnapshot() -> [UUID: Data] {
+  private func drawingOverridesForBackupSnapshot() -> [UUID: Data] {
     let currentPageIDs = Set(library.notebooks.flatMap(\.pages).map(\.id))
-    var drawings = unsavedDrawings.filter { currentPageIDs.contains($0.key) }
+    var drawings = unsavedDrawingOverrides(currentPageIDs: currentPageIDs)
     if !isReadOnly, !isDrawingLoading, let pageID = selectedPageID,
       currentPageIDs.contains(pageID)
     {
       drawings[pageID] = currentDrawingData
     }
     return drawings
+  }
+
+  private func unsavedDrawingOverrides() -> [UUID: Data] {
+    let currentPageIDs = Set(library.notebooks.flatMap(\.pages).map(\.id))
+    return unsavedDrawingOverrides(currentPageIDs: currentPageIDs)
+  }
+
+  private func unsavedDrawingOverrides(currentPageIDs: Set<UUID>) -> [UUID: Data] {
+    unsavedDrawings.filter { currentPageIDs.contains($0.key) }
   }
 
   private func clearSavedDrawings(matching savedDrawings: [UUID: Data]) {

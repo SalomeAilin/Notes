@@ -9,6 +9,11 @@ struct BackupArchivePreview: Equatable, Sendable {
   let pageCount: Int
 }
 
+enum BackupRestoreDisposition: Equatable, Sendable {
+  case imported
+  case alreadyImported
+}
+
 struct BackupRestoreResult: Equatable, Sendable {
   let library: LibraryDocument
   let selectedNotebookID: UUID
@@ -16,17 +21,38 @@ struct BackupRestoreResult: Equatable, Sendable {
   let selectedDrawingData: Data
   let importedNotebookCount: Int
   let importedPageCount: Int
+  let repairedDrawingCount: Int
+  let repairedPageIDs: Set<UUID>
+  let disposition: BackupRestoreDisposition
 }
 
 enum BackupSnapshotError: LocalizedError, Equatable {
   case invalidDrawing
+  case backupIdentityConflict
+  case invalidRestoreTransaction
+  case partialPreviousImport
+  case orphanDrawingConflict
 
   var errorDescription: String? {
     switch self {
     case .invalidDrawing:
       "备份中包含无法解析的 PencilKit 笔迹，未写入任何导入内容。"
+    case .backupIdentityConflict:
+      "这份备份与已有恢复记录使用相同标识，但内容校验值不同，已停止导入。"
+    case .invalidRestoreTransaction:
+      "本地备份恢复记录无效，已停止导入以保护现有笔记。"
+    case .partialPreviousImport:
+      "检测到这份备份此前导入的部分内容，已停止重复追加。"
+    case .orphanDrawingConflict:
+      "恢复目标位置已有不同的孤立笔迹，已停止导入且未覆盖该文件。"
     }
   }
+}
+
+private enum BackupRestorePresence {
+  case none
+  case all
+  case partial
 }
 
 extension DrawingRepository {
@@ -91,7 +117,7 @@ extension DrawingRepository {
       pageIDs: currentPageIDs,
       drawingOverrides: currentDrawingOverrides
     )
-    _ = try loadValidatedDrawings(
+    let currentDrawings = try loadValidatedDrawings(
       pageIDs: currentPageIDs,
       drawingOverrides: currentDrawingOverrides
     )
@@ -99,13 +125,112 @@ extension DrawingRepository {
     // Imported content is still fully decoded and validated before any imported
     // page file is written. The only preceding writes persist the current notes.
     let backup = try decodeAndValidateDrawings(data)
+    let transaction: BackupRestoreTransaction
+    if let existingTransaction = try loadRestoreTransaction(backupID: backup.backupID) {
+      try validateRestoreTransaction(existingTransaction, backup: backup)
+      transaction = existingTransaction
+    } else {
+      transaction = try makeRestoreTransaction(
+        backup: backup,
+        currentLibrary: currentLibrary,
+        currentPageIDs: currentPageIDs,
+        importedAt: importedAt
+      )
+      // The immutable plan is the write-ahead record and durable receipt. It is
+      // committed before any imported drawing or directory entry can be written.
+      try createRestoreTransaction(transaction)
+    }
+
+    let copiedDrawings = try drawingsForRestoreTransaction(transaction, backup: backup)
+    switch restorePresence(transaction, in: currentLibrary) {
+    case .all:
+      let repair = try repairMissingDrawingsForCompletedRestore(
+        expectedDrawings: copiedDrawings,
+        currentDrawings: currentDrawings
+      )
+      return try makeRestoreResult(
+        library: currentLibrary,
+        transaction: transaction,
+        drawings: repair.drawings,
+        disposition: .alreadyImported,
+        repairedPageIDs: repair.pageIDs
+      )
+    case .partial:
+      throw BackupSnapshotError.partialPreviousImport
+    case .none:
+      break
+    }
+
+    var mergedLibrary = currentLibrary
+    mergedLibrary.notebooks.append(contentsOf: transaction.copiedNotebooks)
+    _ = try BackupArchiveCodec.validateLibrary(mergedLibrary)
+
+    var drawingsToWrite: [(pageID: UUID, data: Data)] = []
+    for copiedPageID in copiedDrawings.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+      guard let expectedDrawing = copiedDrawings[copiedPageID] else {
+        throw BackupArchiveError.drawingIndexMismatch
+      }
+      if let existingDrawing = try loadDrawing(
+        pageID: copiedPageID,
+        maximumByteCount: BackupArchiveLimits.maximumDrawingByteCount
+      ) {
+        guard existingDrawing == expectedDrawing else {
+          throw BackupSnapshotError.orphanDrawingConflict
+        }
+      } else {
+        drawingsToWrite.append((copiedPageID, expectedDrawing))
+      }
+    }
+
+    for drawing in drawingsToWrite {
+      try saveDrawing(drawing.data, pageID: drawing.pageID)
+    }
+
+    do {
+      // Commit the merged directory last. Until this succeeds, imported files
+      // are unreachable resumable WAL content and the existing library remains unchanged.
+      try saveLibrary(mergedLibrary)
+    } catch {
+      // Atomic writes can report an uncertain result. A read-back containing
+      // every planned ID proves that the visible directory commit succeeded.
+      if let persistedLibrary = try? loadLibrary(),
+        restorePresence(transaction, in: persistedLibrary) == .all
+      {
+        return try makeRestoreResult(
+          library: persistedLibrary,
+          transaction: transaction,
+          drawings: copiedDrawings,
+          disposition: .imported
+        )
+      }
+      throw error
+    }
+
+    return try makeRestoreResult(
+      library: mergedLibrary,
+      transaction: transaction,
+      drawings: copiedDrawings,
+      disposition: .imported
+    )
+  }
+
+  private func makeRestoreTransaction(
+    backup: ValidatedBackupArchive,
+    currentLibrary: LibraryDocument,
+    currentPageIDs: Set<UUID>,
+    importedAt: Date
+  ) throws -> BackupRestoreTransaction {
+    guard importedAt.timeIntervalSince1970.isFinite else {
+      throw BackupSnapshotError.invalidRestoreTransaction
+    }
 
     var existingTitles = Set(currentLibrary.notebooks.map(\.title))
     var usedNotebookIDs = Set(currentLibrary.notebooks.map(\.id))
     var usedPageIDs = currentPageIDs
+    usedNotebookIDs.formUnion(backup.library.notebooks.map(\.id))
+    usedPageIDs.formUnion(backup.library.notebooks.flatMap(\.pages).map(\.id))
     var copiedNotebooks: [Notebook] = []
-    var copiedDrawings: [UUID: Data] = [:]
-    var createdPageIDs: [UUID] = []
+    copiedNotebooks.reserveCapacity(backup.library.notebooks.count)
 
     for sourceNotebook in backup.library.notebooks {
       let copiedTitle = uniqueImportedTitle(
@@ -113,19 +238,19 @@ extension DrawingRepository {
         existingTitles: &existingTitles
       )
       var copiedPages: [NotePage] = []
+      copiedPages.reserveCapacity(sourceNotebook.pages.count)
 
       for sourcePage in sourceNotebook.pages {
-        let copiedPageID = makeUniqueID(usedIDs: &usedPageIDs)
-        let copiedPage = NotePage(
-          id: copiedPageID,
-          title: sourcePage.title,
-          background: sourcePage.background,
-          createdAt: sourcePage.createdAt,
-          updatedAt: sourcePage.updatedAt
+        let copiedPageID = try makeUniquePageID(usedIDs: &usedPageIDs)
+        copiedPages.append(
+          NotePage(
+            id: copiedPageID,
+            title: sourcePage.title,
+            background: sourcePage.background,
+            createdAt: sourcePage.createdAt,
+            updatedAt: sourcePage.updatedAt
+          )
         )
-        copiedPages.append(copiedPage)
-        copiedDrawings[copiedPageID] = backup.drawings[sourcePage.id] ?? Data()
-        createdPageIDs.append(copiedPageID)
       }
 
       copiedNotebooks.append(
@@ -139,42 +264,183 @@ extension DrawingRepository {
       )
     }
 
-    guard let firstNotebook = copiedNotebooks.first,
-      let firstPage = firstNotebook.pages.first,
-      let firstDrawing = copiedDrawings[firstPage.id]
+    let transaction = BackupRestoreTransaction(
+      backupID: backup.backupID,
+      archiveChecksum: backup.archiveChecksum,
+      importedAt: importedAt,
+      copiedNotebooks: copiedNotebooks
+    )
+    try validateRestoreTransaction(transaction, backup: backup)
+    return transaction
+  }
+
+  private func validateRestoreTransaction(
+    _ transaction: BackupRestoreTransaction,
+    backup: ValidatedBackupArchive
+  ) throws {
+    guard transaction.version == BackupRestoreTransaction.currentVersion,
+      transaction.backupID == backup.backupID,
+      isValidSHA256Hex(transaction.archiveChecksum),
+      transaction.importedAt.timeIntervalSince1970.isFinite
     else {
-      throw BackupArchiveError.invalidLibraryStructure
+      throw BackupSnapshotError.invalidRestoreTransaction
+    }
+    guard transaction.archiveChecksum == backup.archiveChecksum else {
+      throw BackupSnapshotError.backupIdentityConflict
+    }
+    guard transaction.copiedNotebooks.count == backup.library.notebooks.count else {
+      throw BackupSnapshotError.invalidRestoreTransaction
     }
 
-    var mergedLibrary = currentLibrary
-    mergedLibrary.notebooks.append(contentsOf: copiedNotebooks)
-    _ = try BackupArchiveCodec.validateLibrary(mergedLibrary)
-
     do {
-      for pageID in createdPageIDs {
-        guard let drawing = copiedDrawings[pageID] else {
+      _ = try BackupArchiveCodec.validateLibrary(
+        LibraryDocument(notebooks: transaction.copiedNotebooks)
+      )
+    } catch {
+      throw BackupSnapshotError.invalidRestoreTransaction
+    }
+
+    let sourceNotebookIDs = Set(backup.library.notebooks.map(\.id))
+    let sourcePageIDs = Set(backup.library.notebooks.flatMap(\.pages).map(\.id))
+    let copiedNotebookIDs = Set(transaction.copiedNotebooks.map(\.id))
+    let copiedPageIDs = Set(transaction.copiedNotebooks.flatMap(\.pages).map(\.id))
+    guard sourceNotebookIDs.isDisjoint(with: copiedNotebookIDs),
+      sourcePageIDs.isDisjoint(with: copiedPageIDs)
+    else {
+      throw BackupSnapshotError.invalidRestoreTransaction
+    }
+
+    for (sourceNotebook, copiedNotebook) in zip(
+      backup.library.notebooks,
+      transaction.copiedNotebooks
+    ) {
+      guard sourceNotebook.pages.count == copiedNotebook.pages.count,
+        datesMatch(sourceNotebook.createdAt, copiedNotebook.createdAt),
+        datesMatch(copiedNotebook.updatedAt, transaction.importedAt)
+      else {
+        throw BackupSnapshotError.invalidRestoreTransaction
+      }
+
+      for (sourcePage, copiedPage) in zip(sourceNotebook.pages, copiedNotebook.pages) {
+        guard sourcePage.title == copiedPage.title,
+          sourcePage.background == copiedPage.background,
+          datesMatch(sourcePage.createdAt, copiedPage.createdAt),
+          datesMatch(sourcePage.updatedAt, copiedPage.updatedAt)
+        else {
+          throw BackupSnapshotError.invalidRestoreTransaction
+        }
+      }
+    }
+  }
+
+  private func drawingsForRestoreTransaction(
+    _ transaction: BackupRestoreTransaction,
+    backup: ValidatedBackupArchive
+  ) throws -> [UUID: Data] {
+    var copiedDrawings: [UUID: Data] = [:]
+    for (sourceNotebook, copiedNotebook) in zip(
+      backup.library.notebooks,
+      transaction.copiedNotebooks
+    ) {
+      for (sourcePage, copiedPage) in zip(sourceNotebook.pages, copiedNotebook.pages) {
+        guard let drawing = backup.drawings[sourcePage.id] else {
           throw BackupArchiveError.drawingIndexMismatch
         }
-        try saveDrawing(drawing, pageID: pageID)
+        copiedDrawings[copiedPage.id] = drawing
       }
-      // Commit the merged directory last. Until this succeeds, imported files
-      // are unreachable orphans and the existing library remains unchanged.
-      try saveLibrary(mergedLibrary)
-    } catch {
-      for pageID in createdPageIDs {
-        try? removeDrawingIfPresent(pageID: pageID)
+    }
+    return copiedDrawings
+  }
+
+  private func restorePresence(
+    _ transaction: BackupRestoreTransaction,
+    in library: LibraryDocument
+  ) -> BackupRestorePresence {
+    let plannedNotebookIDs = Set(transaction.copiedNotebooks.map(\.id))
+    let plannedPageIDs = Set(transaction.copiedNotebooks.flatMap(\.pages).map(\.id))
+    let currentNotebookIDs = Set(library.notebooks.map(\.id))
+    let currentPageIDs = Set(library.notebooks.flatMap(\.pages).map(\.id))
+    let allPresent =
+      plannedNotebookIDs.isSubset(of: currentNotebookIDs)
+      && plannedPageIDs.isSubset(of: currentPageIDs)
+    if allPresent { return .all }
+
+    let anyPresent =
+      !plannedNotebookIDs.isDisjoint(with: currentNotebookIDs)
+      || !plannedPageIDs.isDisjoint(with: currentPageIDs)
+    return anyPresent ? .partial : .none
+  }
+
+  private func repairMissingDrawingsForCompletedRestore(
+    expectedDrawings: [UUID: Data],
+    currentDrawings: [UUID: Data]
+  ) throws -> (drawings: [UUID: Data], pageIDs: Set<UUID>) {
+    var missingDrawings: [(pageID: UUID, data: Data)] = []
+    for pageID in expectedDrawings.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+      guard let expectedDrawing = expectedDrawings[pageID] else {
+        throw BackupArchiveError.drawingIndexMismatch
       }
-      throw error
+      if try !drawingExists(pageID: pageID) {
+        missingDrawings.append((pageID, expectedDrawing))
+      }
+    }
+
+    var reconciledDrawings = currentDrawings
+    for drawing in missingDrawings {
+      try saveDrawing(drawing.data, pageID: drawing.pageID)
+      reconciledDrawings[drawing.pageID] = drawing.data
+    }
+    return (reconciledDrawings, Set(missingDrawings.map(\.pageID)))
+  }
+
+  private func makeRestoreResult(
+    library: LibraryDocument,
+    transaction: BackupRestoreTransaction,
+    drawings: [UUID: Data],
+    disposition: BackupRestoreDisposition,
+    repairedPageIDs: Set<UUID> = []
+  ) throws -> BackupRestoreResult {
+    guard let firstNotebook = transaction.copiedNotebooks.first,
+      let firstPage = firstNotebook.pages.first,
+      let firstDrawing = drawings[firstPage.id]
+    else {
+      throw BackupSnapshotError.invalidRestoreTransaction
     }
 
     return BackupRestoreResult(
-      library: mergedLibrary,
+      library: library,
       selectedNotebookID: firstNotebook.id,
       selectedPageID: firstPage.id,
       selectedDrawingData: firstDrawing,
-      importedNotebookCount: copiedNotebooks.count,
-      importedPageCount: createdPageIDs.count
+      importedNotebookCount: transaction.copiedNotebooks.count,
+      importedPageCount: transaction.copiedNotebooks.reduce(0) { $0 + $1.pages.count },
+      repairedDrawingCount: repairedPageIDs.count,
+      repairedPageIDs: repairedPageIDs,
+      disposition: disposition
     )
+  }
+
+  private func makeUniquePageID(usedIDs: inout Set<UUID>) throws -> UUID {
+    while true {
+      let candidate = UUID()
+      guard !usedIDs.contains(candidate), try !drawingExists(pageID: candidate) else {
+        continue
+      }
+      usedIDs.insert(candidate)
+      return candidate
+    }
+  }
+
+  private func isValidSHA256Hex(_ string: String) -> Bool {
+    let bytes = string.utf8
+    return bytes.count == 64
+      && bytes.allSatisfy {
+        ($0 >= 0x30 && $0 <= 0x39) || ($0 >= 0x61 && $0 <= 0x66)
+      }
+  }
+
+  private func datesMatch(_ lhs: Date, _ rhs: Date) -> Bool {
+    abs(lhs.timeIntervalSince(rhs)) < 0.001
   }
 
   private func loadValidatedDrawings(

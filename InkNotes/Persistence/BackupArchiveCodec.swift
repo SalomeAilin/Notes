@@ -220,6 +220,7 @@ enum BackupArchiveCodec {
 
     return ValidatedBackupArchive(
       backupID: manifest.backupID,
+      archiveChecksum: hexString(storedDigest),
       createdAt: manifest.createdAt,
       sourceAppVersion: manifest.sourceAppVersion,
       sourceBuild: manifest.sourceBuild,
@@ -382,10 +383,14 @@ enum BackupArchiveCodec {
   }
 
   private static func sha256Hex(_ data: Data) -> String {
+    hexString(Data(SHA256.hash(data: data)))
+  }
+
+  private static func hexString(_ data: Data) -> String {
     let digits = Array("0123456789abcdef".utf8)
     var bytes: [UInt8] = []
-    bytes.reserveCapacity(64)
-    for byte in SHA256.hash(data: data) {
+    bytes.reserveCapacity(data.count * 2)
+    for byte in data {
       bytes.append(digits[Int(byte >> 4)])
       bytes.append(digits[Int(byte & 0x0F)])
     }
