@@ -1,7 +1,16 @@
 import CryptoKit
 import Foundation
 
-struct BaiduNetdiskBackupUploader: Sendable {
+protocol BaiduBackupUploading: Sendable {
+  func upload(
+    archive: Data,
+    accessToken: BaiduAccessToken,
+    applicationDirectory: BaiduNetdiskAppDirectory,
+    progress: @escaping @Sendable (BaiduBackupUploadProgress) async throws -> Void
+  ) async throws -> BaiduBackupUploadOutcome
+}
+
+struct BaiduNetdiskBackupUploader: BaiduBackupUploading, Sendable {
   static let chunkByteCount = 4 * 1024 * 1024
   static let maximumJSONResponseByteCount = 256 * 1024
 
@@ -21,7 +30,8 @@ struct BaiduNetdiskBackupUploader: Sendable {
   func upload(
     archive: Data,
     accessToken: BaiduAccessToken,
-    applicationDirectory: BaiduNetdiskAppDirectory
+    applicationDirectory: BaiduNetdiskAppDirectory,
+    progress: @escaping @Sendable (BaiduBackupUploadProgress) async throws -> Void = { _ in }
   ) async throws -> BaiduBackupUploadOutcome {
     let plan = try Self.makeUploadPlan(
       archive: archive,
@@ -29,7 +39,11 @@ struct BaiduNetdiskBackupUploader: Sendable {
     )
     try Task.checkCancellation()
 
-    let precreate = try await precreate(plan: plan, accessToken: accessToken)
+    let precreate = try await precreate(
+      plan: plan,
+      accessToken: accessToken,
+      progress: progress
+    )
     if precreate.returnType == 2 {
       return .rapidUpload(
         BaiduRapidUploadReceipt(
@@ -48,14 +62,17 @@ struct BaiduNetdiskBackupUploader: Sendable {
 
     var uploadedPartMD5s: [String] = []
     uploadedPartMD5s.reserveCapacity(requestedPartIndices.count)
-    for partIndex in requestedPartIndices {
+    for (offset, partIndex) in requestedPartIndices.enumerated() {
       try Task.checkCancellation()
       let chunk = plan.chunks[partIndex]
       let serverDigest = try await uploadPart(
         chunk,
         remotePath: plan.remotePath,
         uploadID: precreate.uploadID,
-        accessToken: accessToken
+        accessToken: accessToken,
+        ordinal: offset + 1,
+        total: requestedPartIndices.count,
+        progress: progress
       )
       guard serverDigest == chunk.md5 else {
         throw BaiduNetdiskUploadError.partDigestMismatch(partIndex)
@@ -69,7 +86,8 @@ struct BaiduNetdiskBackupUploader: Sendable {
         plan: plan,
         uploadID: precreate.uploadID,
         uploadedPartMD5s: uploadedPartMD5s,
-        accessToken: accessToken
+        accessToken: accessToken,
+        progress: progress
       )
     )
   }
@@ -121,7 +139,8 @@ struct BaiduNetdiskBackupUploader: Sendable {
 
   private func precreate(
     plan: BaiduBackupUploadPlan,
-    accessToken: BaiduAccessToken
+    accessToken: BaiduAccessToken,
+    progress: @escaping @Sendable (BaiduBackupUploadProgress) async throws -> Void
   ) async throws -> PrecreateResult {
     let stage = BaiduUploadStage.precreate
     let blockList = try encodeJSONString(plan.chunks.map(\.md5), stage: stage)
@@ -141,7 +160,13 @@ struct BaiduNetdiskBackupUploader: Sendable {
       ],
       stage: stage
     )
-    let response: PrecreateResponse = try await send(request, stage: stage)
+    let response: PrecreateResponse = try await send(
+      request,
+      stage: stage,
+      beforeSending: {
+        try await progress(.precreateDispatchPermitted)
+      }
+    )
     guard let returnType = response.returnType, returnType == 1 || returnType == 2 else {
       throw BaiduNetdiskUploadError.invalidReturnType(response.returnType)
     }
@@ -172,7 +197,10 @@ struct BaiduNetdiskBackupUploader: Sendable {
     _ chunk: BaiduBackupUploadChunk,
     remotePath: String,
     uploadID: String,
-    accessToken: BaiduAccessToken
+    accessToken: BaiduAccessToken,
+    ordinal: Int,
+    total: Int,
+    progress: @escaping @Sendable (BaiduBackupUploadProgress) async throws -> Void
   ) async throws -> String {
     let stage = BaiduUploadStage.uploadPart(chunk.index)
     let url = try makeURL(
@@ -200,7 +228,19 @@ struct BaiduNetdiskBackupUploader: Sendable {
     request.setValue(String(body.count), forHTTPHeaderField: "Content-Length")
     applyCommonHeaders(to: &request)
 
-    let response: UploadPartResponse = try await send(request, stage: stage)
+    let response: UploadPartResponse = try await send(
+      request,
+      stage: stage,
+      beforeSending: {
+        try await progress(
+          .uploadPartDispatchPermitted(
+            partIndex: chunk.index,
+            ordinal: ordinal,
+            total: total
+          )
+        )
+      }
+    )
     guard let md5 = response.md5, Self.isLowercaseMD5(md5) else {
       throw BaiduNetdiskUploadError.malformedResponse(stage)
     }
@@ -211,7 +251,8 @@ struct BaiduNetdiskBackupUploader: Sendable {
     plan: BaiduBackupUploadPlan,
     uploadID: String,
     uploadedPartMD5s: [String],
-    accessToken: BaiduAccessToken
+    accessToken: BaiduAccessToken,
+    progress: @escaping @Sendable (BaiduBackupUploadProgress) async throws -> Void
   ) async throws -> BaiduRemoteBackup {
     let stage = BaiduUploadStage.create
     let blockList = try encodeJSONString(uploadedPartMD5s, stage: stage)
@@ -232,7 +273,13 @@ struct BaiduNetdiskBackupUploader: Sendable {
       stage: stage
     )
 
-    let response: CreateFileResponse = try await send(request, stage: stage)
+    let response: CreateFileResponse = try await send(
+      request,
+      stage: stage,
+      beforeSending: {
+        try await progress(.createDispatchPermitted)
+      }
+    )
     guard let fsID = response.fsID, fsID > 0,
       let path = response.path,
       let size = response.size,
@@ -279,9 +326,11 @@ struct BaiduNetdiskBackupUploader: Sendable {
 
   private func send<Response: Decodable & BaiduAPIStatusResponse>(
     _ request: URLRequest,
-    stage: BaiduUploadStage
+    stage: BaiduUploadStage,
+    beforeSending: @escaping @Sendable () async throws -> Void
   ) async throws -> Response {
     try Task.checkCancellation()
+    try await beforeSending()
     let response: BaiduHTTPResponse
     do {
       response = try await transport.send(request)

@@ -93,6 +93,12 @@ enum BaiduBackupUploadOutcome: Equatable, Sendable {
   case rapidUpload(BaiduRapidUploadReceipt)
 }
 
+enum BaiduBackupUploadProgress: Equatable, Sendable {
+  case precreateDispatchPermitted
+  case uploadPartDispatchPermitted(partIndex: Int, ordinal: Int, total: Int)
+  case createDispatchPermitted
+}
+
 enum BaiduUploadStage: Equatable, Sendable {
   case precreate
   case uploadPart(Int)

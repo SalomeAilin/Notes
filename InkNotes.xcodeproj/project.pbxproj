@@ -23,6 +23,7 @@
 		D10000000000000000000001 /* BaiduNetdiskBackup.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10000000000000000000001 /* BaiduNetdiskBackup.swift */; };
 		D10000000000000000000002 /* BaiduHTTPTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10000000000000000000002 /* BaiduHTTPTransport.swift */; };
 		D10000000000000000000003 /* BaiduNetdiskBackupUploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10000000000000000000003 /* BaiduNetdiskBackupUploader.swift */; };
+		D10000000000000000000004 /* BaiduBackupUploadCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10000000000000000000004 /* BaiduBackupUploadCoordinator.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -44,6 +45,7 @@
 		C10000000000000000000001 /* BaiduNetdiskBackup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaiduNetdiskBackup.swift; sourceTree = "<group>"; };
 		C10000000000000000000002 /* BaiduHTTPTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaiduHTTPTransport.swift; sourceTree = "<group>"; };
 		C10000000000000000000003 /* BaiduNetdiskBackupUploader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaiduNetdiskBackupUploader.swift; sourceTree = "<group>"; };
+		C10000000000000000000004 /* BaiduBackupUploadCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaiduBackupUploadCoordinator.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -147,6 +149,7 @@
 		B10000000000000000000001 /* Networking */ = {
 			isa = PBXGroup;
 			children = (
+				C10000000000000000000004 /* BaiduBackupUploadCoordinator.swift */,
 				C10000000000000000000002 /* BaiduHTTPTransport.swift */,
 				C10000000000000000000003 /* BaiduNetdiskBackupUploader.swift */,
 			);
@@ -228,6 +231,7 @@
 				D10000000000000000000001 /* BaiduNetdiskBackup.swift in Sources */,
 				D00000000000000000000002 /* LibraryDocument.swift in Sources */,
 				D10000000000000000000002 /* BaiduHTTPTransport.swift in Sources */,
+				D10000000000000000000004 /* BaiduBackupUploadCoordinator.swift in Sources */,
 				D10000000000000000000003 /* BaiduNetdiskBackupUploader.swift in Sources */,
 				D0000000000000000000000B /* BackupArchiveCodec.swift in Sources */,
 				D0000000000000000000000C /* BackupSnapshotRepository.swift in Sources */,
