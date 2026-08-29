@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 
 extension UTType {
   static let notesBackup = UTType(
-    exportedAs: "com.salomeailin.notes.backup",
+    exportedAs: BackupArchiveCodec.uniformTypeIdentifier,
     conformingTo: .data
   )
 }
@@ -218,6 +218,13 @@ struct BackupTransferView: View {
           Text(formatBackupByteCount(preparedBackup.item.data.count))
         }
 
+        Label(
+          "此备份未加密，包含笔记名称和原始笔迹；只存到你信任的位置或应用。",
+          systemImage: "lock.open.trianglebadge.exclamationmark"
+        )
+        .font(.footnote)
+        .foregroundStyle(.orange)
+
         Button {
           isExporterPresented = true
         } label: {
@@ -227,8 +234,8 @@ struct BackupTransferView: View {
 
         ShareLink(
           item: preparedBackup.item,
-          subject: Text("笔记备份"),
-          message: Text("由笔记应用导出的本地备份文件。"),
+          subject: Text("未加密的笔记备份"),
+          message: Text("此文件未加密，包含笔记名称和原始笔迹，请仅保存到信任的位置。"),
           preview: SharePreview(
             "笔记备份",
             image: Image(systemName: "doc.badge.arrow.up")
@@ -307,8 +314,8 @@ struct BackupTransferView: View {
         pageCount: result.pageCount
       )
       notice = BackupTransferNotice(
-        title: "备份已生成",
-        message: "现在可以将它存储到“文件”，或分享到已安装的网盘应用。"
+        title: "未加密备份已生成",
+        message: "此文件包含笔记名称和原始笔迹。请只存储到你信任的“文件”位置或应用。"
       )
     } catch {
       presentError(error, action: "生成备份失败")
@@ -320,7 +327,7 @@ struct BackupTransferView: View {
     case .success:
       notice = BackupTransferNotice(
         title: "备份已导出",
-        message: "备份文件已保存到你选择的位置。"
+        message: "未加密备份已保存到你选择的位置；该位置或第三方服务现在可以访问文件内容。"
       )
     case .failure(let error):
       presentError(error, action: "导出备份失败")
