@@ -17,6 +17,7 @@ export DEVELOPER_DIR="$notes_developer_dir"
 cd "$notes_repository_root"
 
 notes_temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/inknotes-compatibility.XXXXXX")"
+chmod 700 "$notes_temp_dir"
 trap 'rm -rf "$notes_temp_dir"' EXIT
 
 assert_equal() {
@@ -43,14 +44,19 @@ print "[2/4] Source backup identity is stable"
 
 for notes_configuration in Debug Release; do
   notes_settings_json="$notes_temp_dir/$notes_configuration-settings.json"
-  xcodebuild \
+  notes_settings_log="$notes_temp_dir/$notes_configuration-settings.log"
+  if ! xcodebuild \
     -project InkNotes.xcodeproj \
     -scheme InkNotes \
     -configuration "$notes_configuration" \
     -sdk iphoneos \
     -destination 'generic/platform=iOS' \
     -showBuildSettings \
-    -json > "$notes_settings_json"
+    -json > "$notes_settings_json" 2> "$notes_settings_log"
+  then
+    print -u2 "$notes_configuration build-settings check failed; raw diagnostics were withheld and deleted."
+    exit 1
+  fi
 
   notes_bundle_id="$(plutil -extract 0.buildSettings.PRODUCT_BUNDLE_IDENTIFIER raw -o - "$notes_settings_json")"
   assert_equal "$notes_bundle_id" "$notes_expected_bundle_id" "$notes_configuration bundle identifier"
@@ -70,8 +76,7 @@ for notes_configuration in Debug Release; do
     CODE_SIGNING_REQUIRED=NO \
     build > "$notes_build_log" 2>&1
   then
-    print -u2 "$notes_configuration iOS build failed. Last 30 sanitized build lines:"
-    tail -n 30 "$notes_build_log" | sed -E 's/(DEVELOPMENT_TEAM|PROVISIONING_PROFILE_SPECIFIER|CODE_SIGN_IDENTITY) = [^ ]+/\1 = [redacted]/g' >&2
+    print -u2 "$notes_configuration iOS build failed; raw diagnostics were withheld and deleted."
     exit 1
   fi
 

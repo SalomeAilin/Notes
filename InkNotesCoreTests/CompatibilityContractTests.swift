@@ -86,12 +86,18 @@ struct CompatibilityContractTests {
 
     let projectURL = repositoryRoot.appendingPathComponent("InkNotes.xcodeproj/project.pbxproj")
     let projectText = try String(contentsOf: projectURL, encoding: .utf8)
-    let expectedSetting = "PRODUCT_BUNDLE_IDENTIFIER = \(expectedBundleIdentifier);"
-    #expect(projectText.components(separatedBy: expectedSetting).count - 1 == 2)
+    let bundleIdentifierSettings = projectText.split(separator: "\n")
+      .map { $0.trimmingCharacters(in: .whitespaces) }
+      .filter { $0.hasPrefix("PRODUCT_BUNDLE_IDENTIFIER = ") }
+    try #require(!bundleIdentifierSettings.isEmpty)
+    #expect(
+      bundleIdentifierSettings.contains(
+        "PRODUCT_BUNDLE_IDENTIFIER = \(expectedBundleIdentifier);"
+      ))
   }
 
   @Test("The committed v1 archive remains byte-for-byte readable and writable")
-  func goldenVersionOneArchiveRemainsCompatible() throws {
+  func goldenVersionOneArchiveRemainsCompatible() async throws {
     let archiveURL = try fixtureURL(
       named: "reference-v1",
       extension: "notesbackup"
@@ -100,28 +106,39 @@ struct CompatibilityContractTests {
       named: "serialized-empty-v1",
       extension: "pkdrawing"
     )
+    let strokeDrawingURL = try fixtureURL(
+      named: "single-stroke-v1",
+      extension: "pkdrawing"
+    )
     let archive = try Data(contentsOf: archiveURL)
     let serializedDrawing = try Data(contentsOf: drawingURL)
+    let serializedStrokeDrawing = try Data(contentsOf: strokeDrawingURL)
 
-    #expect(archive.count == 1_283)
+    try #require(archive.count == 1_571)
     #expect(
-      sha256Hex(archive) == "b42c7ce5a106f8b7825ecc2f8c080f9b2bf2e27ede091f9b6e80ed5292e36911")
-    #expect(serializedDrawing.count == 42)
+      sha256Hex(archive) == "1441724e2664ee6e77615442e6e95b510aca65472250f751322b3e82356b8a36")
+    try #require(serializedDrawing.count == 42)
     #expect(
       sha256Hex(serializedDrawing)
-        == "6d071041f843471f3a763b2f7051c12544d43228d5eab4716b917c92df408a08")
+        == "2374fdaf833647569ad2ce1e0048c61bc58cb414b8c9f2537ccf1c8c10b374db")
+    try #require(serializedStrokeDrawing.count == 286)
+    #expect(
+      sha256Hex(serializedStrokeDrawing)
+        == "a76b5cc7a9291ab26c19803dc7aad3d045fb636a79b4ce04db374e05a3aad217")
     #expect(Array(archive[0..<8]) == [0x49, 0x4E, 0x4B, 0x4E, 0x4F, 0x54, 0x45, 0x00])
     #expect(readUInt16(archive, at: 8) == 1)
     #expect(readUInt16(archive, at: 10) == 0)
-    #expect(readUInt32(archive, at: 12) == 1_185)
-    #expect(readUInt64(archive, at: 16) == 42)
+    #expect(readUInt32(archive, at: 12) == 1_187)
+    #expect(readUInt64(archive, at: 16) == 328)
     _ = try PKDrawing(data: serializedDrawing)
+    let strokeDrawing = try PKDrawing(data: serializedStrokeDrawing)
+    #expect(strokeDrawing.strokes.count == 1)
 
     let expectedLibrary = makeGoldenLibrary()
     let expectedDrawings = [
       blankPageID: Data(),
       ruledPageID: serializedDrawing,
-      gridPageID: Data(),
+      gridPageID: serializedStrokeDrawing,
     ]
     let decoded = try BackupArchiveCodec.decode(archive)
     #expect(decoded.backupID == backupID)
@@ -140,6 +157,59 @@ struct CompatibilityContractTests {
       sourceBuild: "2"
     )
     #expect(reencoded == archive)
+
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let repository = DrawingRepository(rootURL: rootURL)
+    let currentPage = NotePage(
+      id: UUID(uuidString: "D4000000-0000-0000-0000-000000000001")!,
+      title: "当前页面",
+      createdAt: Date(timeIntervalSince1970: 1_710_000_000),
+      updatedAt: Date(timeIntervalSince1970: 1_710_000_100)
+    )
+    let currentNotebook = Notebook(
+      id: UUID(uuidString: "D4000000-0000-0000-0000-000000000002")!,
+      title: "当前笔记本",
+      pages: [currentPage],
+      createdAt: currentPage.createdAt,
+      updatedAt: currentPage.updatedAt
+    )
+    let currentLibrary = LibraryDocument(notebooks: [currentNotebook])
+    let currentDrawing = PKDrawing().dataRepresentation()
+
+    let preview = try await repository.inspectBackup(archive)
+    #expect(preview.notebookCount == 1)
+    #expect(preview.pageCount == 3)
+    let restoreResult = try await repository.restoreBackupAsCopy(
+      archive,
+      currentLibrary: currentLibrary,
+      currentDrawingOverrides: [currentPage.id: currentDrawing],
+      importedAt: Date(timeIntervalSince1970: 1_720_000_000)
+    )
+    #expect(restoreResult.importedNotebookCount == 1)
+    #expect(restoreResult.importedPageCount == 3)
+    #expect(restoreResult.selectedDrawingData.isEmpty)
+    #expect(restoreResult.library.notebooks.count == 2)
+    #expect(restoreResult.library.notebooks.first == currentNotebook)
+    let restoredNotebook = try #require(restoreResult.library.notebooks.last)
+    #expect(restoredNotebook.id != notebookID)
+    #expect(restoredNotebook.title == "历史备份样本（导入）")
+    #expect(restoredNotebook.pages.map(\.title) == ["空白页", "横线页", "方格页"])
+    #expect(restoredNotebook.pages.map(\.background) == [.blank, .ruled, .grid])
+    let sourcePageIDs = Set([blankPageID, ruledPageID, gridPageID])
+    #expect(Set(restoredNotebook.pages.map(\.id)).isDisjoint(with: sourcePageIDs))
+    let restoredStrokePage = try #require(restoredNotebook.pages.last)
+    let restoredStrokeData = try #require(
+      try await repository.loadDrawing(pageID: restoredStrokePage.id)
+    )
+    let persistedCurrentDrawing = try #require(
+      try await repository.loadDrawing(pageID: currentPage.id)
+    )
+    #expect(persistedCurrentDrawing == currentDrawing)
+    #expect(restoredStrokeData == serializedStrokeDrawing)
+    #expect(try PKDrawing(data: restoredStrokeData).strokes.count == 1)
   }
 
   private func makeGoldenLibrary() -> LibraryDocument {
