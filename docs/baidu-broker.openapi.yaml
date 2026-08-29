@@ -1,0 +1,647 @@
+openapi: 3.1.0
+info:
+  title: Notes Baidu Credential Broker
+  version: 0.1.0-draft
+  description: |
+    Design-only contract for the credential plane of Baidu Netdisk backup.
+    The broker never accepts or proxies note backup bytes. The iPad transfers
+    validated .notesbackup files directly to Baidu over HTTPS.
+    Consequently, the broker cannot enforce the client's Backups subdirectory,
+    file naming, archive validation, or upload idempotency. Baidu's application
+    directory is the upstream authorization boundary; finer controls live in
+    the normal client and remain bypassable by a modified client.
+    No endpoint in this document is implemented or deployed yet.
+  x-status: design-draft
+  x-reviewed-at: '2026-08-30'
+  x-install-session-policy:
+    sessionLifetimeHours: 24
+    orphanConnectionRetentionDays: 90
+    orphanCleanup: Delete the install record and encrypted Baidu refresh token after 90 days without a successful rotation or recovery.
+servers:
+  - url: https://broker.example.invalid
+    description: Placeholder only; replace after a controlled deployment exists.
+tags:
+  - name: Installation
+    description: App Attest enrollment and install-session lifecycle.
+  - name: OAuth
+    description: One-time authorization transactions.
+  - name: Credential
+    description: Provider access-token delivery and broker-side connection removal.
+paths:
+  /v1/installations/enrollment-challenges:
+    post:
+      tags: [Installation]
+      summary: Issue a one-time App Attest enrollment challenge
+      operationId: createInstallationEnrollmentChallenge
+      security: []
+      responses:
+        '201':
+          description: Short-lived challenge created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttestChallenge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /v1/installations:
+    post:
+      tags: [Installation]
+      summary: Enroll one attested app installation
+      description: |
+        The server validates the one-time challenge and Apple App Attest object
+        against the fixed App ID, environment, and expected client-data hash.
+        App Attest failure or unsupported status does not fall back to a shared
+        embedded secret; Baidu direct connection remains disabled.
+      operationId: enrollInstallation
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstallationEnrollmentRequest'
+      responses:
+        '201':
+          description: Installation enrolled and session issued.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              example: no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstallSessionResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /v1/installations/session/rotation-challenges:
+    post:
+      tags: [Installation]
+      summary: Issue a one-time session-rotation challenge
+      operationId: createInstallSessionRotationChallenge
+      security:
+        - installSession: []
+      responses:
+        '201':
+          description: Short-lived challenge created for the session's attested key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttestChallenge'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /v1/installations/session/recovery-challenges:
+    post:
+      tags: [Installation]
+      summary: Issue a one-time challenge for an expired install session
+      description: |
+        Used only when the bearer session has expired but the same App Attest key
+        and opaque installation identifier remain in this device's Keychain. The
+        response is uniform so it does not disclose whether an identifier exists.
+      operationId: createInstallSessionRecoveryChallenge
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstallationRecoveryChallengeRequest'
+      responses:
+        '201':
+          description: Short-lived recovery challenge or indistinguishable non-enumerating challenge created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttestChallenge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /v1/installations/session/recover:
+    post:
+      tags: [Installation]
+      summary: Recover an expired session with the same enrolled App Attest key
+      description: |
+        Verifies the recovery challenge and request assertion with the public key
+        and monotonic counter stored for the installation. Recovery is unavailable
+        after the 90-day orphan TTL, reinstallation, device migration, or Keychain
+        loss; those cases require fresh enrollment and Baidu authorization.
+      operationId: recoverInstallSession
+      parameters:
+        - $ref: '#/components/parameters/AttestedRequestID'
+      security:
+        - appAttestAssertion: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionRecoveryRequest'
+      responses:
+        '200':
+          description: Replacement session issued for the existing installation.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              example: no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstallSessionResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /v1/installations/session:
+    put:
+      tags: [Installation]
+      summary: Rotate the current install session
+      description: Atomically invalidates the old session after verifying an assertion from the enrolled App Attest key.
+      operationId: rotateInstallSession
+      parameters:
+        - $ref: '#/components/parameters/AttestedRequestID'
+      security:
+        - installSession: []
+          appAttestAssertion: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionRotationRequest'
+      responses:
+        '200':
+          description: Replacement session issued; the previous session is invalid.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              example: no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstallSessionResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    delete:
+      tags: [Installation]
+      summary: Revoke the current installation and its Baidu connection
+      description: |
+        Revokes the install session and deletes the broker's encrypted refresh
+        token. Reinstallation, device migration, or Keychain loss requires new
+        App Attest enrollment and a new Baidu OAuth authorization; no prior
+        connection is recovered. A previously issued Baidu access token may
+        remain valid until provider expiry if no provider revocation API exists.
+      operationId: revokeInstallation
+      parameters:
+        - $ref: '#/components/parameters/AttestedRequestID'
+      security:
+        - installSession: []
+          appAttestAssertion: []
+      responses:
+        '204':
+          description: Broker installation and connection state removed; provider access-token expiry is not accelerated by this response.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v1/baidu/oauth/start:
+    post:
+      tags: [OAuth]
+      summary: Start a one-time Baidu authorization transaction
+      operationId: startBaiduOAuth
+      parameters:
+        - $ref: '#/components/parameters/AttestedRequestID'
+      security:
+        - installSession: []
+          appAttestAssertion: []
+      responses:
+        '201':
+          description: Transaction created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthStartResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /v1/baidu/oauth/callback:
+    get:
+      tags: [OAuth]
+      summary: Receive Baidu's authorization callback
+      description: |
+        This is the exact HTTPS redirect URI registered with Baidu. The broker
+        validates the state, expiry, one-time status, and install binding before
+        exchanging the code. Exactly one of code or error must be present. Query
+        strings and upstream token responses must not be logged. The response
+        contains no Baidu token. Both the Baidu authorization origin and the 303
+        app-return target are fixed server-side allow-list values.
+      operationId: receiveBaiduOAuthCallback
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: error
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '303':
+          description: Redirect to the fixed app callback with only the transaction identifier and outcome.
+          headers:
+            Location:
+              schema:
+                type: string
+              description: Fixed callback; never includes a Baidu token or authorization code.
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '502':
+          description: Baidu rejected or failed the code exchange; the transaction is consumed and the app must restart authorization.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+  /v1/baidu/oauth/complete:
+    post:
+      tags: [OAuth]
+      summary: Complete an authorization transaction
+      operationId: completeBaiduOAuth
+      parameters:
+        - $ref: '#/components/parameters/AttestedRequestID'
+      security:
+        - installSession: []
+          appAttestAssertion: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [transactionID]
+              properties:
+                transactionID:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: Current connection result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/baidu/credential:
+    post:
+      tags: [Credential]
+      summary: Obtain a current Baidu access token
+      description: |
+        Refresh is serialized per connection and the rotated refresh token is
+        atomically committed before success. Refresh tokens are never returned.
+        The access token is sensitive: the app stores it only in a Keychain item
+        using kSecAttrAccessibleWhenUnlockedThisDeviceOnly and removes it on
+        expiry or disconnect. Response bodies must not be logged.
+      operationId: issueBaiduCredential
+      parameters:
+        - $ref: '#/components/parameters/AttestedRequestID'
+      security:
+        - installSession: []
+          appAttestAssertion: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [purpose]
+              properties:
+                purpose:
+                  type: string
+                  enum: [list, upload, download]
+                  description: Audit intent only; it does not attenuate the scope of Baidu's access token.
+      responses:
+        '200':
+          description: Current provider data-plane credential; its lifetime is controlled by Baidu.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              example: no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessCredential'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Reauthorization is required; the broker does not retry a failed old refresh token.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /v1/baidu/connection:
+    get:
+      tags: [Credential]
+      summary: Read connection state without returning any token
+      operationId: getBaiduConnection
+      security:
+        - installSession: []
+      responses:
+        '200':
+          description: Current connection state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    delete:
+      tags: [Credential]
+      summary: Disconnect this installation from Baidu
+      description: |
+        Deletes the broker's encrypted refresh token and connection binding; the
+        app also deletes its Keychain access token. This does not promise immediate
+        provider-wide revocation: a previously issued Baidu access token may remain
+        valid until its natural expiry if no provider revocation API is available.
+      operationId: deleteBaiduConnection
+      parameters:
+        - $ref: '#/components/parameters/AttestedRequestID'
+      security:
+        - installSession: []
+          appAttestAssertion: []
+      responses:
+        '204':
+          description: Broker connection removed; operation is idempotent. Residual provider access-token validity is unchanged.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+components:
+  parameters:
+    AttestedRequestID:
+      name: X-Attested-Request-ID
+      in: header
+      required: true
+      description: Unique UUID included in the App Attest client-data hash; replay is rejected.
+      schema:
+        type: string
+        format: uuid
+  securitySchemes:
+    installSession:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque-install-session
+      description: |
+        Opaque, short-lived, revocable session bound server-side to one enrolled
+        App Attest key. Stored in a kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        Keychain item; never synchronized or restored to another device.
+    appAttestAssertion:
+      type: apiKey
+      in: header
+      name: X-App-Attest-Assertion
+      description: |
+        Base64 assertion from the enrolled App Attest key identified by the
+        install session, or by installationID during expired-session recovery.
+        The server persists the enrolled keyID, verified public key, monotonic
+        signature counter, and required Apple verification metadata. The server
+        tracks the counter and rejects replay.
+      x-client-data-canonicalization: |
+        Version NOTES-APP-ATTEST-REQUEST-V1. Build the exact UTF-8 byte sequence:
+        "NOTES-APP-ATTEST-REQUEST-V1\n" +
+        UPPERCASE_ASCII_HTTP_METHOD + "\n" +
+        EXACT_DECLARED_PATH + "\n" +
+        "\n" +
+        LOWERCASE_HEX_SHA256_OF_EXACT_TRANSMITTED_BODY_BYTES + "\n" +
+        LOWERCASE_CANONICAL_UUID_FROM_X_ATTESTED_REQUEST_ID + "\n".
+        The fourth line is an empty query string: attested endpoints reject any
+        query component. EXACT_DECLARED_PATH must match one path in this contract,
+        with no trailing slash, dot segment, or alternate percent encoding. For a
+        bodyless request use SHA-256 of zero bytes. Pass SHA-256 of this complete
+        byte sequence as App Attest clientDataHash.
+  schemas:
+    AttestChallenge:
+      type: object
+      additionalProperties: false
+      required: [challengeID, challenge, purpose, expiresAt]
+      properties:
+        challengeID:
+          type: string
+          format: uuid
+        challenge:
+          type: string
+          contentEncoding: base64
+          minLength: 44
+          maxLength: 256
+          description: Base64 of at least 32 cryptographically random bytes; decode before hashing.
+        purpose:
+          type: string
+          enum: [enroll, rotate, recover]
+        expiresAt:
+          type: string
+          format: date-time
+    InstallationEnrollmentRequest:
+      type: object
+      additionalProperties: false
+      required: [challengeID, keyID, attestationObject]
+      properties:
+        challengeID:
+          type: string
+          format: uuid
+        keyID:
+          type: string
+          minLength: 16
+          maxLength: 512
+        attestationObject:
+          type: string
+          contentEncoding: base64
+          minLength: 64
+          maxLength: 16384
+          description: Unmodified App Attest object encoded as Base64.
+      x-enrollment-client-data-canonicalization: |
+        Decode the challenge property to raw bytes. Build:
+        UTF8("NOTES-APP-ATTEST-ENROLL-V1\n") +
+        UTF8(lowercase canonical challengeID UUID) + 0x0A +
+        raw challenge bytes.
+        Pass SHA-256 of those exact bytes as the App Attest clientDataHash.
+        The server performs the same construction and consumes the challenge once.
+    InstallationRecoveryChallengeRequest:
+      type: object
+      additionalProperties: false
+      required: [installationID]
+      properties:
+        installationID:
+          type: string
+          format: uuid
+          description: Opaque identifier stored with the App Attest key on this device only.
+    InstallSessionResponse:
+      type: object
+      additionalProperties: false
+      required: [installationID, installSession, expiresAt, recoveryDeadline]
+      properties:
+        installationID:
+          type: string
+          format: uuid
+          description: Store with the attested key identifier in a ThisDeviceOnly Keychain item.
+        installSession:
+          type: string
+          minLength: 32
+          x-sensitive: true
+          description: Store only in a kSecAttrAccessibleWhenUnlockedThisDeviceOnly Keychain item.
+        expiresAt:
+          type: string
+          format: date-time
+        recoveryDeadline:
+          type: string
+          format: date-time
+          description: After this orphan TTL, the broker deletes the installation and encrypted refresh token.
+    SessionRotationRequest:
+      type: object
+      additionalProperties: false
+      required: [challengeID]
+      properties:
+        challengeID:
+          type: string
+          format: uuid
+    SessionRecoveryRequest:
+      type: object
+      additionalProperties: false
+      required: [installationID, challengeID]
+      properties:
+        installationID:
+          type: string
+          format: uuid
+        challengeID:
+          type: string
+          format: uuid
+    OAuthStartResponse:
+      type: object
+      additionalProperties: false
+      required: [transactionID, authorizationURL, expiresAt]
+      properties:
+        transactionID:
+          type: string
+          format: uuid
+        authorizationURL:
+          type: string
+          format: uri
+          description: Server-built URL on an allow-listed Baidu HTTPS origin; contains no SecretKey and accepts no client-supplied redirect URI.
+        expiresAt:
+          type: string
+          format: date-time
+    ConnectionStatus:
+      type: object
+      additionalProperties: false
+      required: [connected, reauthorizationRequired]
+      properties:
+        connected:
+          type: boolean
+        reauthorizationRequired:
+          type: boolean
+        accessTokenExpiresAt:
+          type: [string, 'null']
+          format: date-time
+        providerDisplayName:
+          type: [string, 'null']
+          maxLength: 80
+          description: Optional, sanitized display label; never an account credential.
+    AccessCredential:
+      type: object
+      additionalProperties: false
+      required: [accessToken, expiresAt, allowedRoot]
+      properties:
+        accessToken:
+          type: string
+          x-sensitive: true
+          description: Sensitive bearer token; kSecAttrAccessibleWhenUnlockedThisDeviceOnly Keychain only, no logs, no app backup.
+        expiresAt:
+          type: string
+          format: date-time
+        allowedRoot:
+          type: string
+          pattern: '^/apps/[^/]+/Backups$'
+          x-enforcement: client-policy-only
+          description: |
+            Normal-client backup path selected at provider registration time.
+            This response does not confer or enforce a narrower provider scope;
+            a modified direct-transfer client may bypass the Backups child path
+            within whatever application directory Baidu authorizes.
+    Problem:
+      type: object
+      additionalProperties: false
+      required: [type, title, status, requestID]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        detail:
+          type: string
+          maxLength: 300
+        requestID:
+          type: string
+          format: uuid
+  responses:
+    InvalidRequest:
+      description: Invalid, expired, or replayed request.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unauthorized:
+      description: Required install session and/or App Attest assertion is missing, invalid, expired, replayed, or revoked.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: Resource was not found without disclosing another installation's state.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Conflict:
+      description: Transaction or connection state does not permit this operation.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    RateLimited:
+      description: Per-installation and global rate limit reached.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'

@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Notes 产品命名与百度网盘接入决策</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17211b;
+      --muted: #5c6a61;
+      --paper: #f7f5ef;
+      --card: #fffdf8;
+      --line: #d9ded8;
+      --green: #2d6a4f;
+      --green-soft: #e8f1ec;
+      --amber: #8a5b16;
+      --amber-soft: #fff2d8;
+      --red: #9f2f2f;
+      --red-soft: #fae7e4;
+      --blue: #245a78;
+      --blue-soft: #e5f1f7;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      line-height: 1.72;
+    }
+    main { width: min(1080px, calc(100% - 32px)); margin: 28px auto 64px; }
+    header, section {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 24px 28px;
+      margin-bottom: 18px;
+      box-shadow: 0 8px 28px rgba(23, 33, 27, 0.045);
+    }
+    h1 { font-size: clamp(28px, 5vw, 42px); line-height: 1.18; margin: 8px 0 12px; letter-spacing: -0.03em; }
+    h2 { margin: 0 0 14px; font-size: 23px; }
+    h3 { margin: 22px 0 8px; font-size: 18px; }
+    p { margin: 8px 0 12px; }
+    a { color: var(--blue); text-underline-offset: 3px; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #eef0ec; border-radius: 5px; padding: 1px 5px; }
+    .eyebrow { color: var(--green); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; font-size: 12px; }
+    .lede { max-width: 820px; font-size: 18px; color: #33433a; }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+    .chip { display: inline-flex; align-items: center; border-radius: 999px; padding: 5px 10px; background: var(--green-soft); color: var(--green); font-size: 13px; font-weight: 650; }
+    .decision { border-left: 5px solid var(--green); background: var(--green-soft); padding: 14px 16px; border-radius: 10px; margin: 12px 0; }
+    .warning { border-left-color: var(--red); background: var(--red-soft); }
+    .notice { border-left-color: var(--amber); background: var(--amber-soft); }
+    .info { border-left-color: var(--blue); background: var(--blue-soft); }
+    table { width: 100%; border-collapse: collapse; margin: 12px 0 16px; font-size: 14px; }
+    th, td { padding: 11px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+    th { background: #f1f3ee; font-weight: 700; }
+    tbody tr:last-child td { border-bottom: 0; }
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; }
+    .table-wrap table { margin: 0; min-width: 760px; }
+    .risk-low { color: var(--green); font-weight: 700; }
+    .risk-mid { color: var(--amber); font-weight: 700; }
+    .risk-high { color: var(--red); font-weight: 700; }
+    .flow { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: 10px; align-items: stretch; margin: 18px 0; }
+    .flow div { border: 1px solid var(--line); background: #fafbf8; border-radius: 12px; padding: 12px; min-height: 98px; }
+    .flow b { display: block; color: var(--green); margin-bottom: 4px; }
+    ul, ol { padding-left: 23px; }
+    li { margin: 5px 0; }
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .mini { border: 1px solid var(--line); border-radius: 12px; padding: 15px; background: #fafbf8; }
+    .mini h3 { margin-top: 0; }
+    .source-list { font-size: 14px; color: var(--muted); }
+    footer { color: var(--muted); font-size: 13px; text-align: center; padding-top: 8px; }
+    @media (max-width: 800px) {
+      header, section { padding: 20px; }
+      .flow, .two-col { grid-template-columns: 1fr; }
+    }
+    @media print {
+      body { background: white; }
+      main { width: 100%; margin: 0; }
+      header, section { box-shadow: none; break-inside: avoid; }
+      a { color: inherit; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">Notes · 决策材料</div>
+    <h1>产品命名与百度网盘接入</h1>
+    <p class="lede">结论先行：“墨记”只能继续作为未公开开发包的临时名，不适合公开测试或上架；百度网盘先走系统文件通道，直连版本再引入只保管凭据的小型 HTTPS 服务。</p>
+    <div class="meta">
+      <span class="chip">快照日期：2026-08-30</span>
+      <span class="chip">基线：0.2.0 (2)</span>
+      <span class="chip">iPadOS 17+</span>
+      <span class="chip">决策分支：docs/product-decisions</span>
+    </div>
+  </header>
+
+  <section>
+    <h2>1. “墨记”为什么有风险</h2>
+    <div class="decision warning">
+      <strong>这是已经确认的同类市场重名，不只是抽象的法律担忧。</strong> 中国区 App Store 已有“墨记-精美日记本·笔记本”，并有大量公开评分；另有“Ink Note - 墨记”和“留白·墨记”。因此继续公开使用会造成来源混淆、商店命名冲突和潜在商标争议。
+    </div>
+    <p>这个名称最初只是开发阶段对“墨水书写＋记录”的直观概括，没有经过市场清查，不代表正式品牌决定。当前仓库 README 已把它标注为临时显示名，Bundle ID 也刻意保持为技术身份。</p>
+    <p>公开证据：<a href="https://apps.apple.com/cn/app/%E5%A2%A8%E8%AE%B0-%E7%B2%BE%E7%BE%8E%E6%97%A5%E8%AE%B0%E6%9C%AC-%E7%AC%94%E8%AE%B0%E6%9C%AC/id1221871966">App Store：墨记-精美日记本·笔记本</a>、<a href="https://apps.apple.com/cn/app/ink-note-%E5%A2%A8%E8%AE%B0/id6747617800">App Store：Ink Note - 墨记</a>、<a href="https://apps.apple.com/cn/app/%E7%95%99%E7%99%BD-%E5%A2%A8%E8%AE%B0/id6758817898">App Store：留白·墨记</a>。</p>
+    <div class="decision notice">
+      公开网页和应用商店筛查只能排除明显冲突，不能替代商标近似检索或法律意见。正式采用前仍需在<a href="https://wcjs.sbj.cnipa.gov.cn/">国家知识产权局商标网上查询</a>中按相关类别做文字、读音和近似查询；该官方系统本身也提示数据可能滞后、结果仅供参考。
+    </div>
+  </section>
+
+  <section>
+    <h2>2. 候选名称初筛</h2>
+    <p>本轮以中文公开网页、中国区 App Store 索引和 GitHub 公开索引做精确词检索。风险分级只表示“是否发现明显同名/近名”，不是商标可注册性结论。</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>候选</th><th>产品含义</th><th>公开初筛</th><th>本轮索引结果</th><th>建议</th></tr></thead>
+        <tbody>
+          <tr><td><strong>纸上屿</strong><br><small>ZhiShangYu</small></td><td>每本笔记是一座纸上的私人小岛</td><td>本轮未检出同名笔记 App 或同名 GitHub 产品；三音节稍长</td><td class="risk-low">未见明显同名</td><td><strong>优先进入正式检索</strong></td></tr>
+          <tr><td><strong>字成林</strong><br><small>ZiChengLin</small></td><td>零散书写逐渐长成知识体系</td><td>本轮未检出同名笔记 App 或同名 GitHub 产品；语义偏“文字”</td><td class="risk-low">未见明显同名</td><td><strong>优先进入正式检索</strong></td></tr>
+          <tr><td><strong>笔澄</strong><br><small>BiCheng</small></td><td>落笔之后思路澄明</td><td>本轮未检出同名笔记 App；近音“必成”，也可能像人名或机构名</td><td class="risk-mid">需扩大检索</td><td>保留观察</td></tr>
+          <tr><td><strong>写隅</strong><br><small>XieYu</small></td><td>为书写与思考留一个安静角落</td><td>未检出精确同名 App，但“心隅”“物隅”等相邻命名已在同类应用中使用</td><td class="risk-mid">近名较多</td><td>保留观察</td></tr>
+          <tr><td><strong>素页</strong><br><small>SuYe</small></td><td>安静、克制、离线的空白页面</td><td>出现“素页归行”Android 阅读应用；“素”也可能被理解为功能简单</td><td class="risk-mid">发现近名</td><td>暂不优先</td></tr>
+          <tr><td><strong>方寸页</strong><br><small>FangCunYe</small></td><td>在有限屏幕里安放个人心智空间</td><td>“方寸”广泛用于出版、AI 与其他数字产品，近名范围较拥挤</td><td class="risk-mid">词根拥挤</td><td>淘汰</td></tr>
+          <tr><td><strong>思序</strong><br><small>SiXu</small></td><td>思考形成次序</td><td>中国区 App Store 已有精确同名的记录/任务管理 App</td><td class="risk-high">发现精确同名</td><td>淘汰</td></tr>
+          <tr><td><strong>页栖</strong><br><small>YeQi</small></td><td>页面安稳栖居</td><td>Chrome 应用商店已有精确同名“Tabstead · 页栖”</td><td class="risk-high">发现精确同名</td><td>淘汰</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="decision info"><strong>当前仅建议进入下一轮检索：</strong>“纸上屿”和“字成林”。“未见明显同名”不等于法律风险低；两者必须完成 CNIPA 近似检索、App Store Connect 名称可用性检查，以及域名/社交账号检查后才能定案。</div>
+  </section>
+
+  <section>
+    <h2>3. 更名不会破坏现有笔记的边界</h2>
+    <div class="two-col">
+      <div class="mini">
+        <h3>可以改：展示层</h3>
+        <ul>
+          <li><code>CFBundleDisplayName</code> 主屏名称</li>
+          <li>App 图标、README、商店文案</li>
+          <li>备份类型的可见描述与文件名前缀</li>
+          <li>正式名称确定后，百度授权页展示文案</li>
+        </ul>
+      </div>
+      <div class="mini">
+        <h3>首轮必须保持：兼容身份</h3>
+        <ul>
+          <li>Bundle ID：<code>com.salomeailin.InkNotes</code></li>
+          <li>本地目录：<code>Application Support/InkNotes</code></li>
+          <li>备份 UTI、<code>.notesbackup</code>、MIME 与 <code>INKNOTE\0</code></li>
+          <li><code>formatVersion = 1</code> 与 <code>schemaVersion = 1</code></li>
+        </ul>
+      </div>
+    </div>
+    <p>只改显示名称不会形成新的沙盒；改 Bundle ID 则会成为另一款 App，旧笔记会留在旧沙盒里，新 App 看起来像空库。改本地目录也会形成两套数据。因此首次品牌更名不重命名 Xcode project、target、scheme、Swift 模块和源目录。</p>
+    <h3>安全提交顺序</h3>
+    <ol>
+      <li><code>test(compat): pin persisted app and backup identities</code>：加入更名前的黄金备份样本，并锁定 Bundle ID、目录、UTI、扩展名和 magic。</li>
+      <li><code>feat(brand): update user-facing app identity</code>：只改显示层，版本建议递增到 <code>0.2.1 (3)</code>。</li>
+      <li><code>docs(brand): document rename compatibility contract</code>：记录兼容边界与覆盖安装验收。</li>
+    </ol>
+    <p>真机覆盖安装前必须先从 0.2.0 导出一份可识别的备份，保留旧 App、不卸载；覆盖后检查旧笔记、书写、重启读取和旧备份恢复。失败时用 <code>git revert</code> 和更高 build 覆盖回滚，不重写已推送历史。</p>
+  </section>
+
+  <section>
+    <h2>4. 百度网盘：两阶段接入</h2>
+    <h3>阶段 A：系统文件通道（现有 0.2.0 基础）</h3>
+    <p>应用已经能够通过系统文件导出、导入和分享 <code>.notesbackup</code>。如果百度网盘 App 在 iPadOS 27 上提供可用的系统文件位置，用户即可在导出时选百度网盘、恢复时从百度网盘选择文件。这一路径不需要 AppKey、SecretKey、OAuth 或自建服务，是当前优先真机验收项。</p>
+    <div class="decision notice">系统文件通道是否在当前百度网盘版本和 iPadOS 27 上完整可用，必须真机确认；代码具备入口不等于第三方文件提供器已经通过运行验收。</div>
+
+    <h3>阶段 B：应用内百度直连</h3>
+    <div class="flow" aria-label="百度直连数据流">
+      <div><b>1. iPad</b>以已证明的安装会话打开系统网页认证</div>
+      <div><b>2. Broker</b>固定回调地址、校验 state，再用 SecretKey 换 token</div>
+      <div><b>3. Keychain</b>iPad 仅暂存 Access Token，不保存 Refresh Token</div>
+      <div><b>4. 百度网盘</b>备份文件由 iPad 直接上传至应用目录</div>
+      <div><b>5. 恢复</b>下载后校验大小、SHA-256 和 PencilKit，再恢复为副本</div>
+    </div>
+    <p>百度官方的授权码流程要求使用 SecretKey 换 token，并明确适合有 Server 端的应用；当前公开文档没有列出 PKCE，因此不能把 SecretKey 放进可被提取的 iPad App。无服务端的简化模式无法刷新 token，不适合作为长期备份连接。参考：<a href="https://pan.baidu.com/union/doc/使用入门/接入授权/授权码模式/">授权码模式</a>、<a href="https://pan.baidu.com/union/doc/使用入门/接入授权/简化模式接入/">简化模式</a>、<a href="https://openauth.baidu.com/doc/ios.html">iOS OAuth 接入</a>。</p>
+    <div class="decision info">
+      <strong>安装会话不是硬编码口令。</strong> 公开版本由服务端发挑战，iPad 使用 Apple App Attest 生成并证明每安装实例的密钥，服务端验证后才签发短期、可轮换、可吊销的安装会话；敏感请求再附带由同一密钥生成的 assertion。会话自然过期后，同一已登记密钥可凭新挑战恢复；连续 90 天没有成功恢复则删除孤立安装记录和 Refresh Token。重装、设备迁移或 Keychain 丢失会同时失去原密钥和安装标识，不能恢复旧连接，必须重新登记并重新授权百度。App Attest 不受支持或验证失败时，禁用直连，不静默降级为共享密钥。参考 Apple 的<a href="https://developer.apple.com/documentation/DeviceCheck/establishing-your-app-s-integrity">应用完整性指南</a>。
+    </div>
+    <div class="two-col">
+      <div class="mini">
+        <h3>Broker 只保管</h3>
+        <ul>
+          <li>百度 SecretKey</li>
+          <li>百度 Refresh Token</li>
+          <li>服务端加密主密钥、会话签名密钥</li>
+          <li>App Attest keyID、公钥、签名计数器与必要验证元数据</li>
+        </ul>
+      </div>
+      <div class="mini">
+        <h3>Broker 不接触</h3>
+        <ul>
+          <li>手写内容和完整 <code>.notesbackup</code></li>
+          <li>笔记标题、页面预览和 PencilKit 数据</li>
+          <li>百度账号密码</li>
+          <li>客户端日志中的 token、授权码或下载链接</li>
+        </ul>
+      </div>
+    </div>
+    <p>首版直连只允许用户主动上传不可变备份、列出备份、主动下载并“恢复为副本”；不做自动覆盖、远端删除、笔记级双向同步或冲突合并。百度把应用权限限制在 <code>/apps/{正式应用名}</code>；客户端再把产品路径固定为其下的 <code>Backups</code>。由于文件直传，Broker 看不到百度请求，不能强制客户端的子目录规则；被篡改的客户端仍可能在百度授予的应用目录范围内滥用 Access Token，这是直传方案的残余风险。</p>
+    <p>百度对新应用的目录、权限和配额有限制。未提交或未通过上线审核时仅用于开发者测试，不能直接发布线上使用；公开发布必须完成审核。参考<a href="https://pan.baidu.com/union/doc/使用入门/创建应用/">创建应用</a>、<a href="https://pan.baidu.com/union/doc/使用入门/权限与配额/">权限与配额</a>、<a href="https://pan.baidu.com/union/doc/使用入门/应用上线审核/应用上线审核试运行/">上线审核</a>。</p>
+  </section>
+
+  <section>
+    <h2>5. 百度直连的安全与兼容门禁</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>风险</th><th>控制</th><th>验收证据</th></tr></thead>
+        <tbody>
+          <tr><td>OAuth CSRF / code 注入</td><td>高熵 state、绑定安装会话、精确 redirect URI、一次性事务与短时限</td><td>错误 state、过期 code、重放均被拒绝</td></tr>
+          <tr><td>伪造或遗失安装会话</td><td>App Attest 挑战、服务端保存 keyID/公钥/计数器、版本化字节级请求哈希、密钥绑定、轮换与吊销；过期会话可由同一密钥恢复，孤立连接 90 天后清理</td><td>伪造/过期 attestation、assertion 重放、错误哈希、重装后的旧会话均被拒绝；TTL 清理删除 Refresh Token</td></tr>
+          <tr><td>Refresh Token 并发失效</td><td>每个连接单飞刷新；新 token 原子替换；失败后停止循环重试</td><td>并发刷新测试只有一次上游请求</td></tr>
+          <tr><td>凭据泄漏</td><td>SecretKey/Refresh Token 只在服务端加密保存；Access Token 用 <code>kSecAttrAccessibleWhenUnlockedThisDeviceOnly</code> 存入 Keychain；URL、Header、302 Location 全面脱敏</td><td>设备迁移不带走 token；Git、IPA、broker 日志、崩溃报告秘密扫描</td></tr>
+          <tr><td>被篡改客户端滥用路径</td><td>百度应用目录是上游权限边界；正常客户端固定 <code>Backups</code> 子目录并拒绝分隔符，但 Broker 无法强制直传请求</td><td>客户端路径测试通过，并在风险说明中保留该残余风险</td></tr>
+          <tr><td>损坏或恶意备份</td><td>临时文件、32 MiB 总上限、8 MiB 单页上限、SHA-256、结构与 PencilKit 校验</td><td>损坏、超限、截断文件不能进入恢复</td></tr>
+          <tr><td>中断与重复上传</td><td>分片状态、幂等 ID、仅在 create 完成后展示，默认远端重命名</td><td>断网、锁屏、前后台和重复提交测试</td></tr>
+          <tr><td>云端明文泄露</td><td>当前 <code>.notesbackup</code> 未加密；阶段 A 每次导出明确提醒，阶段 B 上线前必须选定并验证客户端加密/恢复密钥方案，或要求用户逐次确认剩余风险</td><td>账号失陷威胁测试、跨设备恢复演练、密钥丢失演练与用户确认文案</td></tr>
+          <tr><td>断开后 Access Token 残留</td><td>立即删除 Broker 的 Refresh Token 与本机 Keychain 项；若百度没有可用撤销接口，已签发 Access Token 可能持续到自然过期</td><td>界面明确残余有效期；再次调用 Broker 取凭据必须失败</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>百度公开的 iOS OAuth SDK 最新说明只到 Xcode 26 / iOS 26，没有 iPadOS 27 兼容承诺；网盘 SDK 页面也没有 iPadOS 27 的完整验证信息。因此首版建议使用系统网页认证与 URLSession 调官方 REST API，不引入闭源 SDK。参考：<a href="https://openauth.baidu.com/doc/appendix-sdk.html">OAuth SDK 版本页</a>、<a href="https://pan.baidu.com/union/doc/sdk/ios/sdk使用入门/">网盘 iOS SDK</a>。</p>
+    <p><strong>当前 iPadOS 27 证据仅到已签名构建：</strong>设备已配对且开发者模式开启，但可信 tunnel 仍不可用；安装、启动、Apple Pencil、百度 File Provider 和直连均未通过真机验收。后续门禁包括授权/取消/回跳/重连、4 MiB 分片和 32 MiB 边界、前后台/断网/锁屏续传、上传后列表和下载、SHA-256 校验与副本恢复、token 临近过期并发刷新，以及秘密扫描。未完成前不能称为“iPadOS 27 兼容”或“百度网盘直连可用”。</p>
+  </section>
+
+  <section>
+    <h2>6. 现在需要的一个决定</h2>
+    <div class="decision"><strong>请选择更名方向：</strong>“纸上屿”或“字成林”。确认后再做 CNIPA 近似检索和 App Store Connect 名称检查，通过后才提交显示层更名；在此之前不以“墨记”创建百度开放平台应用。</div>
+    <p>不需要等待名称决定的工作可以继续：在 iPad 重新连通后，先完成 0.2.0 的安装、Apple Pencil 书写、备份导出/恢复，以及百度网盘系统文件位置测试。</p>
+  </section>
+
+  <section class="source-list">
+    <h2>来源与范围说明</h2>
+    <ul>
+      <li>Apple：<a href="https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html">CFBundleDisplayName</a>、<a href="https://developer.apple.com/documentation/bundleresources/information-property-list/cfbundleidentifier">CFBundleIdentifier</a>、<a href="https://developer.apple.com/documentation/uniformtypeidentifiers/defining-file-and-data-types-for-your-app">定义文件和数据类型</a>、<a href="https://developer.apple.com/documentation/DeviceCheck/establishing-your-app-s-integrity">App Attest</a>、<a href="https://developer.apple.com/documentation/security/ksecattraccessiblewhenunlockedthisdeviceonly">仅本机且解锁可用的 Keychain 属性</a>。</li>
+      <li>百度：本文链接均指向百度开放平台/网盘开放平台官方文档；接口配额、审核要求和 SDK 状态可能变化，实施前需再次核对。</li>
+      <li>命名初筛为 2026-08-30 的公开索引快照，查询式包括 <code>"候选" app OR 软件 OR 笔记</code>、<code>site:apps.apple.com/cn/app "候选"</code> 和 <code>site:github.com "候选"</code>；未登录 CNIPA 做完整类别/近似查询，也未取得法律意见。</li>
+      <li>本分支 <code>docs/product-decisions</code> 从 <code>d116fad</code> 分出；<code>main</code> 与 <code>origin/main</code> 仍停在 <code>2926cae</code>。正式更名未执行，用户选名和兼容门禁通过前不得合并品牌改动。</li>
+    </ul>
+  </section>
+
+  <footer>Notes 产品决策快照 · UTF-8 HTML · 2026-08-30</footer>
+</main>
+</body>
+</html>

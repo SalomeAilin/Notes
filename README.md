@@ -72,6 +72,10 @@ InkNotes/
 - 导出与导入完全由用户主动触发。若百度网盘 HD 在系统“文件”或分享面板中提供入口，可直接选择它保存备份。
 - 当前不是百度账号直连或双向同步，也不会在应用或仓库中保存百度 `SecretKey`、访问令牌或刷新令牌。
 
+命名风险、更名兼容边界与百度网盘分阶段接入方案见
+[`docs/product-decisions.html`](docs/product-decisions.html)。尚未实施的百度凭据服务接口草案见
+[`docs/baidu-broker.openapi.yaml`](docs/baidu-broker.openapi.yaml)；该草案不代表服务已经部署。
+
 ## 已知边界
 
 - 当前 Mac 没有安装 iOS Simulator runtime，因此本次已完成源码检查、核心测试和 generic iOS 构建，尚未做模拟器启动。
