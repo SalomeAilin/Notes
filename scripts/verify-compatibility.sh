@@ -102,7 +102,10 @@ assert_oauth_release_marker_scanner_detects_chinese_encodings() {
   done
 }
 
-print "[1/4] Running Swift compatibility tests"
+print "[1/5] Checking Swift format"
+xcrun swift-format lint --strict --recursive InkNotes InkNotesCoreTests Package.swift
+
+print "[2/5] Running Swift compatibility tests"
 xcrun swift test
 assert_oauth_release_marker_scanner_detects_chinese_encodings
 
@@ -117,7 +120,7 @@ assert_plist_key_absent "$notes_source_plist" "CFBundleURLTypes" "Source callbac
 assert_plist_key_absent "$notes_source_plist" "CFBundleURLSchemes" "Source callback scheme"
 assert_plist_key_absent "$notes_source_plist" "UIBackgroundModes" "Source background transfer capability"
 assert_plist_key_absent "$notes_source_plist" "BGTaskSchedulerPermittedIdentifiers" "Source background task registration"
-print "[2/4] Source backup identity and unconfigured OAuth boundary are stable"
+print "[3/5] Source backup identity and unconfigured OAuth boundary are stable"
 
 for notes_configuration in Debug Release; do
   notes_settings_json="$notes_temp_dir/$notes_configuration-settings.json"
@@ -149,7 +152,7 @@ for notes_configuration in Debug Release; do
       "$notes_configuration"
   done
 done
-print "[3/4] Debug and Release bundle identifiers and OAuth settings are stable"
+print "[4/5] Debug and Release bundle identifiers and OAuth settings are stable"
 
 for notes_configuration in Debug Release; do
   notes_derived_data="$notes_temp_dir/DerivedData-$notes_configuration"
@@ -196,5 +199,5 @@ for notes_configuration in Debug Release; do
   assert_app_has_no_oauth_release_markers "${notes_built_plist:h}"
 done
 
-print "[4/4] Debug and Release products preserve iPadOS 17+, backup identities, and fail-closed OAuth"
+print "[5/5] Debug and Release products preserve iPadOS 17+, backup identities, and fail-closed OAuth"
 print "Compatibility gate passed"
