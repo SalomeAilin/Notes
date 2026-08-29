@@ -20,7 +20,7 @@ struct CompatibilityContractTests {
     #expect(DrawingRepository.libraryFilename == "library.json")
     #expect(DrawingRepository.drawingsDirectoryName == "Drawings")
     #expect(DrawingRepository.drawingFileExtension == "drawing")
-    #expect(DrawingRepository.defaultRootURL().lastPathComponent == "InkNotes")
+    #expect(DrawingRepository.defaultRootURL()?.lastPathComponent == "InkNotes")
 
     #expect(BackupArchiveCodec.uniformTypeIdentifier == "com.salomeailin.notes.backup")
     #expect(BackupArchiveCodec.fileExtension == "notesbackup")
