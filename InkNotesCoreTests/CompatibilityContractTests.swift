@@ -85,15 +85,44 @@ struct CompatibilityContractTests {
     #expect(tags["public.mime-type"] as? String == BackupArchiveCodec.mimeType)
 
     let projectURL = repositoryRoot.appendingPathComponent("InkNotes.xcodeproj/project.pbxproj")
-    let projectText = try String(contentsOf: projectURL, encoding: .utf8)
-    let bundleIdentifierSettings = projectText.split(separator: "\n")
-      .map { $0.trimmingCharacters(in: .whitespaces) }
-      .filter { $0.hasPrefix("PRODUCT_BUNDLE_IDENTIFIER = ") }
-    try #require(!bundleIdentifierSettings.isEmpty)
+    let projectData = try Data(contentsOf: projectURL)
+    let project = try #require(
+      try PropertyListSerialization.propertyList(from: projectData, options: [], format: nil)
+        as? [String: Any]
+    )
+    _ = try validateMainAppBundleIdentifiers(in: project)
+  }
+
+  @Test("An orphan app target cannot hide a mounted main-app identifier drift")
+  func orphanAppTargetCannotMaskMountedAppDrift() {
+    let project = makeSyntheticProject(
+      mountedDebugBundleIdentifier: "com.example.drifted",
+      mountedReleaseBundleIdentifier: expectedBundleIdentifier,
+      widgetBundleIdentifier: "com.example.widget",
+      orphanBundleIdentifier: expectedBundleIdentifier
+    )
+
     #expect(
-      bundleIdentifierSettings.contains(
-        "PRODUCT_BUNDLE_IDENTIFIER = \(expectedBundleIdentifier);"
-      ))
+      throws: PBXProjectContractError.bundleIdentifierMismatch(
+        configuration: "Debug",
+        actual: "com.example.drifted"
+      )
+    ) {
+      try validateMainAppBundleIdentifiers(in: project)
+    }
+  }
+
+  @Test("An attached widget may use its own bundle identifier")
+  func attachedWidgetIdentifierDoesNotAffectMainAppContract() throws {
+    let project = makeSyntheticProject(
+      mountedDebugBundleIdentifier: expectedBundleIdentifier,
+      mountedReleaseBundleIdentifier: expectedBundleIdentifier,
+      widgetBundleIdentifier: "com.example.widget",
+      orphanBundleIdentifier: "com.example.orphan"
+    )
+
+    let configurations = try validateMainAppBundleIdentifiers(in: project)
+    #expect(configurations.map(\.name) == ["Debug", "Release"])
   }
 
   @Test("The committed v1 archive remains byte-for-byte readable and writable")
@@ -265,6 +294,164 @@ struct CompatibilityContractTests {
     URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent()
       .deletingLastPathComponent()
+  }
+
+  private struct AppBuildConfiguration: Equatable {
+    let name: String
+    let bundleIdentifier: String?
+  }
+
+  private enum PBXProjectContractError: Error, Equatable {
+    case malformedProjectGraph
+    case mainAppTargetCount(Int)
+    case duplicateConfiguration(String)
+    case missingConfiguration(String)
+    case bundleIdentifierMismatch(configuration: String, actual: String?)
+  }
+
+  private func validateMainAppBundleIdentifiers(
+    in project: [String: Any]
+  ) throws -> [AppBuildConfiguration] {
+    guard let rootObjectID = project["rootObject"] as? String,
+      let objects = project["objects"] as? [String: Any],
+      let rootProject = objects[rootObjectID] as? [String: Any],
+      rootProject["isa"] as? String == "PBXProject",
+      let targetIDs = rootProject["targets"] as? [String]
+    else {
+      throw PBXProjectContractError.malformedProjectGraph
+    }
+
+    let mountedTargets = try targetIDs.map { targetID in
+      guard let target = objects[targetID] as? [String: Any] else {
+        throw PBXProjectContractError.malformedProjectGraph
+      }
+      return target
+    }
+    let appTargets = mountedTargets.filter {
+      $0["isa"] as? String == "PBXNativeTarget"
+        && $0["name"] as? String == "InkNotes"
+        && $0["productType"] as? String == "com.apple.product-type.application"
+    }
+    guard appTargets.count == 1, let appTarget = appTargets.first else {
+      throw PBXProjectContractError.mainAppTargetCount(appTargets.count)
+    }
+    guard let configurationListID = appTarget["buildConfigurationList"] as? String,
+      let configurationList = objects[configurationListID] as? [String: Any],
+      configurationList["isa"] as? String == "XCConfigurationList",
+      let configurationIDs = configurationList["buildConfigurations"] as? [String],
+      !configurationIDs.isEmpty
+    else {
+      throw PBXProjectContractError.malformedProjectGraph
+    }
+
+    var names = Set<String>()
+    var configurations: [AppBuildConfiguration] = []
+    configurations.reserveCapacity(configurationIDs.count)
+    for configurationID in configurationIDs {
+      guard let configuration = objects[configurationID] as? [String: Any],
+        configuration["isa"] as? String == "XCBuildConfiguration",
+        let name = configuration["name"] as? String,
+        let buildSettings = configuration["buildSettings"] as? [String: Any]
+      else {
+        throw PBXProjectContractError.malformedProjectGraph
+      }
+      guard names.insert(name).inserted else {
+        throw PBXProjectContractError.duplicateConfiguration(name)
+      }
+      configurations.append(
+        AppBuildConfiguration(
+          name: name,
+          bundleIdentifier: buildSettings["PRODUCT_BUNDLE_IDENTIFIER"] as? String
+        )
+      )
+    }
+
+    for requiredName in ["Debug", "Release"] where !names.contains(requiredName) {
+      throw PBXProjectContractError.missingConfiguration(requiredName)
+    }
+    for configuration in configurations
+    where configuration.bundleIdentifier != expectedBundleIdentifier {
+      throw PBXProjectContractError.bundleIdentifierMismatch(
+        configuration: configuration.name,
+        actual: configuration.bundleIdentifier
+      )
+    }
+    return configurations
+  }
+
+  private func makeSyntheticProject(
+    mountedDebugBundleIdentifier: String,
+    mountedReleaseBundleIdentifier: String,
+    widgetBundleIdentifier: String,
+    orphanBundleIdentifier: String
+  ) -> [String: Any] {
+    let objects: [String: Any] = [
+      "ROOT": [
+        "isa": "PBXProject",
+        "targets": ["MOUNTED_APP", "WIDGET"],
+      ],
+      "MOUNTED_APP": [
+        "isa": "PBXNativeTarget",
+        "name": "InkNotes",
+        "productType": "com.apple.product-type.application",
+        "buildConfigurationList": "MOUNTED_APP_CONFIGURATIONS",
+      ],
+      "MOUNTED_APP_CONFIGURATIONS": [
+        "isa": "XCConfigurationList",
+        "buildConfigurations": ["MOUNTED_DEBUG", "MOUNTED_RELEASE"],
+      ],
+      "MOUNTED_DEBUG": [
+        "isa": "XCBuildConfiguration",
+        "name": "Debug",
+        "buildSettings": ["PRODUCT_BUNDLE_IDENTIFIER": mountedDebugBundleIdentifier],
+      ],
+      "MOUNTED_RELEASE": [
+        "isa": "XCBuildConfiguration",
+        "name": "Release",
+        "buildSettings": ["PRODUCT_BUNDLE_IDENTIFIER": mountedReleaseBundleIdentifier],
+      ],
+      "WIDGET": [
+        "isa": "PBXNativeTarget",
+        "name": "InkNotesWidget",
+        "productType": "com.apple.product-type.app-extension",
+        "buildConfigurationList": "WIDGET_CONFIGURATIONS",
+      ],
+      "WIDGET_CONFIGURATIONS": [
+        "isa": "XCConfigurationList",
+        "buildConfigurations": ["WIDGET_DEBUG", "WIDGET_RELEASE"],
+      ],
+      "WIDGET_DEBUG": [
+        "isa": "XCBuildConfiguration",
+        "name": "Debug",
+        "buildSettings": ["PRODUCT_BUNDLE_IDENTIFIER": widgetBundleIdentifier],
+      ],
+      "WIDGET_RELEASE": [
+        "isa": "XCBuildConfiguration",
+        "name": "Release",
+        "buildSettings": ["PRODUCT_BUNDLE_IDENTIFIER": widgetBundleIdentifier],
+      ],
+      "ORPHAN_APP": [
+        "isa": "PBXNativeTarget",
+        "name": "InkNotes",
+        "productType": "com.apple.product-type.application",
+        "buildConfigurationList": "ORPHAN_CONFIGURATIONS",
+      ],
+      "ORPHAN_CONFIGURATIONS": [
+        "isa": "XCConfigurationList",
+        "buildConfigurations": ["ORPHAN_DEBUG", "ORPHAN_RELEASE"],
+      ],
+      "ORPHAN_DEBUG": [
+        "isa": "XCBuildConfiguration",
+        "name": "Debug",
+        "buildSettings": ["PRODUCT_BUNDLE_IDENTIFIER": orphanBundleIdentifier],
+      ],
+      "ORPHAN_RELEASE": [
+        "isa": "XCBuildConfiguration",
+        "name": "Release",
+        "buildSettings": ["PRODUCT_BUNDLE_IDENTIFIER": orphanBundleIdentifier],
+      ],
+    ]
+    return ["rootObject": "ROOT", "objects": objects]
   }
 
   private func sha256Hex(_ data: Data) -> String {
