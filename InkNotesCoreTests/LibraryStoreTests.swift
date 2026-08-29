@@ -76,6 +76,29 @@ struct LibraryStoreTests {
     #expect(!store.isBackupTransferInProgress)
   }
 
+  @Test("Titles that cannot be backed up are rejected at the editing boundary")
+  @MainActor
+  func oversizedTitleIsRejected() async throws {
+    let rootURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+
+    let repository = DrawingRepository(rootURL: rootURL)
+    let store = LibraryStore(repository: repository)
+    try await waitUntil { !store.isLoading }
+
+    let notebookID = try #require(store.selectedNotebookID)
+    let originalTitle = try #require(store.selectedNotebook?.title)
+    let oversizedTitle = String(
+      repeating: "字",
+      count: BackupArchiveLimits.maximumTitleUTF8ByteCount
+    )
+    store.renameNotebook(id: notebookID, title: oversizedTitle)
+
+    #expect(store.selectedNotebook?.title == originalTitle)
+    #expect(store.persistenceError?.contains("名称过长") == true)
+  }
+
   @MainActor
   private func waitUntil(
     _ condition: @escaping @MainActor () -> Bool

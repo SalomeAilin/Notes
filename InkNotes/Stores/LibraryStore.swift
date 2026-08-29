@@ -100,7 +100,17 @@ final class LibraryStore: ObservableObject {
 
   func addNotebook(title: String? = nil) {
     guard canEdit else { return }
-    let notebookTitle = cleaned(title) ?? uniqueNotebookTitle()
+    guard library.notebooks.count < BackupArchiveLimits.maximumNotebookCount else {
+      persistenceError = "笔记本数量已达到备份格式上限（\(BackupArchiveLimits.maximumNotebookCount) 个）。"
+      return
+    }
+    let notebookTitle: String
+    if let title {
+      guard let cleanedTitle = cleaned(title) else { return }
+      notebookTitle = cleanedTitle
+    } else {
+      notebookTitle = uniqueNotebookTitle()
+    }
     let page = NotePage(title: "第 1 页")
     let notebook = Notebook(title: notebookTitle, pages: [page])
     let previousPageID = selectedPageID
@@ -119,8 +129,20 @@ final class LibraryStore: ObservableObject {
 
   func addPage(title: String? = nil) {
     guard canEdit, let notebookIndex = selectedNotebookIndex else { return }
+    let pageCount = library.notebooks.reduce(0) { $0 + $1.pages.count }
+    guard pageCount < BackupArchiveLimits.maximumPageCount else {
+      persistenceError = "页面数量已达到备份格式上限（\(BackupArchiveLimits.maximumPageCount) 页）。"
+      return
+    }
     let nextNumber = library.notebooks[notebookIndex].pages.count + 1
-    let page = NotePage(title: cleaned(title) ?? "第 \(nextNumber) 页")
+    let pageTitle: String
+    if let title {
+      guard let cleanedTitle = cleaned(title) else { return }
+      pageTitle = cleanedTitle
+    } else {
+      pageTitle = "第 \(nextNumber) 页"
+    }
+    let page = NotePage(title: pageTitle)
     let previousPageID = selectedPageID
     let previousDrawing = currentDrawingData
 
@@ -511,7 +533,12 @@ final class LibraryStore: ObservableObject {
   private func cleaned(_ text: String?) -> String? {
     guard let text else { return nil }
     let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
-    return cleaned.isEmpty ? nil : cleaned
+    guard !cleaned.isEmpty else { return nil }
+    guard cleaned.utf8.count <= BackupArchiveLimits.maximumTitleUTF8ByteCount else {
+      persistenceError = "名称过长：最多允许 \(BackupArchiveLimits.maximumTitleUTF8ByteCount) 个 UTF-8 字节。"
+      return nil
+    }
+    return cleaned
   }
 
   private func uniqueNotebookTitle() -> String {
