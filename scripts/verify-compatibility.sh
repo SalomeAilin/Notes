@@ -85,6 +85,45 @@ assert_app_has_no_oauth_release_markers() {
   done < <(find "$notes_app_path" -type f -print0)
 }
 
+assert_tree_has_no_retired_brand_marker() {
+  local notes_tree_path="$1"
+  local notes_label="$2"
+  local notes_file
+  local notes_relative_path
+  while IFS= read -r -d '' notes_file; do
+    if ! /usr/bin/perl -MEncode=encode -Mutf8 -0777 -e '
+      my $data = <>;
+      for my $encoding ("UTF-8", "UTF-16LE", "UTF-16BE") {
+        exit 1 if index($data, encode($encoding, "墨记")) >= 0;
+      }
+      exit 0;
+    ' "$notes_file"
+    then
+      notes_relative_path="${notes_file#$notes_tree_path/}"
+      print -u2 "$notes_label contains the retired display name in: $notes_relative_path"
+      exit 1
+    fi
+  done < <(find "$notes_tree_path" -type f -print0)
+}
+
+assert_retired_brand_scanner_detects_chinese_encodings() {
+  local notes_encoding
+  local notes_fixture_dir
+  for notes_encoding in UTF-8 UTF-16LE UTF-16BE; do
+    notes_fixture_dir="$notes_temp_dir/brand-scanner-negative-control-$notes_encoding"
+    mkdir -p "$notes_fixture_dir"
+    /usr/bin/perl -MEncode=encode -Mutf8 -e '
+      my $encoding = shift;
+      print encode($encoding, "墨记");
+    ' "$notes_encoding" > "$notes_fixture_dir/display-name.bin"
+
+    if (assert_tree_has_no_retired_brand_marker "$notes_fixture_dir" "Negative control") >/dev/null 2>&1; then
+      print -u2 "Retired-brand scanner failed its $notes_encoding Chinese negative control"
+      exit 1
+    fi
+  done
+}
+
 assert_oauth_release_marker_scanner_detects_chinese_encodings() {
   local notes_encoding
   local notes_fixture_dir
@@ -109,6 +148,8 @@ xcrun swift-format lint --strict --recursive InkNotes InkNotesCoreTests Package.
 print "[2/5] Running Swift compatibility tests"
 xcrun swift test
 assert_oauth_release_marker_scanner_detects_chinese_encodings
+assert_retired_brand_scanner_detects_chinese_encodings
+assert_tree_has_no_retired_brand_marker "InkNotes" "Shipping source"
 
 notes_source_plist="InkNotes/Info.plist"
 notes_source_display_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$notes_source_plist")"
@@ -202,6 +243,7 @@ for notes_configuration in Debug Release; do
   assert_plist_key_absent "$notes_built_plist" "UIBackgroundModes" "$notes_configuration background transfer capability"
   assert_plist_key_absent "$notes_built_plist" "BGTaskSchedulerPermittedIdentifiers" "$notes_configuration background task registration"
   assert_app_has_no_oauth_release_markers "${notes_built_plist:h}"
+  assert_tree_has_no_retired_brand_marker "${notes_built_plist:h}" "$notes_configuration built app"
 done
 
 print "[5/5] Debug and Release products preserve the internal display name, iPadOS 17+, backup identities, and fail-closed OAuth"
