@@ -93,8 +93,10 @@ assert_tree_has_no_retired_brand_marker() {
   while IFS= read -r -d '' notes_file; do
     if ! /usr/bin/perl -MEncode=encode -Mutf8 -0777 -e '
       my $data = <>;
-      for my $encoding ("UTF-8", "UTF-16LE", "UTF-16BE") {
-        exit 1 if index($data, encode($encoding, "墨记")) >= 0;
+      for my $marker ("墨记", "墨記") {
+        for my $encoding ("UTF-8", "UTF-16LE", "UTF-16BE") {
+          exit 1 if index($data, encode($encoding, $marker)) >= 0;
+        }
       }
       exit 0;
     ' "$notes_file"
@@ -109,18 +111,28 @@ assert_tree_has_no_retired_brand_marker() {
 assert_retired_brand_scanner_detects_chinese_encodings() {
   local notes_encoding
   local notes_fixture_dir
-  for notes_encoding in UTF-8 UTF-16LE UTF-16BE; do
-    notes_fixture_dir="$notes_temp_dir/brand-scanner-negative-control-$notes_encoding"
-    mkdir -p "$notes_fixture_dir"
-    /usr/bin/perl -MEncode=encode -Mutf8 -e '
-      my $encoding = shift;
-      print encode($encoding, "墨记");
-    ' "$notes_encoding" > "$notes_fixture_dir/display-name.bin"
-
-    if (assert_tree_has_no_retired_brand_marker "$notes_fixture_dir" "Negative control") >/dev/null 2>&1; then
-      print -u2 "Retired-brand scanner failed its $notes_encoding Chinese negative control"
-      exit 1
+  local notes_marker
+  local notes_variant
+  for notes_variant in simplified traditional; do
+    if [[ "$notes_variant" == "simplified" ]]; then
+      notes_marker="墨记"
+    else
+      notes_marker="墨記"
     fi
+    for notes_encoding in UTF-8 UTF-16LE UTF-16BE; do
+      notes_fixture_dir="$notes_temp_dir/brand-scanner-negative-control-$notes_variant-$notes_encoding"
+      mkdir -p "$notes_fixture_dir"
+      /usr/bin/perl -MEncode=decode,encode -e '
+        my ($encoding, $marker) = @ARGV;
+        $marker = decode("UTF-8", $marker);
+        print encode($encoding, $marker);
+      ' "$notes_encoding" "$notes_marker" > "$notes_fixture_dir/display-name.bin"
+
+      if (assert_tree_has_no_retired_brand_marker "$notes_fixture_dir" "Negative control") >/dev/null 2>&1; then
+        print -u2 "Retired-brand scanner failed its $notes_variant $notes_encoding negative control"
+        exit 1
+      fi
+    done
   done
 }
 
