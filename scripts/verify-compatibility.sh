@@ -30,8 +30,81 @@ assert_equal() {
   fi
 }
 
+assert_plist_key_absent() {
+  local notes_plist_path="$1"
+  local notes_key="$2"
+  local notes_label="$3"
+  if /usr/libexec/PlistBuddy -c "Print :$notes_key" "$notes_plist_path" >/dev/null 2>&1; then
+    print -u2 "$notes_label must remain absent until the OAuth broker is configured"
+    exit 1
+  fi
+}
+
+assert_build_setting_absent() {
+  local notes_settings_path="$1"
+  local notes_key="$2"
+  local notes_label="$3"
+  if plutil -extract "0.buildSettings.$notes_key" raw -o - "$notes_settings_path" >/dev/null 2>&1; then
+    print -u2 "$notes_label contains forbidden OAuth build setting '$notes_key'"
+    exit 1
+  fi
+}
+
+assert_app_has_no_oauth_release_markers() {
+  local notes_app_path="$1"
+  local notes_file
+  local notes_relative_path
+  while IFS= read -r -d '' notes_file; do
+    if ! /usr/bin/perl -MEncode=encode -Mutf8 -0777 -e '
+      my $data = <>;
+      my @markers = (
+        "client_secret", "clientSecret", "CLIENT_SECRET",
+        "SecretKey", "secret_key", "SECRET_KEY",
+        "openapi.baidu.com", "passport.baidu.com", "/oauth/2.0/",
+        "OAuthBrokerURL", "OAuthCallback", "BaiduClientID", "BaiduAppKey",
+        "AuthenticationServices", "ASWebAuthenticationSession",
+        "com.apple.developer.associated-domains", "applinks:",
+        "BGTaskScheduler", "BGProcessingTask", "BGAppRefreshTask",
+        "BGTaskSchedulerPermittedIdentifiers", "backgroundWithIdentifier",
+        "example.com", "example.net", "example.org", "example.invalid",
+        "://localhost", "://127.0.0.1", "://[::1]", "已连接"
+      );
+      for my $marker (@markers) {
+        for my $encoding ("UTF-8", "UTF-16LE", "UTF-16BE") {
+          exit 1 if index($data, encode($encoding, $marker)) >= 0;
+        }
+      }
+      exit 0;
+    ' "$notes_file"
+    then
+      notes_relative_path="${notes_file#$notes_app_path/}"
+      print -u2 "Built app contains a forbidden OAuth release marker in: $notes_relative_path"
+      exit 1
+    fi
+  done < <(find "$notes_app_path" -type f -print0)
+}
+
+assert_oauth_release_marker_scanner_detects_chinese_encodings() {
+  local notes_encoding
+  local notes_fixture_dir
+  for notes_encoding in UTF-8 UTF-16LE UTF-16BE; do
+    notes_fixture_dir="$notes_temp_dir/oauth-scanner-negative-control-$notes_encoding"
+    mkdir -p "$notes_fixture_dir"
+    /usr/bin/perl -MEncode=encode -Mutf8 -e '
+      my $encoding = shift;
+      print encode($encoding, "已连接");
+    ' "$notes_encoding" > "$notes_fixture_dir/connection-state.bin"
+
+    if (assert_app_has_no_oauth_release_markers "$notes_fixture_dir") >/dev/null 2>&1; then
+      print -u2 "Built-app OAuth scanner failed its $notes_encoding Chinese negative control"
+      exit 1
+    fi
+  done
+}
+
 print "[1/4] Running Swift compatibility tests"
 xcrun swift test
+assert_oauth_release_marker_scanner_detects_chinese_encodings
 
 notes_source_plist="InkNotes/Info.plist"
 notes_source_uti="$(/usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations:0:UTTypeIdentifier' "$notes_source_plist")"
@@ -40,7 +113,11 @@ notes_source_mime="$(/usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclaratio
 assert_equal "$notes_source_uti" "$notes_expected_uti" "Source UTI"
 assert_equal "$notes_source_extension" "$notes_expected_extension" "Source filename extension"
 assert_equal "$notes_source_mime" "$notes_expected_mime" "Source MIME type"
-print "[2/4] Source backup identity is stable"
+assert_plist_key_absent "$notes_source_plist" "CFBundleURLTypes" "Source callback registration"
+assert_plist_key_absent "$notes_source_plist" "CFBundleURLSchemes" "Source callback scheme"
+assert_plist_key_absent "$notes_source_plist" "UIBackgroundModes" "Source background transfer capability"
+assert_plist_key_absent "$notes_source_plist" "BGTaskSchedulerPermittedIdentifiers" "Source background task registration"
+print "[2/4] Source backup identity and unconfigured OAuth boundary are stable"
 
 for notes_configuration in Debug Release; do
   notes_settings_json="$notes_temp_dir/$notes_configuration-settings.json"
@@ -60,8 +137,19 @@ for notes_configuration in Debug Release; do
 
   notes_bundle_id="$(plutil -extract 0.buildSettings.PRODUCT_BUNDLE_IDENTIFIER raw -o - "$notes_settings_json")"
   assert_equal "$notes_bundle_id" "$notes_expected_bundle_id" "$notes_configuration bundle identifier"
+  for notes_forbidden_setting in \
+    BAIDU_CLIENT_SECRET BAIDU_SECRET_KEY BAIDU_APP_SECRET CLIENT_SECRET SECRET_KEY \
+    BAIDU_OAUTH_BROKER_URL BAIDU_OAUTH_CALLBACK BAIDU_CLIENT_ID BAIDU_APP_KEY \
+    CODE_SIGN_ENTITLEMENTS INFOPLIST_KEY_CFBundleURLTypes INFOPLIST_KEY_CFBundleURLSchemes \
+    INFOPLIST_KEY_UIBackgroundModes INFOPLIST_KEY_BGTaskSchedulerPermittedIdentifiers
+  do
+    assert_build_setting_absent \
+      "$notes_settings_json" \
+      "$notes_forbidden_setting" \
+      "$notes_configuration"
+  done
 done
-print "[3/4] Debug and Release bundle identifiers are stable"
+print "[3/4] Debug and Release bundle identifiers and OAuth settings are stable"
 
 for notes_configuration in Debug Release; do
   notes_derived_data="$notes_temp_dir/DerivedData-$notes_configuration"
@@ -101,7 +189,12 @@ for notes_configuration in Debug Release; do
   assert_equal "$notes_built_uti" "$notes_expected_uti" "$notes_configuration built UTI"
   assert_equal "$notes_built_extension" "$notes_expected_extension" "$notes_configuration built filename extension"
   assert_equal "$notes_built_mime" "$notes_expected_mime" "$notes_configuration built MIME type"
+  assert_plist_key_absent "$notes_built_plist" "CFBundleURLTypes" "$notes_configuration callback registration"
+  assert_plist_key_absent "$notes_built_plist" "CFBundleURLSchemes" "$notes_configuration callback scheme"
+  assert_plist_key_absent "$notes_built_plist" "UIBackgroundModes" "$notes_configuration background transfer capability"
+  assert_plist_key_absent "$notes_built_plist" "BGTaskSchedulerPermittedIdentifiers" "$notes_configuration background task registration"
+  assert_app_has_no_oauth_release_markers "${notes_built_plist:h}"
 done
 
-print "[4/4] Debug and Release products preserve iPadOS 17+ and backup identities"
+print "[4/4] Debug and Release products preserve iPadOS 17+, backup identities, and fail-closed OAuth"
 print "Compatibility gate passed"
