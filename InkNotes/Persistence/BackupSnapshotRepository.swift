@@ -37,13 +37,18 @@ extension DrawingRepository {
     sourceBuild: String,
     createdAt: Date = Date()
   ) throws -> Data {
-    let currentPageIDs = Set(library.notebooks.flatMap(\.pages).map(\.id))
-    try persistSnapshot(
-      library: library,
-      pageIDs: currentPageIDs,
+    let pageIDs = try BackupArchiveCodec.validateLibrary(library)
+    try validateDrawingOverrides(
+      pageIDs: pageIDs,
       drawingOverrides: drawingOverrides
     )
-    let pageIDs = try BackupArchiveCodec.validateLibrary(library)
+    // Persist valid live overrides before the slower whole-library scan so the
+    // latest strokes do not remain only in memory while a backup is prepared.
+    try persistSnapshot(
+      library: library,
+      pageIDs: pageIDs,
+      drawingOverrides: drawingOverrides
+    )
     let drawings = try loadValidatedDrawings(
       pageIDs: pageIDs,
       drawingOverrides: drawingOverrides
@@ -74,14 +79,18 @@ extension DrawingRepository {
     currentDrawingOverrides: [UUID: Data],
     importedAt: Date = Date()
   ) throws -> BackupRestoreResult {
-    let persistedPageIDs = Set(currentLibrary.notebooks.flatMap(\.pages).map(\.id))
-    // Establish a strict persistence barrier for the user's current library.
-    try persistSnapshot(
-      library: currentLibrary,
-      pageIDs: persistedPageIDs,
+    let currentPageIDs = try BackupArchiveCodec.validateLibrary(currentLibrary)
+    try validateDrawingOverrides(
+      pageIDs: currentPageIDs,
       drawingOverrides: currentDrawingOverrides
     )
-    let currentPageIDs = try BackupArchiveCodec.validateLibrary(currentLibrary)
+    // Establish the persistence barrier after validating only the bytes that
+    // can replace current files, then scan the remaining persisted drawings.
+    try persistSnapshot(
+      library: currentLibrary,
+      pageIDs: currentPageIDs,
+      drawingOverrides: currentDrawingOverrides
+    )
     _ = try loadValidatedDrawings(
       pageIDs: currentPageIDs,
       drawingOverrides: currentDrawingOverrides
@@ -217,6 +226,23 @@ extension DrawingRepository {
       totalByteCount = nextTotalByteCount
     }
     return drawings
+  }
+
+  private func validateDrawingOverrides(
+    pageIDs: Set<UUID>,
+    drawingOverrides: [UUID: Data]
+  ) throws {
+    for pageID in pageIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
+      guard let data = drawingOverrides[pageID] else { continue }
+      guard data.count <= BackupArchiveLimits.maximumDrawingByteCount else {
+        throw BackupArchiveError.drawingTooLarge(
+          pageID: pageID,
+          actual: UInt64(data.count),
+          maximum: BackupArchiveLimits.maximumDrawingByteCount
+        )
+      }
+      try Self.validatePencilKitDrawing(data)
+    }
   }
 
   private func persistSnapshot(
