@@ -140,6 +140,108 @@ struct BackupSnapshotRepositoryTests {
     }
   }
 
+  @Test("An invalid in-memory drawing cannot overwrite the persisted drawing")
+  func invalidOverrideDoesNotOverwritePersistedDrawing() async throws {
+    let fixture = makeRepository()
+    defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+    let library = LibraryDocument.starter()
+    let pageID = try #require(library.notebooks.first?.pages.first?.id)
+    let persistedDrawing = PKDrawing().dataRepresentation()
+    let invalidOverride = Data("not-pencilkit".utf8)
+    #expect(!persistedDrawing.isEmpty)
+
+    try await fixture.repository.saveLibrary(library)
+    try await fixture.repository.saveDrawing(persistedDrawing, pageID: pageID)
+
+    await #expect(throws: BackupSnapshotError.invalidDrawing) {
+      try await fixture.repository.makeBackup(
+        library: library,
+        drawingOverrides: [pageID: invalidOverride],
+        sourceAppVersion: "0.2.0",
+        sourceBuild: "2"
+      )
+    }
+
+    #expect(try await fixture.repository.loadDrawing(pageID: pageID) == persistedDrawing)
+    let persistedLibrary = try #require(try await fixture.repository.loadLibrary())
+    expectSameLibraryContent(persistedLibrary, library)
+  }
+
+  @Test("Restore validates the current in-memory drawing before its persistence barrier")
+  func restoreValidatesCurrentOverrideBeforePersisting() async throws {
+    let fixture = makeRepository()
+    defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+    let currentLibrary = LibraryDocument.starter()
+    let currentPageID = try #require(currentLibrary.notebooks.first?.pages.first?.id)
+    let persistedDrawing = PKDrawing().dataRepresentation()
+    let invalidOverride = Data("not-pencilkit".utf8)
+    try await fixture.repository.saveLibrary(currentLibrary)
+    try await fixture.repository.saveDrawing(persistedDrawing, pageID: currentPageID)
+
+    let sourceLibrary = LibraryDocument.starter()
+    let sourcePageID = try #require(sourceLibrary.notebooks.first?.pages.first?.id)
+    let archive = try BackupArchiveCodec.encode(
+      library: sourceLibrary,
+      drawings: [sourcePageID: PKDrawing().dataRepresentation()],
+      createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+
+    await #expect(throws: BackupSnapshotError.invalidDrawing) {
+      try await fixture.repository.restoreBackupAsCopy(
+        archive,
+        currentLibrary: currentLibrary,
+        currentDrawingOverrides: [currentPageID: invalidOverride]
+      )
+    }
+
+    #expect(try await fixture.repository.loadDrawing(pageID: currentPageID) == persistedDrawing)
+    let persistedLibrary = try #require(try await fixture.repository.loadLibrary())
+    expectSameLibraryContent(persistedLibrary, currentLibrary)
+  }
+
+  @Test("A valid live override persists before an unrelated stored drawing fails backup")
+  func validOverridePersistsBeforeWholeLibraryFailure() async throws {
+    let fixture = makeRepository()
+    defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+    var library = LibraryDocument.starter()
+    let currentPageID = try #require(library.notebooks.first?.pages.first?.id)
+    let invalidPage = NotePage(title: "损坏页")
+    library.notebooks[0].pages.append(invalidPage)
+
+    let oldDrawing = PKDrawing().dataRepresentation()
+    let latestDrawingURL = try #require(
+      Bundle.module.url(
+        forResource: "single-stroke-v1",
+        withExtension: "pkdrawing",
+        subdirectory: "Fixtures/BackupV1"
+      )
+    )
+    let latestDrawing = try Data(contentsOf: latestDrawingURL)
+    #expect(try PKDrawing(data: latestDrawing).strokes.count == 1)
+    #expect(latestDrawing != oldDrawing)
+
+    try await fixture.repository.saveLibrary(library)
+    try await fixture.repository.saveDrawing(oldDrawing, pageID: currentPageID)
+    try await fixture.repository.saveDrawing(
+      Data("not-pencilkit".utf8),
+      pageID: invalidPage.id
+    )
+
+    await #expect(throws: BackupSnapshotError.invalidDrawing) {
+      try await fixture.repository.makeBackup(
+        library: library,
+        drawingOverrides: [currentPageID: latestDrawing],
+        sourceAppVersion: "0.2.0",
+        sourceBuild: "2"
+      )
+    }
+
+    #expect(try await fixture.repository.loadDrawing(pageID: currentPageID) == latestDrawing)
+  }
+
   private func makeRepository() -> (rootURL: URL, repository: DrawingRepository) {
     let rootURL = FileManager.default.temporaryDirectory
       .appendingPathComponent(UUID().uuidString, isDirectory: true)
