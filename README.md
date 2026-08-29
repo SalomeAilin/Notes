@@ -42,7 +42,7 @@
 ./scripts/verify-compatibility.sh
 ```
 
-门禁当前运行 75 个测试，并分别构建 Debug、Release 两套 generic iOS 产物。除原有的元数据/笔迹往返、损坏数据保护、切页保存时序、备份编解码、边界限制和恢复副本测试外，还会验证系统无法提供 Application Support 时不会静默写入临时目录，而是让仓库读写失败并使应用进入只读保护；恢复门禁覆盖提交后重试不重复追加、同 ID 异内容冲突、部分导入失败关闭、相同孤立笔迹复用、不同孤立笔迹不覆盖、目录完整但笔迹缺失时安全补回、当前选中缺失页的 Store 重试、已有用户编辑与主动清空不被覆盖，以及重复操作不改变当前画布。门禁也验证异常内存笔迹不能在备份或恢复的持久化屏障前覆盖有效磁盘文件，同时保证有效的最新笔画会在无关页面导致全库校验失败前落盘。提交到 Git 的 v1 历史备份与真实 PencilKit 单笔画用于检查完整性、恢复、标识重映射和落盘链路。百度网盘上传门禁覆盖官方 Go SDK 流程字段、`return_type` 分支、4 MiB 分片、分片与最终 MD5 校验、流式响应上限、拒绝重定向、真实 URLSession Task 取消及凭据脱敏；还覆盖上传单飞、绑定操作标识的取消、create 前后竞态、秒传/结果未知对账门禁和安全进度快照；同时核对 iPad-only、最低 iOS 17.0、Bundle Identifier 及备份文件身份。
+门禁当前运行 79 个测试，并分别构建 Debug、Release 两套 generic iOS 产物。除原有的元数据/笔迹往返、损坏数据保护、切页保存时序、备份编解码、边界限制和恢复副本测试外，还会验证系统无法提供 Application Support 时不会静默写入临时目录，而是让仓库读写失败并使应用进入只读保护；恢复门禁覆盖提交后重试不重复追加、同 ID 异内容冲突、部分导入失败关闭、相同孤立笔迹复用、不同孤立笔迹不覆盖、目录完整但笔迹缺失时安全补回、当前选中缺失页的 Store 重试、已有用户编辑与主动清空不被覆盖，以及重复操作不改变当前画布。门禁也验证异常内存笔迹不能在备份或恢复的持久化屏障前覆盖有效磁盘文件，同时保证有效的最新笔画会在无关页面导致全库校验失败前落盘。提交到 Git 的 v1 历史备份与真实 PencilKit 单笔画用于检查完整性、恢复、标识重映射和落盘链路。百度网盘上传门禁覆盖官方 Go SDK 流程字段、`return_type` 分支、4 MiB 分片、分片与最终 MD5 校验、流式响应上限、拒绝重定向、真实 URLSession Task 取消及凭据脱敏；还覆盖上传单飞、绑定操作标识的取消、create 前后竞态、秒传/结果未知对账门禁和安全进度快照。OAuth 临时隔离门禁会拒绝常见客户端密钥标记/配置、百度授权控制面地址、占位 broker、提前引入的授权 UI、回调/后台能力及任何从 App、View、Store 发起的百度直连；同时核对 iPad-only、最低 iOS 17.0、Bundle Identifier 及备份文件身份。
 
 ## 本地数据
 
@@ -81,6 +81,12 @@ InkNotes/
 - 路径冲突参数固定为 `rtype=0`，不自动重命名、不覆盖；冲突保留为服务端 API 错误，待真实账号联调时再做幂等对账。
 - 上传核心仅接收运行时短期访问凭据和应用目录，不负责登录、换取或刷新凭据，也不持久化凭据；备份内容由 iPad 直接发送到百度网盘接口。
 - 当前仍不是可供用户操作的百度账号直连或双向同步；没有正式应用名称、OAuth broker 和真实授权前，不展示“已连接”状态或上传按钮。
+
+### 百度授权安全边界
+
+- 百度官方 SDK 当前的[授权码换 token](https://github.com/baidu-netdisk/baidu-drive-sdk-go/blob/main/baidudriver/api/auth_code2token.go)与[设备码换 token](https://github.com/baidu-netdisk/baidu-drive-sdk-go/blob/main/baidudriver/api/auth_device_token.go)都要求 `client_secret`；现有公开资料尚未确认可供 iOS public client 使用的 PKCE 流程。因此应用包、Info.plist、xcconfig、构建设置和 Keychain 都不得携带该密钥，iPad 端也不得直接执行换 token 或刷新。
+- 未来允许的生产路径是：用 `ASWebAuthenticationSession` 打开真实 HTTPS OAuth broker；百度授权回调进入 broker；broker 只向应用回传短时、高熵、单次使用的 ticket，不在回调 URL 中携带 access token 或 refresh token；应用再通过同一 broker 的 HTTPS 接口兑换并验证凭据。
+- 取消、ticket 过期或重放、`state` 不匹配、回调来源不匹配、broker 响应无法验证时都必须失败关闭。真实 broker origin、正式回调身份、兑换协议、部署、用户身份绑定和真实账号门禁尚未确定，所以当前没有 URL Scheme、授权 UI、Keychain 凭据模型或“已连接”状态。
 
 ## 已知边界
 
