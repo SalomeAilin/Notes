@@ -16,6 +16,7 @@ let package = Package(
         "Models/BackupArchive.swift",
         "Models/BackupImportPresentationState.swift",
         "Models/BackupImportRequest.swift",
+        "Models/BaiduAccountCredential.swift",
         "Models/BaiduNetdiskAccount.swift",
         "Models/BaiduNetdiskBackup.swift",
         "Models/LibraryDocument.swift",

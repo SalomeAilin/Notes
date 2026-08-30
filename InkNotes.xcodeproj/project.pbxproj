@@ -31,6 +31,7 @@
 		D50000000000000000000001 /* BackupImportRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = C50000000000000000000001 /* BackupImportRequest.swift */; };
 		D50000000000000000000002 /* BackupFileReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = C50000000000000000000002 /* BackupFileReader.swift */; };
 		D50000000000000000000003 /* BackupImportPresentationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = C50000000000000000000003 /* BackupImportPresentationState.swift */; };
+		D60000000000000000000001 /* BaiduAccountCredential.swift in Sources */ = {isa = PBXBuildFile; fileRef = C60000000000000000000001 /* BaiduAccountCredential.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -60,6 +61,7 @@
 		C50000000000000000000001 /* BackupImportRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupImportRequest.swift; sourceTree = "<group>"; };
 		C50000000000000000000002 /* BackupFileReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupFileReader.swift; sourceTree = "<group>"; };
 		C50000000000000000000003 /* BackupImportPresentationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupImportPresentationState.swift; sourceTree = "<group>"; };
+		C60000000000000000000001 /* BaiduAccountCredential.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaiduAccountCredential.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -118,6 +120,7 @@
 				C0000000000000000000000C /* BackupArchive.swift */,
 				C50000000000000000000003 /* BackupImportPresentationState.swift */,
 				C50000000000000000000001 /* BackupImportRequest.swift */,
+				C60000000000000000000001 /* BaiduAccountCredential.swift */,
 				C40000000000000000000001 /* BaiduNetdiskAccount.swift */,
 				C10000000000000000000001 /* BaiduNetdiskBackup.swift */,
 				C00000000000000000000002 /* LibraryDocument.swift */,
@@ -251,6 +254,7 @@
 				D0000000000000000000000A /* BackupArchive.swift in Sources */,
 				D50000000000000000000003 /* BackupImportPresentationState.swift in Sources */,
 				D50000000000000000000001 /* BackupImportRequest.swift in Sources */,
+				D60000000000000000000001 /* BaiduAccountCredential.swift in Sources */,
 				D40000000000000000000001 /* BaiduNetdiskAccount.swift in Sources */,
 				D10000000000000000000001 /* BaiduNetdiskBackup.swift in Sources */,
 				D00000000000000000000002 /* LibraryDocument.swift in Sources */,

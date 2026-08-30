@@ -64,6 +64,11 @@ enum BaiduBackupUploadTerminalOutcome: Equatable, Sendable {
 }
 
 actor BaiduBackupUploadCoordinator {
+  private struct ScopedBackupKey: Hashable, Sendable {
+    let accountScope: BaiduAccountScope
+    let backupID: UUID
+  }
+
   private enum CheckpointError: Error {
     case invalidProgress
   }
@@ -77,7 +82,7 @@ actor BaiduBackupUploadCoordinator {
 
   private struct ActiveUpload {
     let operationID: UUID
-    let backupID: UUID
+    let key: ScopedBackupKey
     let receipt: BaiduBackupUploadAttemptReceipt
     let record: BaiduUploadReconciliationRecord
     let archiveChunkCount: Int
@@ -91,8 +96,9 @@ actor BaiduBackupUploadCoordinator {
   private let uploader: any BaiduBackupUploading
   private let reconciliationStore: any BaiduUploadReconciliationStoring
   private var active: ActiveUpload?
-  private var backupsAwaitingRemoteVerification: [UUID: BaiduBackupUploadAttemptReceipt] = [:]
-  private var completedBackups: [UUID: BaiduBackupUploadAttemptReceipt] = [:]
+  private var backupsAwaitingRemoteVerification:
+    [ScopedBackupKey: BaiduBackupUploadAttemptReceipt] = [:]
+  private var completedBackups: [ScopedBackupKey: BaiduBackupUploadAttemptReceipt] = [:]
   private var snapshotContinuations:
     [UUID: AsyncStream<BaiduBackupUploadCoordinatorSnapshot>.Continuation] = [:]
 
@@ -107,7 +113,7 @@ actor BaiduBackupUploadCoordinator {
 
   func upload(
     archive: Data,
-    accessToken: BaiduAccessToken,
+    credential: BaiduAccountBoundCredential,
     applicationDirectory: BaiduNetdiskAppDirectory
   ) async -> BaiduBackupUploadTerminalOutcome {
     if Task.isCancelled {
@@ -136,14 +142,18 @@ actor BaiduBackupUploadCoordinator {
     if Task.isCancelled {
       return .cancelled(.caller)
     }
-    if let pendingReceipt = backupsAwaitingRemoteVerification[receipt.backupID] {
+    let key = ScopedBackupKey(
+      accountScope: credential.accountScope,
+      backupID: receipt.backupID
+    )
+    if let pendingReceipt = backupsAwaitingRemoteVerification[key] {
       return .rejected(
         receiptHasSameUploadIdentity(pendingReceipt, receipt)
           ? .remoteVerificationRequired(backupID: receipt.backupID)
           : .reconciliationIdentityConflict(backupID: receipt.backupID)
       )
     }
-    if let completedReceipt = completedBackups[receipt.backupID] {
+    if let completedReceipt = completedBackups[key] {
       return .rejected(
         receiptHasSameUploadIdentity(completedReceipt, receipt)
           ? .alreadyCompletedThisSession(backupID: receipt.backupID)
@@ -153,6 +163,7 @@ actor BaiduBackupUploadCoordinator {
 
     let operationID = UUID()
     let record = BaiduUploadReconciliationRecord(
+      accountScope: credential.accountScope,
       attemptID: operationID,
       backupID: receipt.backupID,
       archiveSHA256: receipt.archiveSHA256,
@@ -163,7 +174,7 @@ actor BaiduBackupUploadCoordinator {
 
     active = ActiveUpload(
       operationID: operationID,
-      backupID: receipt.backupID,
+      key: key,
       receipt: receipt,
       record: record,
       archiveChunkCount: (archive.count + BaiduNetdiskBackupUploader.chunkByteCount - 1)
@@ -179,7 +190,7 @@ actor BaiduBackupUploadCoordinator {
     return await withTaskCancellationHandler {
       await admitAndRun(
         archive: archive,
-        accessToken: accessToken,
+        credential: credential,
         applicationDirectory: applicationDirectory,
         operationID: operationID
       )
@@ -196,7 +207,7 @@ actor BaiduBackupUploadCoordinator {
 
   private func admitAndRun(
     archive: Data,
-    accessToken: BaiduAccessToken,
+    credential: BaiduAccountBoundCredential,
     applicationDirectory: BaiduNetdiskAppDirectory,
     operationID: UUID
   ) async -> BaiduBackupUploadTerminalOutcome {
@@ -233,15 +244,19 @@ actor BaiduBackupUploadCoordinator {
     }
     switch admission {
     case .existing:
-      backupsAwaitingRemoteVerification[admitted.backupID] = admitted.receipt
+      backupsAwaitingRemoteVerification[admitted.key] = admitted.receipt
       return finishReservation(
         operationID: operationID,
-        terminal: .rejected(.remoteVerificationRequired(backupID: admitted.backupID))
+        terminal: .rejected(
+          .remoteVerificationRequired(backupID: admitted.key.backupID)
+        )
       )
     case .identityConflict:
       return finishReservation(
         operationID: operationID,
-        terminal: .rejected(.reconciliationIdentityConflict(backupID: admitted.backupID))
+        terminal: .rejected(
+          .reconciliationIdentityConflict(backupID: admitted.key.backupID)
+        )
       )
     case .created:
       admitted.ownsRecord = true
@@ -267,7 +282,7 @@ actor BaiduBackupUploadCoordinator {
         return WorkerResult.success(
           try await uploader.upload(
             archive: archive,
-            accessToken: accessToken,
+            accessToken: credential.requestAccessToken,
             applicationDirectory: applicationDirectory,
             progress: { progress in
               try await self.checkpoint(progress, operationID: operationID)
@@ -512,10 +527,10 @@ actor BaiduBackupUploadCoordinator {
       if active.phase == .createDispatchPermitted,
         remoteBackupMatchesReceipt(remoteBackup, receipt: active.receipt)
       {
-        completedBackups[active.backupID] = active.receipt
+        completedBackups[active.key] = active.receipt
         terminal = .verifiedRemote(remoteBackup)
       } else {
-        backupsAwaitingRemoteVerification[active.backupID] = active.receipt
+        backupsAwaitingRemoteVerification[active.key] = active.receipt
         terminal = .outcomeUnknown(
           receipt: active.receipt,
           reason: .unverifiedResponse
@@ -526,10 +541,10 @@ actor BaiduBackupUploadCoordinator {
       if active.phase == .precreateDispatchPermitted,
         rapidReceiptMatchesReceipt(rapidReceipt, receipt: active.receipt)
       {
-        backupsAwaitingRemoteVerification[active.backupID] = active.receipt
+        backupsAwaitingRemoteVerification[active.key] = active.receipt
         terminal = .needsRemoteVerification(rapidReceipt)
       } else {
-        backupsAwaitingRemoteVerification[active.backupID] = active.receipt
+        backupsAwaitingRemoteVerification[active.key] = active.receipt
         terminal = .outcomeUnknown(
           receipt: active.receipt,
           reason: .unverifiedResponse
@@ -544,7 +559,7 @@ actor BaiduBackupUploadCoordinator {
           terminal: .cancelled(source)
         )
       }
-      backupsAwaitingRemoteVerification[active.backupID] = active.receipt
+      backupsAwaitingRemoteVerification[active.key] = active.receipt
       terminal = .outcomeUnknown(
         receipt: active.receipt,
         reason: .cancelled(source)
@@ -557,7 +572,7 @@ actor BaiduBackupUploadCoordinator {
           terminal: .failed(.upload(error))
         )
       }
-      backupsAwaitingRemoteVerification[active.backupID] = active.receipt
+      backupsAwaitingRemoteVerification[active.key] = active.receipt
       terminal = .outcomeUnknown(
         receipt: active.receipt,
         reason: unknownReason(for: error)
@@ -570,7 +585,7 @@ actor BaiduBackupUploadCoordinator {
           terminal: .failed(.unexpected)
         )
       }
-      backupsAwaitingRemoteVerification[active.backupID] = active.receipt
+      backupsAwaitingRemoteVerification[active.key] = active.receipt
       terminal = .outcomeUnknown(
         receipt: active.receipt,
         reason: .unverifiedResponse

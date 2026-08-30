@@ -40,6 +40,7 @@ struct BaiduAuthSecurityContractTests {
   func uploadCoreRemainsQuarantined() throws {
     let rootURL = try repositoryRootURL()
     let allowedBaiduSwiftFiles = Set([
+      "InkNotes/Models/BaiduAccountCredential.swift",
       "InkNotes/Models/BaiduNetdiskAccount.swift",
       "InkNotes/Models/BaiduNetdiskBackup.swift",
       "InkNotes/Networking/BaiduBackupUploadCoordinator.swift",
@@ -56,6 +57,34 @@ struct BaiduAuthSecurityContractTests {
         Issue.record("Baidu integration escaped its quarantine into \(path)")
       }
     }
+  }
+
+  @Test("Account scope is broker-bound, redacted, and never derived from token or UInfo")
+  func accountScopeCapabilityRemainsOpaque() throws {
+    let rootURL = try repositoryRootURL()
+    let credentialModel = try String(
+      contentsOf: rootURL.appendingPathComponent(
+        "InkNotes/Models/BaiduAccountCredential.swift"
+      ),
+      encoding: .utf8
+    )
+
+    #expect(credentialModel.contains("init(brokerBindingID: UUID)"))
+    #expect(credentialModel.contains("CustomReflectable"))
+    #expect(credentialModel.contains("private let accessToken"))
+    #expect(credentialModel.contains("private init(accountScope:"))
+    #expect(credentialModel.contains("#if SWIFT_PACKAGE"))
+    #expect(credentialModel.contains("static func testingOnly("))
+    #expect(!credentialModel.contains("import CryptoKit"))
+    #expect(!credentialModel.contains("BaiduAccountIdentity"))
+    #expect(!credentialModel.contains("requestValue"))
+    #expect(!credentialModel.contains("tokenHash"))
+    #expect(!credentialModel.contains("init(accessToken:"))
+    #expect(!credentialModel.contains("init(token:"))
+    #expect(!credentialModel.contains("init(uk:"))
+    #expect(!credentialModel.contains("SHA256"))
+    #expect(!credentialModel.contains("MD5"))
+    #expect(!credentialModel.contains("struct BaiduAccountBoundCredential: Codable"))
   }
 
   @Test("Account identity probe remains minimal, redacted, and storage-free")

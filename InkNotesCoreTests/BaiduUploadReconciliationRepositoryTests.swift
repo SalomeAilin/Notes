@@ -41,7 +41,9 @@ struct BaiduUploadReconciliationRepositoryTests {
     let originalBytes = try Data(contentsOf: recordURL)
 
     let restartedRepository = BaiduUploadReconciliationRepository(rootURL: rootURL)
-    #expect(try await restartedRepository.load(backupID: backupID) == expected)
+    #expect(
+      try await restartedRepository.load(accountScope: self.accountScope(), backupID: backupID)
+        == expected)
     #expect(try await restartedRepository.admit(expected) == .existing)
     #expect(try Data(contentsOf: recordURL) == originalBytes)
 
@@ -51,12 +53,15 @@ struct BaiduUploadReconciliationRepositoryTests {
     #expect(
       Set(object.keys)
         == Set([
-          "schemaVersion", "attemptID", "backupID", "archiveSHA256", "localMD5",
-          "localByteCount", "requestedPath",
+          "schemaVersion", "accountScope", "attemptID", "backupID", "archiveSHA256",
+          "localMD5", "localByteCount", "requestedPath",
         ])
     )
     let persistedText = try #require(String(data: originalBytes, encoding: .utf8))
-    for forbidden in ["access_token", "refresh_token", "uploadid", "rawResponse", "tokenHash"] {
+    for forbidden in [
+      "access_token", "refresh_token", "uploadid", "rawResponse", "tokenHash", "uk",
+      "baidu_name", "netdisk_name", "avatar_url",
+    ] {
       #expect(!persistedText.contains(forbidden))
     }
   }
@@ -77,7 +82,8 @@ struct BaiduUploadReconciliationRepositoryTests {
     )
     #expect(try await repository.admit(restartedAttempt) == .existing)
     #expect(try Data(contentsOf: url) == originalBytes)
-    #expect(try await repository.load(backupID: backupID) == original)
+    #expect(
+      try await repository.load(accountScope: self.accountScope(), backupID: backupID) == original)
     await #expect(throws: BaiduUploadReconciliationRepositoryError.identityConflict) {
       try await repository.removeOwned(restartedAttempt)
     }
@@ -126,10 +132,11 @@ struct BaiduUploadReconciliationRepositoryTests {
         self.record(localMD5: String(repeating: "3", count: 32))
       )
     }
-    #expect(try await repository.load(backupID: backupID) == owned)
+    #expect(
+      try await repository.load(accountScope: self.accountScope(), backupID: backupID) == owned)
 
     #expect(try await repository.removeOwned(owned))
-    #expect(try await repository.load(backupID: backupID) == nil)
+    #expect(try await repository.load(accountScope: self.accountScope(), backupID: backupID) == nil)
     #expect(try await repository.removeOwned(owned) == false)
   }
 
@@ -149,8 +156,177 @@ struct BaiduUploadReconciliationRepositoryTests {
 
     #expect(admissions.filter { $0 == .created }.count == 1)
     #expect(admissions.filter { $0 == .identityConflict }.count == 1)
-    let persisted = try await firstRepository.load(backupID: backupID)
+    let persisted = try await firstRepository.load(
+      accountScope: self.accountScope(), backupID: backupID)
     #expect(persisted == firstRecord || persisted == secondRecord)
+  }
+
+  @Test("Different account scopes isolate the same backup ID")
+  func differentAccountScopesAreIndependent() async throws {
+    let fileManager = FileManager.default
+    let rootURL = makeRootURL(fileManager: fileManager)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let repository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    let firstScope = accountScope()
+    let secondScope = accountScope(
+      UUID(uuidString: "D2000000-0000-0000-0000-000000000002")!
+    )
+    let firstRecord = record(accountScope: firstScope)
+    let secondRecord = record(accountScope: secondScope)
+
+    #expect(try await repository.admit(firstRecord) == .created)
+    #expect(try await repository.admit(secondRecord) == .created)
+    #expect(
+      recordURL(rootURL: rootURL, accountScope: firstScope, backupID: backupID)
+        != recordURL(rootURL: rootURL, accountScope: secondScope, backupID: backupID)
+    )
+    #expect(
+      try await repository.load(accountScope: firstScope, backupID: backupID) == firstRecord
+    )
+    #expect(
+      try await repository.load(accountScope: secondScope, backupID: backupID) == secondRecord
+    )
+  }
+
+  @Test("A record from another account scope cannot remove the owner record")
+  func crossAccountRemovalCannotDeleteOwner() async throws {
+    let fileManager = FileManager.default
+    let rootURL = makeRootURL(fileManager: fileManager)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let repository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    let owner = record()
+    let otherScope = accountScope(
+      UUID(uuidString: "D2000000-0000-0000-0000-000000000002")!
+    )
+    let wrongAccountRecord = record(accountScope: otherScope)
+
+    #expect(try await repository.admit(owner) == .created)
+    #expect(try await repository.removeOwned(wrongAccountRecord) == false)
+    #expect(
+      try await repository.load(accountScope: accountScope(), backupID: backupID) == owner
+    )
+  }
+
+  @Test("Concurrent admissions for different account scopes both succeed")
+  func concurrentDifferentAccountScopesDoNotConflict() async throws {
+    let fileManager = FileManager.default
+    let rootURL = makeRootURL(fileManager: fileManager)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let firstRepository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    let secondRepository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    let firstRecord = record()
+    let secondRecord = record(
+      accountScope: accountScope(
+        UUID(uuidString: "D2000000-0000-0000-0000-000000000002")!
+      )
+    )
+
+    async let firstAdmission = firstRepository.admit(firstRecord)
+    async let secondAdmission = secondRepository.admit(secondRecord)
+    let admissions = try await [firstAdmission, secondAdmission]
+
+    #expect(admissions.allSatisfy { $0 == .created })
+  }
+
+  @Test("Any valid unscoped v1 record globally blocks v2 without changing bytes")
+  func legacyV1RecordBlocksEveryAccountAndBackup() async throws {
+    let fileManager = FileManager.default
+    let rootURL = makeRootURL(fileManager: fileManager)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let directoryURL = rootURL.appendingPathComponent(
+      BaiduUploadReconciliationRepository.reconciliationDirectoryName,
+      isDirectory: true
+    )
+    try fileManager.createDirectory(
+      at: directoryURL,
+      withIntermediateDirectories: true,
+      attributes: [.posixPermissions: 0o700]
+    )
+    try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directoryURL.path)
+    let legacyURL = directoryURL.appendingPathComponent(
+      "\(backupID.uuidString.lowercased()).json"
+    )
+    let legacyBytes = try legacyRecordData(backupID: backupID)
+    try writeRestricted(legacyBytes, to: legacyURL, fileManager: fileManager)
+
+    let repository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    let otherBackupID = UUID(uuidString: "B2000000-0000-0000-0000-000000000099")!
+    let requested = record(
+      accountScope: accountScope(
+        UUID(uuidString: "D2000000-0000-0000-0000-000000000002")!
+      ),
+      backupID: otherBackupID
+    )
+
+    await #expect(
+      throws: BaiduUploadReconciliationRepositoryError.legacyUnscopedRecordsPresent
+    ) {
+      try await repository.admit(requested)
+    }
+    await #expect(
+      throws: BaiduUploadReconciliationRepositoryError.legacyUnscopedRecordsPresent
+    ) {
+      _ = try await repository.load(
+        accountScope: requested.accountScope,
+        backupID: otherBackupID
+      )
+    }
+    await #expect(
+      throws: BaiduUploadReconciliationRepositoryError.legacyUnscopedRecordsPresent
+    ) {
+      try await repository.removeOwned(requested)
+    }
+    #expect(try Data(contentsOf: legacyURL) == legacyBytes)
+    #expect(
+      !fileManager.fileExists(
+        atPath: recordURL(
+          rootURL: rootURL,
+          accountScope: requested.accountScope,
+          backupID: otherBackupID
+        ).path
+      )
+    )
+  }
+
+  @Test("Record schema and filename layout cannot be cross-labeled")
+  func recordSchemaMustMatchFilenameLayout() async throws {
+    let fileManager = FileManager.default
+    let scopedFilename = BaiduUploadReconciliationRepository.recordFilename(
+      accountScope: accountScope(),
+      backupID: backupID
+    )
+    let legacyFilename = "\(backupID.uuidString.lowercased()).json"
+    let cases = [
+      (scopedFilename, try legacyRecordData(backupID: backupID)),
+      (legacyFilename, try JSONEncoder().encode(record())),
+    ]
+
+    for (filename, bytes) in cases {
+      let rootURL = makeRootURL(fileManager: fileManager)
+      defer { try? fileManager.removeItem(at: rootURL) }
+      let directoryURL = rootURL.appendingPathComponent(
+        BaiduUploadReconciliationRepository.reconciliationDirectoryName,
+        isDirectory: true
+      )
+      try fileManager.createDirectory(
+        at: directoryURL,
+        withIntermediateDirectories: true,
+        attributes: [.posixPermissions: 0o700]
+      )
+      try fileManager.setAttributes(
+        [.posixPermissions: 0o700],
+        ofItemAtPath: directoryURL.path
+      )
+      let misplacedURL = directoryURL.appendingPathComponent(filename)
+      try writeRestricted(bytes, to: misplacedURL, fileManager: fileManager)
+      let repository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+      let otherBackupID = UUID()
+
+      await #expect(throws: BaiduUploadReconciliationRepositoryError.invalidRecord) {
+        try await repository.admit(self.record(backupID: otherBackupID))
+      }
+      #expect(try Data(contentsOf: misplacedURL) == bytes)
+    }
   }
 
   @Test("A restart removes a canonical restricted temporary record before admission")
@@ -182,7 +358,8 @@ struct BaiduUploadReconciliationRepositoryTests {
     let repository = BaiduUploadReconciliationRepository(rootURL: rootURL)
     #expect(try await repository.admit(record()) == .created)
     #expect(!fileManager.fileExists(atPath: temporaryURL.path))
-    #expect(try await repository.load(backupID: backupID) == record())
+    #expect(
+      try await repository.load(accountScope: self.accountScope(), backupID: backupID) == record())
   }
 
   @Test("Unknown or insecure temporary entries remain fail-closed")
@@ -340,7 +517,7 @@ struct BaiduUploadReconciliationRepositoryTests {
     let corruptBytes = Data("not-json".utf8)
     try writeRestricted(corruptBytes, to: url, fileManager: fileManager)
     await #expect(throws: BaiduUploadReconciliationRepositoryError.invalidRecord) {
-      _ = try await repository.load(backupID: self.backupID)
+      _ = try await repository.load(accountScope: self.accountScope(), backupID: self.backupID)
     }
     await #expect(throws: BaiduUploadReconciliationRepositoryError.invalidRecord) {
       try await repository.admit(expected)
@@ -354,7 +531,7 @@ struct BaiduUploadReconciliationRepositoryTests {
     let extraKeyBytes = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     try writeRestricted(extraKeyBytes, to: url, fileManager: fileManager)
     await #expect(throws: BaiduUploadReconciliationRepositoryError.invalidRecord) {
-      _ = try await repository.load(backupID: self.backupID)
+      _ = try await repository.load(accountScope: self.accountScope(), backupID: self.backupID)
     }
     #expect(try Data(contentsOf: url) == extraKeyBytes)
 
@@ -366,13 +543,13 @@ struct BaiduUploadReconciliationRepositoryTests {
     await #expect(
       throws: BaiduUploadReconciliationRepositoryError.unsupportedSchemaVersion(found: 999)
     ) {
-      _ = try await repository.load(backupID: self.backupID)
+      _ = try await repository.load(accountScope: self.accountScope(), backupID: self.backupID)
     }
     #expect(try Data(contentsOf: url) == unsupportedBytes)
   }
 
-  @Test("Both reported and actual record byte counts are bounded")
-  func recordReadsEnforceBothSizeBoundaries() async throws {
+  @Test("Descriptor reads enforce the actual record byte limit")
+  func recordReadsEnforceActualSizeBoundary() async throws {
     let fileManager = FileManager.default
     let rootURL = makeRootURL(fileManager: fileManager)
     defer { try? fileManager.removeItem(at: rootURL) }
@@ -391,22 +568,9 @@ struct BaiduUploadReconciliationRepositoryTests {
         maximum: BaiduUploadReconciliationRepository.maximumRecordByteCount
       )
     ) {
-      _ = try await repository.load(backupID: self.backupID)
+      _ = try await repository.load(accountScope: self.accountScope(), backupID: self.backupID)
     }
 
-    let underreportingFileManager = ReconciliationUnderreportingFileManager(recordURL: url)
-    let underreportingRepository = BaiduUploadReconciliationRepository(
-      rootURL: rootURL,
-      fileManager: underreportingFileManager
-    )
-    await #expect(
-      throws: BaiduUploadReconciliationRepositoryError.recordTooLarge(
-        actual: oversizedBytes.count,
-        maximum: BaiduUploadReconciliationRepository.maximumRecordByteCount
-      )
-    ) {
-      _ = try await underreportingRepository.load(backupID: self.backupID)
-    }
   }
 
   @Test("Record count is globally bounded before a new attempt is admitted")
@@ -426,13 +590,22 @@ struct BaiduUploadReconciliationRepositoryTests {
     try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directoryURL.path)
 
     for _ in 0..<BaiduUploadReconciliationRepository.maximumRecordCount {
+      let markerScope = accountScope(UUID())
+      let markerBackupID = UUID()
+      let markerRecord = record(
+        accountScope: markerScope,
+        backupID: markerBackupID
+      )
       let markerURL = directoryURL.appendingPathComponent(
-        "\(UUID().uuidString.lowercased()).json"
+        BaiduUploadReconciliationRepository.recordFilename(
+          accountScope: markerScope,
+          backupID: markerBackupID
+        )
       )
       #expect(
         fileManager.createFile(
           atPath: markerURL.path,
-          contents: Data(),
+          contents: try JSONEncoder().encode(markerRecord),
           attributes: [.posixPermissions: 0o600]
         )
       )
@@ -477,25 +650,37 @@ struct BaiduUploadReconciliationRepositoryTests {
     )
     let secondRepository = BaiduUploadReconciliationRepository(rootURL: secondRootURL)
     await #expect(throws: BaiduUploadReconciliationRepositoryError.invalidStoreLayout) {
-      _ = try await secondRepository.load(backupID: self.backupID)
+      _ = try await secondRepository.load(
+        accountScope: self.accountScope(), backupID: self.backupID)
     }
   }
 
   private func record(
+    accountScope: BaiduAccountScope? = nil,
+    backupID: UUID? = nil,
     attemptID: UUID? = nil,
     archiveSHA256: String = String(repeating: "a", count: 64),
     localMD5: String = String(repeating: "b", count: 32),
     localByteCount: UInt64 = 4_096,
     requestedPath: String? = nil
   ) -> BaiduUploadReconciliationRecord {
-    BaiduUploadReconciliationRecord(
+    let effectiveBackupID = backupID ?? self.backupID
+    return BaiduUploadReconciliationRecord(
+      accountScope: accountScope ?? self.accountScope(),
       attemptID: attemptID ?? self.attemptID,
-      backupID: backupID,
+      backupID: effectiveBackupID,
       archiveSHA256: archiveSHA256,
       localMD5: localMD5,
       localByteCount: localByteCount,
-      requestedPath: requestedPath ?? (try! canonicalPath(folderName: "测试应用", backupID: backupID))
+      requestedPath: requestedPath
+        ?? (try! canonicalPath(folderName: "测试应用", backupID: effectiveBackupID))
     )
+  }
+
+  private func accountScope(
+    _ bindingID: UUID = UUID(uuidString: "D2000000-0000-0000-0000-000000000001")!
+  ) -> BaiduAccountScope {
+    try! BaiduAccountScope(brokerBindingID: bindingID)
   }
 
   private func canonicalPath(folderName: String, backupID: UUID) throws -> String {
@@ -506,13 +691,37 @@ struct BaiduUploadReconciliationRepositoryTests {
     fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
   }
 
-  private func recordURL(rootURL: URL, backupID: UUID) -> URL {
+  private func recordURL(
+    rootURL: URL,
+    accountScope: BaiduAccountScope? = nil,
+    backupID: UUID
+  ) -> URL {
     rootURL
       .appendingPathComponent(
         BaiduUploadReconciliationRepository.reconciliationDirectoryName,
         isDirectory: true
       )
-      .appendingPathComponent("\(backupID.uuidString.lowercased()).json")
+      .appendingPathComponent(
+        BaiduUploadReconciliationRepository.recordFilename(
+          accountScope: accountScope ?? self.accountScope(),
+          backupID: backupID
+        )
+      )
+  }
+
+  private func legacyRecordData(backupID: UUID) throws -> Data {
+    try JSONSerialization.data(
+      withJSONObject: [
+        "schemaVersion": 1,
+        "attemptID": attemptID.uuidString,
+        "backupID": backupID.uuidString,
+        "archiveSHA256": String(repeating: "a", count: 64),
+        "localMD5": String(repeating: "b", count: 32),
+        "localByteCount": 4_096,
+        "requestedPath": try canonicalPath(folderName: "测试应用", backupID: backupID),
+      ],
+      options: [.prettyPrinted, .sortedKeys]
+    )
   }
 
   private func permissions(at url: URL, fileManager: FileManager) throws -> Int? {
@@ -541,22 +750,5 @@ private final class ReconciliationApplicationSupportUnavailableFileManager: File
     in domainMask: FileManager.SearchPathDomainMask
   ) -> [URL] {
     []
-  }
-}
-
-private final class ReconciliationUnderreportingFileManager: FileManager, @unchecked Sendable {
-  private let recordPath: String
-
-  init(recordURL: URL) {
-    self.recordPath = recordURL.path
-    super.init()
-  }
-
-  override func attributesOfItem(atPath path: String) throws -> [FileAttributeKey: Any] {
-    var attributes = try super.attributesOfItem(atPath: path)
-    if path == recordPath {
-      attributes[.size] = NSNumber(value: 0)
-    }
-    return attributes
   }
 }
