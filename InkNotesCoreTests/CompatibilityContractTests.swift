@@ -421,6 +421,23 @@ struct CompatibilityContractTests {
     #expect(readinessScript.contains("notes_device_connection_state"))
     #expect(readinessScript.contains("devicectl.list.devices"))
     #expect(readinessScript.contains("com.apple.coredevice.feature.installapp"))
+    let deviceCountClassification = [
+      "  case \"$notes_device_count\" in",
+      "    0) fail \"No device has the exact requested name\" ;;",
+      "    1) ;;",
+      "    <->) fail \"The requested device name is not unique\" ;;",
+      "    *) fail \"Device count is invalid\" ;;",
+      "  esac",
+    ].joined(separator: "\n")
+    #expect(readinessScript.contains(deviceCountClassification))
+    #expect(
+      readinessScript.contains("Returned device name does not exactly match the request")
+    )
+    #expect(
+      !readinessScript.contains(
+        "[[ \"$notes_device_count\" == \"1\" ]] || fail \"The requested device name is not unique\""
+      )
+    )
     #expect(
       readinessScript.components(separatedBy: "xcrun devicectl list devices").count - 1 == 1
     )

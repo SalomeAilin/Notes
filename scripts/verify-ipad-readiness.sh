@@ -347,11 +347,16 @@ if [[ -n "$notes_device_name" ]]; then
   notes_device_count="$(
     print -rn -- "$notes_device_snapshot" | jq -er '.result.devices | length' 2>/dev/null || true
   )"
-  [[ "$notes_device_count" == "1" ]] || fail "The requested device name is not unique"
+  case "$notes_device_count" in
+    0) fail "No device has the exact requested name" ;;
+    1) ;;
+    <->) fail "The requested device name is not unique" ;;
+    *) fail "Device count is invalid" ;;
+  esac
   print -rn -- "$notes_device_snapshot" \
     | jq -e --arg name "$notes_device_name" \
       '.result.devices[0].properties.state.name == $name' >/dev/null 2>&1 \
-    || fail "No device has the exact requested name"
+    || fail "Returned device name does not exactly match the request"
   print -rn -- "$notes_device_snapshot" \
     | jq -e '.result.devices[0].properties.hardware.deviceType == "iPad"' >/dev/null 2>&1 \
     || fail "Requested device is not an iPad"
