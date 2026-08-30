@@ -32,6 +32,7 @@
 		D50000000000000000000002 /* BackupFileReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = C50000000000000000000002 /* BackupFileReader.swift */; };
 		D50000000000000000000003 /* BackupImportPresentationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = C50000000000000000000003 /* BackupImportPresentationState.swift */; };
 		D60000000000000000000001 /* BaiduAccountCredential.swift in Sources */ = {isa = PBXBuildFile; fileRef = C60000000000000000000001 /* BaiduAccountCredential.swift */; };
+		D70000000000000000000001 /* BaiduRemoteBackupMetadataObserver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C70000000000000000000001 /* BaiduRemoteBackupMetadataObserver.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -62,6 +63,7 @@
 		C50000000000000000000002 /* BackupFileReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupFileReader.swift; sourceTree = "<group>"; };
 		C50000000000000000000003 /* BackupImportPresentationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupImportPresentationState.swift; sourceTree = "<group>"; };
 		C60000000000000000000001 /* BaiduAccountCredential.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaiduAccountCredential.swift; sourceTree = "<group>"; };
+		C70000000000000000000001 /* BaiduRemoteBackupMetadataObserver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaiduRemoteBackupMetadataObserver.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -176,6 +178,7 @@
 				C10000000000000000000002 /* BaiduHTTPTransport.swift */,
 				C40000000000000000000002 /* BaiduNetdiskAccountResolver.swift */,
 				C10000000000000000000003 /* BaiduNetdiskBackupUploader.swift */,
+				C70000000000000000000001 /* BaiduRemoteBackupMetadataObserver.swift */,
 			);
 			path = Networking;
 			sourceTree = "<group>";
@@ -262,6 +265,7 @@
 				D40000000000000000000002 /* BaiduNetdiskAccountResolver.swift in Sources */,
 				D10000000000000000000004 /* BaiduBackupUploadCoordinator.swift in Sources */,
 				D10000000000000000000003 /* BaiduNetdiskBackupUploader.swift in Sources */,
+				D70000000000000000000001 /* BaiduRemoteBackupMetadataObserver.swift in Sources */,
 				D0000000000000000000000B /* BackupArchiveCodec.swift in Sources */,
 				D50000000000000000000002 /* BackupFileReader.swift in Sources */,
 				D0000000000000000000000C /* BackupSnapshotRepository.swift in Sources */,

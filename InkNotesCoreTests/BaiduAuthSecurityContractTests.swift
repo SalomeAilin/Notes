@@ -47,6 +47,7 @@ struct BaiduAuthSecurityContractTests {
       "InkNotes/Networking/BaiduHTTPTransport.swift",
       "InkNotes/Networking/BaiduNetdiskAccountResolver.swift",
       "InkNotes/Networking/BaiduNetdiskBackupUploader.swift",
+      "InkNotes/Networking/BaiduRemoteBackupMetadataObserver.swift",
       "InkNotes/Persistence/BaiduUploadReconciliationRepository.swift",
     ])
 
@@ -56,6 +57,42 @@ struct BaiduAuthSecurityContractTests {
       if containsBaiduIntegrationMarker(in: contents), !allowedBaiduSwiftFiles.contains(path) {
         Issue.record("Baidu integration escaped its quarantine into \(path)")
       }
+    }
+  }
+
+  @Test("Remote metadata observation remains read-only and cannot authorize reconciliation")
+  func remoteMetadataObservationRemainsReadOnly() throws {
+    let rootURL = try repositoryRootURL()
+    let observer = try String(
+      contentsOf: rootURL.appendingPathComponent(
+        "InkNotes/Networking/BaiduRemoteBackupMetadataObserver.swift"
+      ),
+      encoding: .utf8
+    )
+
+    #expect(observer.contains("exactMetadataMatchContentUnproven"))
+    #expect(observer.contains("case notObservedAbsenceUnproven"))
+    #expect(observer.contains("case indeterminate"))
+    #expect(!observer.contains("BaiduUploadReconciliationStoring"))
+    #expect(!observer.contains("BaiduUploadReconciliationRepository"))
+    #expect(!observer.contains("removeOwned"))
+    #expect(!observer.contains("removeItem"))
+    #expect(!observer.contains("FileManager"))
+    #expect(!observer.contains("unlink"))
+    #expect(!observer.contains("filemetas"))
+    #expect(!observer.contains("dlink"))
+    #expect(!observer.contains("verifiedRemote"))
+
+    for sourceURL in try productionSwiftURLs(repositoryRoot: rootURL) {
+      let path = relativePath(sourceURL, repositoryRoot: rootURL)
+      guard path != "InkNotes/Networking/BaiduRemoteBackupMetadataObserver.swift" else {
+        continue
+      }
+      let contents = try String(contentsOf: sourceURL, encoding: .utf8)
+      #expect(!contents.contains("BaiduRemoteBackupMetadataObservation"))
+      #expect(!contents.contains("BaiduRemoteBackupMetadataObserver("))
+      #expect(!contents.contains("exactMetadataMatchContentUnproven"))
+      #expect(!contents.contains("notObservedAbsenceUnproven"))
     }
   }
 
