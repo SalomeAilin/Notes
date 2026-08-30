@@ -313,30 +313,112 @@ actor BaiduUploadReconciliationRepository {
     )
     guard try validateRootDirectoryIfPresent() else { return false }
     return try withExclusiveStoreLock {
-      guard try inspectExistingReconciliationDirectory() != nil else { return false }
       guard
-        let existing = try loadRecordIfPresent(
-          at: recordURL,
-          expectedAccountScope: record.accountScope,
-          expectedBackupID: record.backupID
-        )
+        try inspectExistingReconciliationDirectory(
+          removeTemporaryFiles: false
+        ) != nil
       else {
         return false
       }
-      guard existing == record else {
-        throw BaiduUploadReconciliationRepositoryError.identityConflict
-      }
-
-      do {
-        try fileManager.removeItem(at: recordURL)
-        try synchronizeDirectory(at: recordURL.deletingLastPathComponent())
-        return true
-      } catch let error as NSError where Self.isMissingFileError(error) {
-        return false
-      } catch {
-        throw BaiduUploadReconciliationRepositoryError.persistenceFailure
-      }
+      return try unlinkOwnedRecord(record, at: recordURL)
     }
+  }
+
+  private func unlinkOwnedRecord(
+    _ record: BaiduUploadReconciliationRecord,
+    at recordURL: URL
+  ) throws -> Bool {
+    let directoryURL = recordURL.deletingLastPathComponent()
+    let directoryDescriptor = directoryURL.path.withCString { path in
+      Darwin.open(path, O_RDONLY | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW)
+    }
+    guard directoryDescriptor >= 0 else {
+      let openError = errno
+      if openError == ENOENT { return false }
+      if openError == ELOOP || openError == ENOTDIR {
+        throw BaiduUploadReconciliationRepositoryError.invalidStoreLayout
+      }
+      throw BaiduUploadReconciliationRepositoryError.persistenceFailure
+    }
+    defer { Darwin.close(directoryDescriptor) }
+
+    var directoryStatus = stat()
+    guard Darwin.fstat(directoryDescriptor, &directoryStatus) == 0 else {
+      throw BaiduUploadReconciliationRepositoryError.persistenceFailure
+    }
+    guard directoryStatus.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR),
+      directoryStatus.st_mode & mode_t(0o7777) == mode_t(Self.directoryPermissions)
+    else {
+      throw BaiduUploadReconciliationRepositoryError.invalidStoreLayout
+    }
+
+    let filename = recordURL.lastPathComponent
+    let recordDescriptor = filename.withCString { name in
+      Darwin.openat(directoryDescriptor, name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+    }
+    guard recordDescriptor >= 0 else {
+      let openError = errno
+      if openError == ENOENT { return false }
+      if openError == ELOOP || openError == ENOTDIR {
+        throw BaiduUploadReconciliationRepositoryError.invalidStoreLayout
+      }
+      throw BaiduUploadReconciliationRepositoryError.persistenceFailure
+    }
+    defer { Darwin.close(recordDescriptor) }
+
+    var descriptorStatus = stat()
+    guard Darwin.fstat(recordDescriptor, &descriptorStatus) == 0 else {
+      throw BaiduUploadReconciliationRepositoryError.persistenceFailure
+    }
+    let data = try readRecordData(from: recordDescriptor, status: descriptorStatus)
+    let existing = try decode(data)
+    try Self.validate(existing)
+    guard existing.accountScope == record.accountScope,
+      existing.backupID == record.backupID,
+      filename
+        == Self.recordFilename(
+          accountScope: existing.accountScope,
+          backupID: existing.backupID
+        )
+    else {
+      throw BaiduUploadReconciliationRepositoryError.invalidRecord
+    }
+    guard existing == record else {
+      throw BaiduUploadReconciliationRepositoryError.identityConflict
+    }
+
+    var pathStatus = stat()
+    let statusResult = filename.withCString { name in
+      Darwin.fstatat(directoryDescriptor, name, &pathStatus, AT_SYMLINK_NOFOLLOW)
+    }
+    guard statusResult == 0 else {
+      let statusError = errno
+      if statusError == ENOENT { return false }
+      throw BaiduUploadReconciliationRepositoryError.persistenceFailure
+    }
+    guard pathStatus.st_dev == descriptorStatus.st_dev,
+      pathStatus.st_ino == descriptorStatus.st_ino,
+      pathStatus.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+      pathStatus.st_mode & mode_t(0o7777) == mode_t(Self.filePermissions)
+    else {
+      throw BaiduUploadReconciliationRepositoryError.invalidStoreLayout
+    }
+
+    let unlinkResult = filename.withCString { name in
+      Darwin.unlinkat(directoryDescriptor, name, 0)
+    }
+    guard unlinkResult == 0 else {
+      let unlinkError = errno
+      if unlinkError == ENOENT { return false }
+      if unlinkError == EISDIR || unlinkError == EPERM {
+        throw BaiduUploadReconciliationRepositoryError.invalidStoreLayout
+      }
+      throw BaiduUploadReconciliationRepositoryError.persistenceFailure
+    }
+    guard Darwin.fsync(directoryDescriptor) == 0 else {
+      throw BaiduUploadReconciliationRepositoryError.persistenceFailure
+    }
+    return true
   }
 
   private func requiredRootURL() throws -> URL {
@@ -477,14 +559,19 @@ actor BaiduUploadReconciliationRepository {
     return directoryURL
   }
 
-  private func inspectExistingReconciliationDirectory() throws -> Int? {
+  private func inspectExistingReconciliationDirectory(
+    removeTemporaryFiles: Bool = true
+  ) throws -> Int? {
     let directoryURL = try reconciliationDirectoryURL()
     guard let attributes = try attributesIfPresent(at: directoryURL) else { return nil }
     try validateDirectoryAttributes(
       attributes,
       requiredPermissions: Self.directoryPermissions
     )
-    return try recoverTemporaryFilesAndCountRecords(in: directoryURL)
+    return try recoverTemporaryFilesAndCountRecords(
+      in: directoryURL,
+      removeTemporaryFiles: removeTemporaryFiles
+    )
   }
 
   private func createDirectoryIfNeeded(
@@ -664,7 +751,10 @@ actor BaiduUploadReconciliationRepository {
     return record
   }
 
-  private func recoverTemporaryFilesAndCountRecords(in directoryURL: URL) throws -> Int {
+  private func recoverTemporaryFilesAndCountRecords(
+    in directoryURL: URL,
+    removeTemporaryFiles: Bool = true
+  ) throws -> Int {
     var enumerationFailed = false
     guard
       let enumerator = fileManager.enumerator(
@@ -743,17 +833,97 @@ actor BaiduUploadReconciliationRepository {
       throw BaiduUploadReconciliationRepositoryError.legacyUnscopedRecordsPresent
     }
 
-    for temporaryFile in temporaryFiles {
-      do {
-        try fileManager.removeItem(at: temporaryFile)
-      } catch {
-        throw BaiduUploadReconciliationRepositoryError.persistenceFailure
+    if removeTemporaryFiles {
+      for temporaryFile in temporaryFiles {
+        _ = try unlinkValidatedTemporaryFile(at: temporaryFile)
+      }
+      if !temporaryFiles.isEmpty {
+        try synchronizeDirectory(at: directoryURL)
       }
     }
-    if !temporaryFiles.isEmpty {
-      try synchronizeDirectory(at: directoryURL)
-    }
     return recordCount
+  }
+
+  @discardableResult
+  private func unlinkValidatedTemporaryFile(at temporaryURL: URL) throws -> Bool {
+    let directoryURL = temporaryURL.deletingLastPathComponent()
+    let directoryDescriptor = directoryURL.path.withCString { path in
+      Darwin.open(path, O_RDONLY | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW)
+    }
+    guard directoryDescriptor >= 0 else {
+      let openError = errno
+      if openError == ENOENT { return false }
+      if openError == ELOOP || openError == ENOTDIR {
+        throw BaiduUploadReconciliationRepositoryError.invalidStoreLayout
+      }
+      throw BaiduUploadReconciliationRepositoryError.persistenceFailure
+    }
+    defer { Darwin.close(directoryDescriptor) }
+
+    var directoryStatus = stat()
+    guard Darwin.fstat(directoryDescriptor, &directoryStatus) == 0 else {
+      throw BaiduUploadReconciliationRepositoryError.persistenceFailure
+    }
+    guard directoryStatus.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR),
+      directoryStatus.st_mode & mode_t(0o7777) == mode_t(Self.directoryPermissions)
+    else {
+      throw BaiduUploadReconciliationRepositoryError.invalidStoreLayout
+    }
+
+    let filename = temporaryURL.lastPathComponent
+    guard Self.isCanonicalTemporaryFilename(filename) else {
+      throw BaiduUploadReconciliationRepositoryError.invalidStoreLayout
+    }
+    let fileDescriptor = filename.withCString { name in
+      Darwin.openat(directoryDescriptor, name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+    }
+    guard fileDescriptor >= 0 else {
+      let openError = errno
+      if openError == ENOENT { return false }
+      if openError == ELOOP || openError == ENOTDIR {
+        throw BaiduUploadReconciliationRepositoryError.invalidStoreLayout
+      }
+      throw BaiduUploadReconciliationRepositoryError.persistenceFailure
+    }
+    defer { Darwin.close(fileDescriptor) }
+
+    var descriptorStatus = stat()
+    guard Darwin.fstat(fileDescriptor, &descriptorStatus) == 0,
+      descriptorStatus.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+      descriptorStatus.st_mode & mode_t(0o7777) == mode_t(Self.filePermissions)
+    else {
+      throw BaiduUploadReconciliationRepositoryError.invalidStoreLayout
+    }
+
+    var pathStatus = stat()
+    let statusResult = filename.withCString { name in
+      Darwin.fstatat(directoryDescriptor, name, &pathStatus, AT_SYMLINK_NOFOLLOW)
+    }
+    guard statusResult == 0 else {
+      let statusError = errno
+      if statusError == ENOENT { return false }
+      throw BaiduUploadReconciliationRepositoryError.persistenceFailure
+    }
+    guard pathStatus.st_dev == descriptorStatus.st_dev,
+      pathStatus.st_ino == descriptorStatus.st_ino,
+      pathStatus.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+      pathStatus.st_mode & mode_t(0o7777) == mode_t(Self.filePermissions)
+    else {
+      throw BaiduUploadReconciliationRepositoryError.invalidStoreLayout
+    }
+
+    let unlinkResult = filename.withCString { name in
+      Darwin.unlinkat(directoryDescriptor, name, 0)
+    }
+    guard unlinkResult == 0 else {
+      let unlinkError = errno
+      if unlinkError == ENOENT { return false }
+      if unlinkError == EISDIR || unlinkError == EPERM {
+        throw BaiduUploadReconciliationRepositoryError.invalidStoreLayout
+      }
+      throw BaiduUploadReconciliationRepositoryError.persistenceFailure
+    }
+    return true
   }
 
   private func loadLegacyRecord(
@@ -827,6 +997,17 @@ actor BaiduUploadReconciliationRepository {
     var status = stat()
     guard Darwin.fstat(descriptor, &status) == 0,
       status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+      status.st_mode & mode_t(0o7777) == mode_t(Self.filePermissions),
+      status.st_size >= 0
+    else {
+      throw BaiduUploadReconciliationRepositoryError.invalidStoreLayout
+    }
+
+    return try readRecordData(from: descriptor, status: status)
+  }
+
+  private func readRecordData(from descriptor: Int32, status: stat) throws -> Data {
+    guard status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
       status.st_mode & mode_t(0o7777) == mode_t(Self.filePermissions),
       status.st_size >= 0
     else {

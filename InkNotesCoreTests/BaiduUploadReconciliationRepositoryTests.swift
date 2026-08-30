@@ -140,6 +140,88 @@ struct BaiduUploadReconciliationRepositoryTests {
     #expect(try await repository.removeOwned(owned) == false)
   }
 
+  @Test("Owned record deletion never delegates to recursive FileManager removal")
+  func ownedRecordDeletionNeverRecursesIntoASwappedDirectory() async throws {
+    let fileManager = ReconciliationRecursiveRemovalTrapFileManager()
+    let rootURL = makeRootURL(fileManager: fileManager)
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+    let recordURL = self.recordURL(rootURL: rootURL, backupID: backupID)
+    let victimURL = rootURL.appendingPathComponent("victim", isDirectory: true)
+    let markerURL = victimURL.appendingPathComponent("must-survive.txt")
+    try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: false)
+    try FileManager.default.createDirectory(at: victimURL, withIntermediateDirectories: false)
+    try Data("must survive".utf8).write(to: markerURL)
+    fileManager.arm(recordURL: recordURL, victimURL: victimURL)
+    let repository = BaiduUploadReconciliationRepository(
+      rootURL: rootURL,
+      fileManager: fileManager
+    )
+    let owned = record()
+    #expect(try await repository.admit(owned) == .created)
+
+    #expect(try await repository.removeOwned(owned))
+    #expect(FileManager.default.fileExists(atPath: markerURL.path))
+    #expect(!FileManager.default.fileExists(atPath: recordURL.path))
+  }
+
+  @Test("Owned record deletion does not recover unrelated temporary records")
+  func ownedRecordDeletionOnlyRemovesItsTarget() async throws {
+    let fileManager = FileManager.default
+    let rootURL = makeRootURL(fileManager: fileManager)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let repository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    let owned = record()
+    #expect(try await repository.admit(owned) == .created)
+
+    let directoryURL = recordURL(rootURL: rootURL, backupID: backupID)
+      .deletingLastPathComponent()
+    let temporaryURL = directoryURL.appendingPathComponent(
+      ".11111111-1111-1111-1111-111111111111.tmp"
+    )
+    let temporaryBytes = Data("pending writer".utf8)
+    try writeRestricted(temporaryBytes, to: temporaryURL, fileManager: fileManager)
+
+    #expect(try await repository.removeOwned(owned))
+    #expect(try Data(contentsOf: temporaryURL) == temporaryBytes)
+  }
+
+  @Test("Temporary recovery never delegates to recursive FileManager removal")
+  func temporaryRecoveryNeverRecursesIntoASwappedDirectory() async throws {
+    let fileManager = ReconciliationRecursiveRemovalTrapFileManager()
+    let rootURL = makeRootURL(fileManager: fileManager)
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+    let directoryURL = rootURL.appendingPathComponent(
+      BaiduUploadReconciliationRepository.reconciliationDirectoryName,
+      isDirectory: true
+    )
+    try FileManager.default.createDirectory(
+      at: directoryURL,
+      withIntermediateDirectories: true,
+      attributes: [.posixPermissions: 0o700]
+    )
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o700],
+      ofItemAtPath: directoryURL.path
+    )
+    let temporaryURL = directoryURL.appendingPathComponent(
+      ".22222222-2222-2222-2222-222222222222.tmp"
+    )
+    try writeRestricted(Data("temporary".utf8), to: temporaryURL, fileManager: fileManager)
+    let victimURL = rootURL.appendingPathComponent("victim", isDirectory: true)
+    let markerURL = victimURL.appendingPathComponent("must-survive.txt")
+    try FileManager.default.createDirectory(at: victimURL, withIntermediateDirectories: false)
+    try Data("must survive".utf8).write(to: markerURL)
+    fileManager.arm(recordURL: temporaryURL, victimURL: victimURL)
+    let repository = BaiduUploadReconciliationRepository(
+      rootURL: rootURL,
+      fileManager: fileManager
+    )
+
+    #expect(try await repository.admit(record()) == .created)
+    #expect(FileManager.default.fileExists(atPath: markerURL.path))
+    #expect(!FileManager.default.fileExists(atPath: temporaryURL.path))
+  }
+
   @Test("Concurrent repository instances atomically preserve one identity")
   func concurrentInstancesPreserveOneIdentity() async throws {
     let fileManager = FileManager.default
@@ -750,5 +832,35 @@ private final class ReconciliationApplicationSupportUnavailableFileManager: File
     in domainMask: FileManager.SearchPathDomainMask
   ) -> [URL] {
     []
+  }
+}
+
+private final class ReconciliationRecursiveRemovalTrapFileManager: FileManager,
+  @unchecked Sendable
+{
+  private let stateLock = NSLock()
+  private var armedRecordURL: URL?
+  private var armedVictimURL: URL?
+
+  func arm(recordURL: URL, victimURL: URL) {
+    stateLock.withLock {
+      armedRecordURL = recordURL
+      armedVictimURL = victimURL
+    }
+  }
+
+  override func removeItem(at URL: URL) throws {
+    let victimURL = stateLock.withLock { () -> URL? in
+      guard URL == armedRecordURL else { return nil }
+      return armedVictimURL
+    }
+    guard let victimURL else {
+      try super.removeItem(at: URL)
+      return
+    }
+
+    try FileManager.default.removeItem(at: URL)
+    try FileManager.default.moveItem(at: victimURL, to: URL)
+    try super.removeItem(at: URL)
   }
 }
