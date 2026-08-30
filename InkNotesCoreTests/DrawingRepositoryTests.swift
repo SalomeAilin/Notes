@@ -25,6 +25,38 @@ struct DrawingRepositoryTests {
     #expect(!FileManager.default.fileExists(atPath: temporaryFallback.path))
   }
 
+  @Test("Default storage creates a fresh Application Support directory before saving")
+  func defaultStorageBootstrapsApplicationSupport() async throws {
+    let fileManager = IsolatedApplicationSupportFileManager()
+    let containerURL = fileManager.containerURL
+    defer { try? FileManager.default.removeItem(at: containerURL) }
+    try FileManager.default.createDirectory(
+      at: containerURL.appendingPathComponent("Library", isDirectory: true),
+      withIntermediateDirectories: true
+    )
+    let applicationSupportURL = fileManager.applicationSupportURL
+
+    let repository = DrawingRepository(fileManager: fileManager)
+    try await repository.saveLibrary(LibraryDocument.starter())
+
+    let rootURL = applicationSupportURL.appendingPathComponent(
+      DrawingRepository.persistedDirectoryName,
+      isDirectory: true
+    )
+    #expect(FileManager.default.fileExists(atPath: applicationSupportURL.path))
+    #expect(
+      FileManager.default.fileExists(
+        atPath: rootURL.appendingPathComponent(DrawingRepository.libraryFilename).path
+      )
+    )
+    #expect(
+      !FileManager.default.fileExists(
+        atPath: applicationSupportURL.deletingLastPathComponent()
+          .appendingPathComponent(POSIXDurableFileWriter.lockFilename).path
+      )
+    )
+  }
+
   @Test("The store enters read-only protection when permanent storage is unavailable")
   @MainActor
   func storeProtectsUnavailablePermanentStorage() async throws {
@@ -193,5 +225,43 @@ private final class ApplicationSupportUnavailableFileManager: FileManager, @unch
     in domainMask: FileManager.SearchPathDomainMask
   ) -> [URL] {
     []
+  }
+
+  override func url(
+    for directory: FileManager.SearchPathDirectory,
+    in domain: FileManager.SearchPathDomainMask,
+    appropriateFor url: URL?,
+    create shouldCreate: Bool
+  ) throws -> URL {
+    throw CocoaError(.fileNoSuchFile)
+  }
+}
+
+private final class IsolatedApplicationSupportFileManager: FileManager, @unchecked Sendable {
+  let containerURL = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+
+  var applicationSupportURL: URL {
+    containerURL
+      .appendingPathComponent("Library", isDirectory: true)
+      .appendingPathComponent("Application Support", isDirectory: true)
+  }
+
+  override func url(
+    for directory: FileManager.SearchPathDirectory,
+    in domain: FileManager.SearchPathDomainMask,
+    appropriateFor url: URL?,
+    create shouldCreate: Bool
+  ) throws -> URL {
+    guard directory == .applicationSupportDirectory, domain == .userDomainMask else {
+      throw CocoaError(.fileNoSuchFile)
+    }
+    if shouldCreate {
+      try FileManager.default.createDirectory(
+        at: applicationSupportURL,
+        withIntermediateDirectories: true
+      )
+    }
+    return applicationSupportURL
   }
 }
