@@ -96,6 +96,33 @@ struct BaiduAuthSecurityContractTests {
     }
   }
 
+  @Test("Proofless upload responses cannot claim verified remote content")
+  func prooflessUploadResponsesRemainContentUnproven() throws {
+    let rootURL = try repositoryRootURL()
+    let coordinator = try String(
+      contentsOf: rootURL.appendingPathComponent(
+        "InkNotes/Networking/BaiduBackupUploadCoordinator.swift"
+      ),
+      encoding: .utf8
+    )
+
+    #expect(coordinator.contains("createResponseMetadataMatchedContentUnproven"))
+    #expect(coordinator.contains("backupsAwaitingRemoteVerification[active.key]"))
+    #expect(!coordinator.contains("case verifiedRemote"))
+    #expect(!coordinator.contains("completedBackups"))
+    #expect(!coordinator.contains("alreadyCompletedThisSession"))
+    #expect(!coordinator.contains("contentVerified"))
+
+    for sourceURL in try productionSwiftURLs(repositoryRoot: rootURL) {
+      let path = relativePath(sourceURL, repositoryRoot: rootURL)
+      let contents = try String(contentsOf: sourceURL, encoding: .utf8).lowercased()
+      for forbiddenClaim in ["verifiedremote", "contentverified"]
+      where contents.contains(forbiddenClaim) {
+        Issue.record("Unproven remote content claim \(forbiddenClaim) in \(path)")
+      }
+    }
+  }
+
   @Test("Account scope is broker-bound, redacted, and never derived from token or UInfo")
   func accountScopeCapabilityRemainsOpaque() throws {
     let rootURL = try repositoryRootURL()

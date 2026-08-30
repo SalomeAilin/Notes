@@ -48,11 +48,10 @@ enum BaiduBackupUploadRejection: Equatable, Sendable {
   case alreadyRunning(operationID: UUID)
   case remoteVerificationRequired(backupID: UUID)
   case reconciliationIdentityConflict(backupID: UUID)
-  case alreadyCompletedThisSession(backupID: UUID)
 }
 
 enum BaiduBackupUploadTerminalOutcome: Equatable, Sendable {
-  case verifiedRemote(BaiduRemoteBackup)
+  case createResponseMetadataMatchedContentUnproven(BaiduRemoteBackup)
   case needsRemoteVerification(BaiduRapidUploadReceipt)
   case outcomeUnknown(
     receipt: BaiduBackupUploadAttemptReceipt,
@@ -98,7 +97,6 @@ actor BaiduBackupUploadCoordinator {
   private var active: ActiveUpload?
   private var backupsAwaitingRemoteVerification:
     [ScopedBackupKey: BaiduBackupUploadAttemptReceipt] = [:]
-  private var completedBackups: [ScopedBackupKey: BaiduBackupUploadAttemptReceipt] = [:]
   private var snapshotContinuations:
     [UUID: AsyncStream<BaiduBackupUploadCoordinatorSnapshot>.Continuation] = [:]
 
@@ -153,14 +151,6 @@ actor BaiduBackupUploadCoordinator {
           : .reconciliationIdentityConflict(backupID: receipt.backupID)
       )
     }
-    if let completedReceipt = completedBackups[key] {
-      return .rejected(
-        receiptHasSameUploadIdentity(completedReceipt, receipt)
-          ? .alreadyCompletedThisSession(backupID: receipt.backupID)
-          : .reconciliationIdentityConflict(backupID: receipt.backupID)
-      )
-    }
-
     let operationID = UUID()
     let record = BaiduUploadReconciliationRecord(
       accountScope: credential.accountScope,
@@ -536,10 +526,10 @@ actor BaiduBackupUploadCoordinator {
     switch result {
     case .success(.uploaded(let remoteBackup)):
       if active.phase == .createDispatchPermitted,
-        remoteBackupMatchesReceipt(remoteBackup, receipt: active.receipt)
+        createResponseMetadataMatchesReceipt(remoteBackup, receipt: active.receipt)
       {
-        completedBackups[active.key] = active.receipt
-        terminal = .verifiedRemote(remoteBackup)
+        backupsAwaitingRemoteVerification[active.key] = active.receipt
+        terminal = .createResponseMetadataMatchedContentUnproven(remoteBackup)
       } else {
         backupsAwaitingRemoteVerification[active.key] = active.receipt
         terminal = .outcomeUnknown(
@@ -606,7 +596,7 @@ actor BaiduBackupUploadCoordinator {
     return finishReservation(operationID: operationID, terminal: terminal)
   }
 
-  private func remoteBackupMatchesReceipt(
+  private func createResponseMetadataMatchesReceipt(
     _ remoteBackup: BaiduRemoteBackup,
     receipt: BaiduBackupUploadAttemptReceipt
   ) -> Bool {

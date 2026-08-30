@@ -43,7 +43,7 @@ struct BaiduBackupUploadCoordinatorTests {
     let remote = makeRemote(receipt: receipt)
     let uploader = ScriptedCoordinatorUploader(handlers: [
       suspendingBeforePrecreateHandler(),
-      verifiedHandler(remote: remote),
+      matchedCreateHandler(remote: remote),
     ])
     let coordinator = makeCoordinator(uploader: uploader)
 
@@ -79,7 +79,7 @@ struct BaiduBackupUploadCoordinatorTests {
       credential: token,
       applicationDirectory: directory
     )
-    #expect(retry == .verifiedRemote(remote))
+    #expect(retry == .createResponseMetadataMatchedContentUnproven(remote))
     #expect(await uploader.invocationCount() == 2)
   }
 
@@ -101,7 +101,7 @@ struct BaiduBackupUploadCoordinatorTests {
       suspendingBeforePrecreateHandler()
     ])
     let secondUploader = ScriptedCoordinatorUploader(handlers: [
-      verifiedHandler(remote: remote)
+      matchedCreateHandler(remote: remote)
     ])
     let firstCoordinator = BaiduBackupUploadCoordinator(
       uploader: firstUploader,
@@ -138,7 +138,7 @@ struct BaiduBackupUploadCoordinatorTests {
         archive: archive,
         credential: credential,
         applicationDirectory: directory
-      ) == .verifiedRemote(remote)
+      ) == .createResponseMetadataMatchedContentUnproven(remote)
     )
     #expect(await secondUploader.invocationCount() == 1)
   }
@@ -160,7 +160,7 @@ struct BaiduBackupUploadCoordinatorTests {
     let remote = makeRemote(receipt: receipt)
     let gate = CoordinatorTestGate()
     let firstUploader = ScriptedCoordinatorUploader(handlers: [
-      validatedSuccessAfterGateHandler(remote: remote, gate: gate)
+      matchedCreateAfterGateHandler(remote: remote, gate: gate)
     ])
     let secondUploader = ScriptedCoordinatorUploader(handlers: [])
     let firstCoordinator = BaiduBackupUploadCoordinator(
@@ -199,7 +199,7 @@ struct BaiduBackupUploadCoordinatorTests {
     #expect(await secondUploader.invocationCount() == 0)
 
     await gate.open()
-    #expect(await firstTask.value == .verifiedRemote(remote))
+    #expect(await firstTask.value == .createResponseMetadataMatchedContentUnproven(remote))
     #expect(
       await secondCoordinator.upload(
         archive: archive,
@@ -284,7 +284,7 @@ struct BaiduBackupUploadCoordinatorTests {
     let error = BaiduNetdiskUploadError.transport(.precreate)
     let uploader = ScriptedCoordinatorUploader(handlers: [
       failureBeforePrecreateHandler(error: error),
-      verifiedHandler(remote: remote),
+      matchedCreateHandler(remote: remote),
     ])
     let store = CoordinatorInMemoryReconciliationStore()
     let coordinator = BaiduBackupUploadCoordinator(
@@ -305,7 +305,7 @@ struct BaiduBackupUploadCoordinatorTests {
         archive: archive,
         credential: try credential(),
         applicationDirectory: directory
-      ) == .verifiedRemote(remote)
+      ) == .createResponseMetadataMatchedContentUnproven(remote)
     )
     #expect(await uploader.invocationCount() == 2)
   }
@@ -369,7 +369,7 @@ struct BaiduBackupUploadCoordinatorTests {
     let remote = makeRemote(receipt: receipt)
     let uploader = ScriptedCoordinatorUploader(handlers: [
       failureAfterPrecreateHandler(error: .transport(.precreate)),
-      verifiedHandler(remote: remote),
+      matchedCreateHandler(remote: remote),
     ])
     let coordinator = BaiduBackupUploadCoordinator(
       uploader: uploader,
@@ -395,7 +395,7 @@ struct BaiduBackupUploadCoordinatorTests {
           accountScope: secondScope
         ),
         applicationDirectory: directory
-      ) == .verifiedRemote(remote)
+      ) == .createResponseMetadataMatchedContentUnproven(remote)
     )
     #expect(await uploader.invocationCount() == 2)
   }
@@ -504,23 +504,23 @@ struct BaiduBackupUploadCoordinatorTests {
       backupID: backupID,
       directory: directory
     )
-    let completedUploader = ScriptedCoordinatorUploader(handlers: [
-      verifiedHandler(remote: makeRemote(receipt: originalReceipt))
+    let matchedUploader = ScriptedCoordinatorUploader(handlers: [
+      matchedCreateHandler(remote: makeRemote(receipt: originalReceipt))
     ])
-    let completedCoordinator = makeCoordinator(uploader: completedUploader)
-    _ = await completedCoordinator.upload(
+    let matchedCoordinator = makeCoordinator(uploader: matchedUploader)
+    _ = await matchedCoordinator.upload(
       archive: originalArchive,
       credential: try credential(),
       applicationDirectory: directory
     )
     #expect(
-      await completedCoordinator.upload(
+      await matchedCoordinator.upload(
         archive: changedArchive,
         credential: try credential(),
         applicationDirectory: directory
       ) == .rejected(.reconciliationIdentityConflict(backupID: backupID))
     )
-    #expect(await completedUploader.invocationCount() == 1)
+    #expect(await matchedUploader.invocationCount() == 1)
   }
 
   @Test("A cleanup failure preserves the barrier and never encourages a blind retry")
@@ -554,8 +554,8 @@ struct BaiduBackupUploadCoordinatorTests {
     #expect(await uploader.invocationCount() == 1)
   }
 
-  @Test("A verified upload remains an account-scoped at-most-once barrier after restart")
-  func verifiedUploadBarrierPersistsAcrossRestart() async throws {
+  @Test("A matched create remains an account-scoped at-most-once barrier after restart")
+  func matchedCreateBarrierPersistsAcrossRestart() async throws {
     let fileManager = FileManager.default
     let rootURL = fileManager.temporaryDirectory.appendingPathComponent(
       UUID().uuidString,
@@ -568,7 +568,7 @@ struct BaiduBackupUploadCoordinatorTests {
     let receipt = makeReceipt(archive: archive, backupID: backupID, directory: directory)
     let remote = makeRemote(receipt: receipt)
     let firstUploader = ScriptedCoordinatorUploader(handlers: [
-      verifiedHandler(remote: remote)
+      matchedCreateHandler(remote: remote)
     ])
     let firstCoordinator = BaiduBackupUploadCoordinator(
       uploader: firstUploader,
@@ -580,7 +580,7 @@ struct BaiduBackupUploadCoordinatorTests {
         archive: archive,
         credential: try credential(),
         applicationDirectory: directory
-      ) == .verifiedRemote(remote)
+      ) == .createResponseMetadataMatchedContentUnproven(remote)
     )
 
     let restartedUploader = ScriptedCoordinatorUploader(handlers: [])
@@ -735,7 +735,7 @@ struct BaiduBackupUploadCoordinatorTests {
         archive: archive,
         credential: try credential(),
         applicationDirectory: directory
-      ) == .verifiedRemote(remote)
+      ) == .createResponseMetadataMatchedContentUnproven(remote)
     )
     #expect(await uploader.invocationCount() == 1)
   }
@@ -883,8 +883,8 @@ struct BaiduBackupUploadCoordinatorTests {
     #expect(await uploader.invocationCount() == 1)
   }
 
-  @Test("A validated success wins over late cancellation and keeps the slot busy until finish")
-  func validatedSuccessWinsLateCancellation() async throws {
+  @Test("A matched create response wins over late cancellation")
+  func matchedCreateResponseWinsLateCancellation() async throws {
     let backupID = UUID(uuidString: "C1000000-0000-0000-0000-000000000008")!
     let archive = try makeArchive(backupID: backupID)
     let directory = try applicationDirectory()
@@ -893,7 +893,7 @@ struct BaiduBackupUploadCoordinatorTests {
     let remote = makeRemote(receipt: receipt)
     let gate = CoordinatorTestGate()
     let uploader = ScriptedCoordinatorUploader(handlers: [
-      validatedSuccessAfterGateHandler(remote: remote, gate: gate)
+      matchedCreateAfterGateHandler(remote: remote, gate: gate)
     ])
     let coordinator = makeCoordinator(uploader: uploader)
     let task = Task {
@@ -917,7 +917,7 @@ struct BaiduBackupUploadCoordinatorTests {
 
     await gate.open()
 
-    #expect(await task.value == .verifiedRemote(remote))
+    #expect(await task.value == .createResponseMetadataMatchedContentUnproven(remote))
     #expect(await coordinator.snapshot().phase == .idle)
     #expect(await uploader.invocationCount() == 1)
   }
@@ -991,7 +991,7 @@ struct BaiduBackupUploadCoordinatorTests {
     #expect(await uploader.invocationCount() == 1)
   }
 
-  @Test("Rapid upload needs verification while a matched create is verified")
+  @Test("Rapid upload and matched create both require remote content proof")
   func successOutcomesInstallSessionBarriers() async throws {
     let directory = try applicationDirectory()
 
@@ -1028,32 +1028,32 @@ struct BaiduBackupUploadCoordinatorTests {
       ) == .rejected(.remoteVerificationRequired(backupID: rapidBackupID))
     )
 
-    let verifiedBackupID = UUID(uuidString: "C1000000-0000-0000-0000-000000000006")!
-    let verifiedArchive = try makeArchive(backupID: verifiedBackupID)
-    let verifiedReceipt = makeReceipt(
-      archive: verifiedArchive,
-      backupID: verifiedBackupID,
+    let matchedBackupID = UUID(uuidString: "C1000000-0000-0000-0000-000000000006")!
+    let matchedArchive = try makeArchive(backupID: matchedBackupID)
+    let matchedReceipt = makeReceipt(
+      archive: matchedArchive,
+      backupID: matchedBackupID,
       directory: directory
     )
-    let remote = makeRemote(receipt: verifiedReceipt)
-    let verifiedUploader = ScriptedCoordinatorUploader(handlers: [
-      verifiedHandler(remote: remote)
+    let remote = makeRemote(receipt: matchedReceipt)
+    let matchedUploader = ScriptedCoordinatorUploader(handlers: [
+      matchedCreateHandler(remote: remote)
     ])
-    let verifiedCoordinator = makeCoordinator(uploader: verifiedUploader)
+    let matchedCoordinator = makeCoordinator(uploader: matchedUploader)
 
     #expect(
-      await verifiedCoordinator.upload(
-        archive: verifiedArchive,
+      await matchedCoordinator.upload(
+        archive: matchedArchive,
         credential: try credential(),
         applicationDirectory: directory
-      ) == .verifiedRemote(remote)
+      ) == .createResponseMetadataMatchedContentUnproven(remote)
     )
     #expect(
-      await verifiedCoordinator.upload(
-        archive: verifiedArchive,
+      await matchedCoordinator.upload(
+        archive: matchedArchive,
         credential: try credential(),
         applicationDirectory: directory
-      ) == .rejected(.alreadyCompletedThisSession(backupID: verifiedBackupID))
+      ) == .rejected(.remoteVerificationRequired(backupID: matchedBackupID))
     )
   }
 
@@ -1129,7 +1129,7 @@ struct BaiduBackupUploadCoordinatorTests {
     let receipt = makeReceipt(archive: archive, backupID: backupID, directory: directory)
     let remote = makeRemote(receipt: receipt)
     let uploader = ScriptedCoordinatorUploader(handlers: [
-      verifiedTwoPartHandler(remote: remote)
+      matchedTwoPartCreateHandler(remote: remote)
     ])
     let coordinator = makeCoordinator(uploader: uploader)
     let stream = await coordinator.progressSnapshots()
@@ -1146,7 +1146,7 @@ struct BaiduBackupUploadCoordinatorTests {
 
     let snapshots = try await collectSnapshots(from: stream, count: 8)
 
-    #expect(await task.value == .verifiedRemote(remote))
+    #expect(await task.value == .createResponseMetadataMatchedContentUnproven(remote))
     #expect(
       snapshots.map(\.phase)
         == [
@@ -1418,7 +1418,7 @@ struct BaiduBackupUploadCoordinatorTests {
     }
   }
 
-  private func validatedSuccessAfterGateHandler(
+  private func matchedCreateAfterGateHandler(
     remote: BaiduRemoteBackup,
     gate: CoordinatorTestGate
   ) -> ScriptedCoordinatorUploader.Handler {
@@ -1448,7 +1448,7 @@ struct BaiduBackupUploadCoordinatorTests {
     }
   }
 
-  private func verifiedHandler(
+  private func matchedCreateHandler(
     remote: BaiduRemoteBackup
   ) -> ScriptedCoordinatorUploader.Handler {
     { _, _, _, progress in
@@ -1460,7 +1460,7 @@ struct BaiduBackupUploadCoordinatorTests {
     }
   }
 
-  private func verifiedTwoPartHandler(
+  private func matchedTwoPartCreateHandler(
     remote: BaiduRemoteBackup
   ) -> ScriptedCoordinatorUploader.Handler {
     { _, _, _, progress in
