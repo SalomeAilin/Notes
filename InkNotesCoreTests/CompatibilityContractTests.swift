@@ -148,8 +148,23 @@ struct CompatibilityContractTests {
     }
     #expect(buildScript.contains("TeamIdentifier.0"))
     #expect(buildScript.contains("git status --porcelain=v1"))
+    #expect(buildScript.contains("git archive --format=tar \"$notes_source_commit\""))
+    #expect(buildScript.contains("-project \"$notes_source_root/InkNotes.xcodeproj\""))
+    #expect(!buildScript.contains("-project InkNotes.xcodeproj"))
+    #expect(buildScript.contains("PROVISIONING_PROFILE_SPECIFIER=\"$notes_selected_uuid\""))
+    #expect(buildScript.contains("CODE_SIGN_STYLE=Manual"))
+    #expect(buildScript.contains("embeddedProfileSHA256"))
+    #expect(buildScript.contains("notes_output_relative"))
     #expect(readinessScript.contains("codesign --verify --deep --strict"))
+    #expect(readinessScript.contains("codesign -d --entitlements :-"))
     #expect(readinessScript.contains("ProvisionedDevices"))
+    #expect(readinessScript.contains("embeddedProfileSHA256"))
+    #expect(readinessScript.contains("notes_device_connection_state"))
+    #expect(readinessScript.contains("devicectl.list.devices"))
+    #expect(readinessScript.contains("com.apple.coredevice.feature.installapp"))
+    #expect(
+      readinessScript.components(separatedBy: "xcrun devicectl list devices").count - 1 == 1
+    )
   }
 
   @Test("An orphan app target cannot hide a mounted main-app identifier drift")
