@@ -34,6 +34,11 @@ struct BackupImportQueue: Equatable, Sendable {
   }
 
   mutating func enqueue(_ request: BackupImportRequest) {
+    guard
+      !requests.contains(where: {
+        $0.source == request.source && $0.url == request.url
+      })
+    else { return }
     requests.append(request)
   }
 

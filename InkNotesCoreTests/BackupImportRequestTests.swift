@@ -63,4 +63,49 @@ struct BackupImportRequestTests {
     queue.removeCurrent(ifMatching: second.id)
     #expect(queue.isEmpty)
   }
+
+  @Test("Pending requests deduplicate by source and exact file URL")
+  func pendingRequestDeduplication() throws {
+    let first = try #require(
+      BackupImportRequest(
+        url: URL(fileURLWithPath: "/tmp/history.notesbackup"),
+        source: .externalOpen,
+        id: UUID(uuidString: "B5000000-0000-0000-0000-000000000004")!
+      )
+    )
+    let duplicate = try #require(
+      BackupImportRequest(
+        url: URL(fileURLWithPath: "/tmp/history.notesbackup"),
+        source: .externalOpen,
+        id: UUID(uuidString: "B5000000-0000-0000-0000-000000000005")!
+      )
+    )
+    let differentSource = try #require(
+      BackupImportRequest(
+        url: duplicate.url,
+        source: .fileImporter,
+        id: UUID(uuidString: "B5000000-0000-0000-0000-000000000006")!
+      )
+    )
+    let duplicateDifferentSource = try #require(
+      BackupImportRequest(
+        url: differentSource.url,
+        source: differentSource.source,
+        id: UUID(uuidString: "B5000000-0000-0000-0000-000000000007")!
+      )
+    )
+    var queue = BackupImportQueue()
+
+    queue.enqueue(first)
+    queue.enqueue(duplicate)
+    #expect(queue.requests == [first])
+
+    queue.enqueue(differentSource)
+    queue.enqueue(duplicateDifferentSource)
+    #expect(queue.requests == [first, differentSource])
+
+    queue.removeCurrent(ifMatching: first.id)
+    queue.enqueue(duplicate)
+    #expect(queue.requests == [differentSource, duplicate])
+  }
 }
