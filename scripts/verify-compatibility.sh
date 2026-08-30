@@ -41,6 +41,98 @@ assert_plist_key_absent() {
   fi
 }
 
+assert_ipad_presentation_contract() {
+  local notes_plist_path="$1"
+  local notes_label="$2"
+  local notes_multiple_scenes
+  local notes_indirect_input
+  local notes_orientation_count
+  local notes_orientation_index
+  local notes_actual_orientation
+  local -a notes_expected_orientations=(
+    UIInterfaceOrientationPortrait
+    UIInterfaceOrientationPortraitUpsideDown
+    UIInterfaceOrientationLandscapeLeft
+    UIInterfaceOrientationLandscapeRight
+  )
+
+  notes_multiple_scenes="$(
+    plutil -extract UIApplicationSceneManifest.UIApplicationSupportsMultipleScenes raw \
+      -expect bool -o - "$notes_plist_path"
+  )"
+  notes_indirect_input="$(
+    plutil -extract UIApplicationSupportsIndirectInputEvents raw -expect bool -o - \
+      "$notes_plist_path"
+  )"
+  notes_orientation_count="$(
+    plutil -extract 'UISupportedInterfaceOrientations~ipad' raw -expect array -o - \
+      "$notes_plist_path"
+  )"
+
+  assert_equal "$notes_multiple_scenes" "false" "$notes_label multiple-scene capability"
+  assert_equal "$notes_indirect_input" "true" "$notes_label indirect-input capability"
+  assert_equal "$notes_orientation_count" "4" "$notes_label iPad orientation count"
+  for notes_orientation_index in {1..4}; do
+    notes_actual_orientation="$(
+      plutil -extract \
+        "UISupportedInterfaceOrientations~ipad.$((notes_orientation_index - 1))" \
+        raw -expect string -o - "$notes_plist_path"
+    )"
+    assert_equal \
+      "$notes_actual_orientation" \
+      "$notes_expected_orientations[$notes_orientation_index]" \
+      "$notes_label iPad orientation $notes_orientation_index"
+  done
+  assert_plist_key_absent "$notes_plist_path" "UIRequiresFullScreen" "$notes_label full-screen requirement"
+}
+
+assert_ipad_presentation_contract_rejects_invalid_fixtures() {
+  local notes_source_plist="$1"
+  local notes_fixture_dir="$notes_temp_dir/ipad-presentation-negative-controls"
+  local notes_fixture
+  local notes_scenario
+  mkdir -p "$notes_fixture_dir"
+
+  for notes_scenario in multiple-scenes-type full-screen orientations indirect-input; do
+    notes_fixture="$notes_fixture_dir/$notes_scenario.plist"
+    cp "$notes_source_plist" "$notes_fixture"
+    case "$notes_scenario" in
+      multiple-scenes-type)
+        /usr/libexec/PlistBuddy \
+          -c 'Delete :UIApplicationSceneManifest:UIApplicationSupportsMultipleScenes' \
+          "$notes_fixture" >/dev/null
+        /usr/libexec/PlistBuddy \
+          -c 'Add :UIApplicationSceneManifest:UIApplicationSupportsMultipleScenes integer 0' \
+          "$notes_fixture" >/dev/null
+        ;;
+      full-screen)
+        /usr/libexec/PlistBuddy -c 'Add :UIRequiresFullScreen bool false' \
+          "$notes_fixture" >/dev/null
+        ;;
+      orientations)
+        /usr/libexec/PlistBuddy \
+          -c 'Set :UISupportedInterfaceOrientations~ipad:0 UIInterfaceOrientationLandscapeLeft' \
+          "$notes_fixture" >/dev/null
+        /usr/libexec/PlistBuddy \
+          -c 'Set :UISupportedInterfaceOrientations~ipad:2 UIInterfaceOrientationPortrait' \
+          "$notes_fixture" >/dev/null
+        ;;
+      indirect-input)
+        /usr/libexec/PlistBuddy \
+          -c 'Set :UIApplicationSupportsIndirectInputEvents false' \
+          "$notes_fixture" >/dev/null
+        ;;
+    esac
+
+    if (assert_ipad_presentation_contract "$notes_fixture" "Negative control") \
+      >/dev/null 2>&1
+    then
+      print -u2 "iPad presentation contract failed its $notes_scenario negative control"
+      exit 1
+    fi
+  done
+}
+
 assert_build_setting_absent() {
   local notes_settings_path="$1"
   local notes_key="$2"
@@ -180,6 +272,8 @@ assert_equal "$notes_source_document_uti" "$notes_expected_uti" "Source document
 assert_equal "$notes_source_document_role" "Viewer" "Source document role"
 assert_equal "$notes_source_handler_rank" "Alternate" "Source document handler rank"
 assert_equal "$notes_source_open_in_place" "false" "Source open-in-place capability"
+assert_ipad_presentation_contract "$notes_source_plist" "Source"
+assert_ipad_presentation_contract_rejects_invalid_fixtures "$notes_source_plist"
 assert_plist_key_absent "$notes_source_plist" "CFBundleURLTypes" "Source callback registration"
 assert_plist_key_absent "$notes_source_plist" "CFBundleURLSchemes" "Source callback scheme"
 assert_plist_key_absent "$notes_source_plist" "UIBackgroundModes" "Source background transfer capability"
@@ -266,6 +360,7 @@ for notes_configuration in Debug Release; do
   assert_equal "$notes_built_document_role" "Viewer" "$notes_configuration built document role"
   assert_equal "$notes_built_handler_rank" "Alternate" "$notes_configuration built document handler rank"
   assert_equal "$notes_built_open_in_place" "false" "$notes_configuration open-in-place capability"
+  assert_ipad_presentation_contract "$notes_built_plist" "$notes_configuration built"
   assert_plist_key_absent "$notes_built_plist" "CFBundleURLTypes" "$notes_configuration callback registration"
   assert_plist_key_absent "$notes_built_plist" "CFBundleURLSchemes" "$notes_configuration callback scheme"
   assert_plist_key_absent "$notes_built_plist" "UIBackgroundModes" "$notes_configuration background transfer capability"
@@ -274,5 +369,5 @@ for notes_configuration in Debug Release; do
   assert_tree_has_no_retired_brand_marker "${notes_built_plist:h}" "$notes_configuration built app"
 done
 
-print "[5/5] Debug and Release products preserve the internal display name, iPadOS 17+, backup identities, and fail-closed OAuth"
+print "[5/5] Debug and Release products preserve iPad presentation, app identity, backup, and fail-closed OAuth contracts"
 print "Compatibility gate passed"

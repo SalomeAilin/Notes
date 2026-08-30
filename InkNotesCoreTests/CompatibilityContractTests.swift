@@ -1,3 +1,4 @@
+import CoreFoundation
 import CryptoKit
 import Foundation
 import PencilKit
@@ -93,6 +94,10 @@ struct CompatibilityContractTests {
     let documentTypes = try #require(plist["CFBundleDocumentTypes"] as? [[String: Any]])
     let documentType = try #require(documentTypes.first)
     let documentContentTypes = try #require(documentType["LSItemContentTypes"] as? [String])
+    let sceneManifest = try #require(plist["UIApplicationSceneManifest"] as? [String: Any])
+    let iPadOrientations = try #require(
+      plist["UISupportedInterfaceOrientations~ipad"] as? [String]
+    )
 
     #expect(declarations.count == 1)
     #expect(declaration["UTTypeIdentifier"] as? String == BackupArchiveCodec.uniformTypeIdentifier)
@@ -105,6 +110,19 @@ struct CompatibilityContractTests {
     #expect(documentType["LSHandlerRank"] as? String == "Alternate")
     #expect(documentContentTypes == [BackupArchiveCodec.uniformTypeIdentifier])
     #expect(plist["LSSupportsOpeningDocumentsInPlace"] as? Bool == false)
+    #expect(isPropertyListBoolean(sceneManifest["UIApplicationSupportsMultipleScenes"]))
+    #expect(sceneManifest["UIApplicationSupportsMultipleScenes"] as? Bool == false)
+    #expect(isPropertyListBoolean(plist["UIApplicationSupportsIndirectInputEvents"]))
+    #expect(plist["UIApplicationSupportsIndirectInputEvents"] as? Bool == true)
+    #expect(plist["UIRequiresFullScreen"] == nil)
+    #expect(
+      iPadOrientations == [
+        "UIInterfaceOrientationPortrait",
+        "UIInterfaceOrientationPortraitUpsideDown",
+        "UIInterfaceOrientationLandscapeLeft",
+        "UIInterfaceOrientationLandscapeRight",
+      ]
+    )
 
     let projectURL = repositoryRoot.appendingPathComponent("InkNotes.xcodeproj/project.pbxproj")
     let projectData = try Data(contentsOf: projectURL)
@@ -113,6 +131,11 @@ struct CompatibilityContractTests {
         as? [String: Any]
     )
     _ = try validateMainAppBundleIdentifiers(in: project)
+  }
+
+  private func isPropertyListBoolean(_ value: Any?) -> Bool {
+    guard let value else { return false }
+    return CFGetTypeID(value as CFTypeRef) == CFBooleanGetTypeID()
   }
 
   @Test("External backup URLs route to validation before restore confirmation")
