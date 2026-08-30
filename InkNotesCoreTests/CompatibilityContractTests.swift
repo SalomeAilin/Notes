@@ -87,12 +87,24 @@ struct CompatibilityContractTests {
     )
     let declarations = try #require(plist["UTExportedTypeDeclarations"] as? [[String: Any]])
     let declaration = try #require(declarations.first)
+    let conformingTypes = try #require(declaration["UTTypeConformsTo"] as? [String])
     let tags = try #require(declaration["UTTypeTagSpecification"] as? [String: Any])
     let extensions = try #require(tags["public.filename-extension"] as? [String])
+    let documentTypes = try #require(plist["CFBundleDocumentTypes"] as? [[String: Any]])
+    let documentType = try #require(documentTypes.first)
+    let documentContentTypes = try #require(documentType["LSItemContentTypes"] as? [String])
 
+    #expect(declarations.count == 1)
     #expect(declaration["UTTypeIdentifier"] as? String == BackupArchiveCodec.uniformTypeIdentifier)
+    #expect(Set(conformingTypes) == Set(["public.content", "public.data"]))
     #expect(extensions == [BackupArchiveCodec.fileExtension])
     #expect(tags["public.mime-type"] as? String == BackupArchiveCodec.mimeType)
+    #expect(documentTypes.count == 1)
+    #expect(documentType["CFBundleTypeName"] as? String == "笔记备份")
+    #expect(documentType["CFBundleTypeRole"] as? String == "Viewer")
+    #expect(documentType["LSHandlerRank"] as? String == "Alternate")
+    #expect(documentContentTypes == [BackupArchiveCodec.uniformTypeIdentifier])
+    #expect(plist["LSSupportsOpeningDocumentsInPlace"] as? Bool == false)
 
     let projectURL = repositoryRoot.appendingPathComponent("InkNotes.xcodeproj/project.pbxproj")
     let projectData = try Data(contentsOf: projectURL)
@@ -101,6 +113,59 @@ struct CompatibilityContractTests {
         as? [String: Any]
     )
     _ = try validateMainAppBundleIdentifiers(in: project)
+  }
+
+  @Test("External backup URLs route to validation before restore confirmation")
+  func externalBackupRoutingRemainsPreviewOnly() throws {
+    let repositoryRoot = repositoryRootURL()
+    let appSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent("InkNotes/App/InkNotesApp.swift"),
+      encoding: .utf8
+    )
+    let librarySource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent("InkNotes/Views/LibrarySplitView.swift"),
+      encoding: .utf8
+    )
+    let transferSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent("InkNotes/Views/BackupTransferView.swift"),
+      encoding: .utf8
+    )
+    let readerSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent(
+        "InkNotes/Persistence/BackupFileReader.swift"
+      ),
+      encoding: .utf8
+    )
+
+    #expect(appSource.contains(".onOpenURL"))
+    #expect(appSource.contains("BackupImportRequest(url: url, source: .externalOpen)"))
+    #expect(appSource.contains("pendingBackupImports.enqueue(request)"))
+    #expect(!appSource.contains("importBackupAsCopy"))
+    #expect(librarySource.contains("BackupTransferView(importQueue:"))
+    #expect(librarySource.contains("!store.isLoading && !store.isDrawingLoading"))
+    #expect(librarySource.contains("namingAction == nil"))
+    #expect(librarySource.contains("deletionTarget == nil"))
+    #expect(!librarySource.contains("importBackupAsCopy"))
+    #expect(transferSource.contains(".task(id: importQueue.current?.id)"))
+    #expect(transferSource.contains("await handleQueuedImportRequest(request)"))
+    #expect(transferSource.contains("BackupImportRequest(url: url, source: .fileImporter)"))
+    #expect(transferSource.contains("while !canInspectNewBackup"))
+    #expect(transferSource.contains("canStartOperation && pendingImport == nil && notice == nil"))
+    #expect(transferSource.contains("guard outcome == .consumed else { continue }"))
+    #expect(transferSource.contains("!isImporterPresented && !isExporterPresented"))
+    #expect(transferSource.contains("clearQueuedImportRequest(ifMatching: request.id)"))
+    #expect(
+      transferSource.contains(
+        "inspectSelectedBackup(at: request.url, source: request.source)"
+      )
+    )
+    #expect(transferSource.contains("BackupInboxCopyCleaner().removeIfInboxCopy"))
+    #expect(transferSource.contains(".confirmationDialog("))
+    #expect(transferSource.contains("Button(\"作为副本导入\")"))
+    #expect(transferSource.contains(".interactiveDismissDisabled(isBusy)"))
+    #expect(readerSource.contains("NSFileCoordinator(filePresenter: nil)"))
+    #expect(readerSource.contains("O_RDONLY | O_CLOEXEC | O_NOFOLLOW"))
+    #expect(readerSource.contains("Darwin.unlink(path)"))
   }
 
   @Test("Buildable product uses the explicit internal display name")
