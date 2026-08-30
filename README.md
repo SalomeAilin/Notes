@@ -1,6 +1,8 @@
-# 墨记（InkNotes）
+# InkNotes Dev（内部开发包）
 
 一个面向 iPad 和 Apple Pencil 的原生手写笔记应用。项目使用 SwiftUI + PencilKit，零第三方依赖，笔记只保存在应用本地沙盒中。
+
+> `InkNotes Dev` 只是个人侧载验证使用的内部占位名，不是正式品牌。公开测试或上架前仍须确定正式名称并完成商标、App Store 与公开市场核查。
 
 ## 当前功能
 
@@ -27,24 +29,16 @@
 3. 连接已开启开发者模式并信任此 Mac 的 iPad。
 4. 选择该 iPad，点击 Run。
 
-应用显示名称为“墨记”，Bundle Identifier 为 `com.salomeailin.InkNotes`。如该标识已被占用，可在 Xcode 中改成自己的唯一标识。
+开发包显示名称为 `InkNotes Dev`。在同一签名团队和兼容 application identifier 下，Bundle Identifier 保持为 `com.salomeailin.InkNotes`，以便覆盖安装时继续访问同一应用沙盒。正式更名只修改展示层；现有安装不得随意更换签名身份、Bundle Identifier 或本地数据目录。
 
 ## 验证命令
 
 ```bash
 DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer \
-  xcrun swift test
-
-DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer \
-  xcodebuild \
-  -project InkNotes.xcodeproj \
-  -scheme InkNotes \
-  -destination 'generic/platform=iOS Simulator' \
-  CODE_SIGNING_ALLOWED=NO \
-  build
+  ./scripts/verify-brand-neutralization.sh
 ```
 
-`swift test` 的 4 个测试验证元数据/笔迹往返、损坏数据不覆盖，以及切页前保存时序。Xcode 构建命令验证完整 iPadOS 应用可以编译和链接。
+门禁运行 8 个测试，并分别构建 Debug、Release 两套 generic iOS 产物。源码、有效构建设置和最终 `InkNotes.app` 都必须使用内部显示名 `InkNotes Dev`、稳定 Bundle Identifier、iPad-only 与最低 iPadOS 17.0；退役名称扫描器以三种编码负控自检，并检查发货源码与两套构建产物。
 
 ## 本地数据
 
@@ -58,6 +52,14 @@ InkNotes/
 ```
 
 删除笔记本或页面后，当前版本会保留对应的孤立笔迹文件，避免立即破坏数据；暂未提供“最近删除”恢复界面。
+
+## 更名兼容边界
+
+正式名称确定后，首轮只修改 `CFBundleDisplayName`、界面文案、图标和商店资料。为保留已有安装与笔记，以下技术身份保持不变：
+
+- Bundle Identifier：`com.salomeailin.InkNotes`
+- 本地目录：`Application Support/InkNotes`
+- Xcode target、scheme、Swift 模块和工程目录中的 `InkNotes` 技术名称
 
 ## 已知边界
 
