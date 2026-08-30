@@ -235,9 +235,8 @@ if ! xcodebuild \
   -destination 'generic/platform=iOS' \
   -derivedDataPath "$notes_output_dir" \
   DEVELOPMENT_TEAM="$notes_selected_team" \
-  CODE_SIGN_STYLE=Manual \
+  CODE_SIGN_STYLE=Automatic \
   CODE_SIGN_IDENTITY='Apple Development' \
-  PROVISIONING_PROFILE_SPECIFIER="$notes_selected_uuid" \
   clean build > "$notes_build_log_temp" 2>&1
 then
   mv "$notes_build_log_temp" "$notes_build_log"
