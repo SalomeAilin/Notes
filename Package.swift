@@ -13,6 +13,7 @@ let package = Package(
       path: "InkNotes",
       exclude: ["App", "Assets.xcassets", "Info.plist", "Views"],
       sources: [
+        "Models/AppBuildIdentity.swift",
         "Models/BackupArchive.swift",
         "Models/BackupImportPresentationState.swift",
         "Models/BackupImportRequest.swift",

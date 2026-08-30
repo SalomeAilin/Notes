@@ -81,6 +81,7 @@ struct BackupTransferView: View {
         exportSection
         importSection
         privacySection
+        appInformationSection
       }
       .navigationTitle("备份与恢复")
       .navigationBarTitleDisplayMode(.inline)
@@ -225,6 +226,14 @@ struct BackupTransferView: View {
       Text("只有在你主动选择网盘或其他应用后，备份才会离开本机，并由相应第三方服务负责存储与保护。")
         .font(.footnote)
         .foregroundStyle(.secondary)
+    }
+  }
+
+  private var appInformationSection: some View {
+    Section("应用信息") {
+      LabeledContent("当前应用") {
+        Text(AppBuildIdentity.current().displayText)
+      }
     }
   }
 

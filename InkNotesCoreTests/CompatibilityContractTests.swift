@@ -209,6 +209,37 @@ struct CompatibilityContractTests {
     #expect(readerSource.contains("Darwin.unlink(path)"))
   }
 
+  @Test("The running app version is Bundle-driven and included in both build graphs")
+  func runtimeVersionIsVisible() throws {
+    let repositoryRoot = repositoryRootURL()
+    let modelSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent(
+        "InkNotes/Models/AppBuildIdentity.swift"
+      ),
+      encoding: .utf8
+    )
+    let transferSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent("InkNotes/Views/BackupTransferView.swift"),
+      encoding: .utf8
+    )
+    let projectSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent("InkNotes.xcodeproj/project.pbxproj"),
+      encoding: .utf8
+    )
+    let packageSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent("Package.swift"),
+      encoding: .utf8
+    )
+
+    #expect(modelSource.contains("CFBundleShortVersionString"))
+    #expect(modelSource.contains("CFBundleVersion"))
+    #expect(transferSource.contains("Section(\"应用信息\")"))
+    #expect(transferSource.contains("Text(AppBuildIdentity.current().displayText)"))
+    #expect(!transferSource.contains("版本 0.2.0"))
+    #expect(projectSource.contains("AppBuildIdentity.swift in Sources"))
+    #expect(packageSource.contains("\"Models/AppBuildIdentity.swift\""))
+  }
+
   @Test("Buildable product uses one validated source display name")
   func buildableProductUsesOneValidatedSourceDisplayName() throws {
     let repositoryRoot = repositoryRootURL()

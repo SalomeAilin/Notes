@@ -693,6 +693,8 @@ notes_source_document_uti="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDocument
 notes_source_document_role="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDocumentTypes:0:CFBundleTypeRole' "$notes_source_plist")"
 notes_source_handler_rank="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDocumentTypes:0:LSHandlerRank' "$notes_source_plist")"
 notes_source_open_in_place="$(plutil -extract LSSupportsOpeningDocumentsInPlace raw -o - "$notes_source_plist")"
+notes_source_short_version="$(plutil -extract CFBundleShortVersionString raw -o - "$notes_source_plist")"
+notes_source_build_version="$(plutil -extract CFBundleVersion raw -o - "$notes_source_plist")"
 assert_equal "$notes_source_uti" "$notes_expected_uti" "Source UTI"
 assert_equal "$notes_source_extension" "$notes_expected_extension" "Source filename extension"
 assert_equal "$notes_source_mime" "$notes_expected_mime" "Source MIME type"
@@ -700,6 +702,8 @@ assert_equal "$notes_source_document_uti" "$notes_expected_uti" "Source document
 assert_equal "$notes_source_document_role" "Viewer" "Source document role"
 assert_equal "$notes_source_handler_rank" "Alternate" "Source document handler rank"
 assert_equal "$notes_source_open_in_place" "false" "Source open-in-place capability"
+assert_equal "$notes_source_short_version" '$(MARKETING_VERSION)' "Source short-version binding"
+assert_equal "$notes_source_build_version" '$(CURRENT_PROJECT_VERSION)' "Source build-version binding"
 assert_ipad_presentation_contract "$notes_source_plist" "Source"
 assert_ipad_presentation_contract_rejects_invalid_fixtures "$notes_source_plist"
 assert_plist_key_absent "$notes_source_plist" "CFBundleURLTypes" "Source callback registration"
@@ -766,6 +770,8 @@ for notes_configuration in Debug Release; do
 
   notes_settings_json="$notes_temp_dir/$notes_configuration-settings.json"
   notes_full_product_name="$(plutil -extract 0.buildSettings.FULL_PRODUCT_NAME raw -o - "$notes_settings_json")"
+  notes_marketing_version="$(plutil -extract 0.buildSettings.MARKETING_VERSION raw -o - "$notes_settings_json")"
+  notes_current_project_version="$(plutil -extract 0.buildSettings.CURRENT_PROJECT_VERSION raw -o - "$notes_settings_json")"
   notes_built_plist="$notes_derived_data/Build/Products/$notes_configuration-iphoneos/$notes_full_product_name/Info.plist"
   if [[ ! -f "$notes_built_plist" ]]; then
     print -u2 "$notes_configuration built Info.plist was not found"
@@ -782,6 +788,8 @@ for notes_configuration in Debug Release; do
     "$notes_configuration built internal display name"
   notes_minimum_os="$(plutil -extract MinimumOSVersion raw -o - "$notes_built_plist")"
   notes_device_family="$(plutil -extract UIDeviceFamily json -o - "$notes_built_plist")"
+  notes_built_short_version="$(plutil -extract CFBundleShortVersionString raw -o - "$notes_built_plist")"
+  notes_built_build_version="$(plutil -extract CFBundleVersion raw -o - "$notes_built_plist")"
   notes_built_uti="$(/usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations:0:UTTypeIdentifier' "$notes_built_plist")"
   notes_built_extension="$(/usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations:0:UTTypeTagSpecification:public.filename-extension:0' "$notes_built_plist")"
   notes_built_mime="$(/usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations:0:UTTypeTagSpecification:public.mime-type' "$notes_built_plist")"
@@ -798,6 +806,14 @@ for notes_configuration in Debug Release; do
     }
   assert_equal "$notes_minimum_os" "17.0" "$notes_configuration minimum iOS version"
   assert_equal "$notes_device_family" '[2]' "$notes_configuration device family"
+  assert_equal \
+    "$notes_built_short_version" \
+    "$notes_marketing_version" \
+    "$notes_configuration built short version"
+  assert_equal \
+    "$notes_built_build_version" \
+    "$notes_current_project_version" \
+    "$notes_configuration built build version"
   assert_equal "$notes_built_uti" "$notes_expected_uti" "$notes_configuration built UTI"
   assert_equal "$notes_built_extension" "$notes_expected_extension" "$notes_configuration built filename extension"
   assert_equal "$notes_built_mime" "$notes_expected_mime" "$notes_configuration built MIME type"

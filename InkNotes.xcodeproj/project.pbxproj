@@ -34,6 +34,7 @@
 		D60000000000000000000001 /* BaiduAccountCredential.swift in Sources */ = {isa = PBXBuildFile; fileRef = C60000000000000000000001 /* BaiduAccountCredential.swift */; };
 		D70000000000000000000001 /* BaiduRemoteBackupMetadataObserver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C70000000000000000000001 /* BaiduRemoteBackupMetadataObserver.swift */; };
 		D80000000000000000000001 /* BaiduRemoteBackupContentVerifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = C80000000000000000000001 /* BaiduRemoteBackupContentVerifier.swift */; };
+		D90000000000000000000001 /* AppBuildIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = C90000000000000000000001 /* AppBuildIdentity.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -66,6 +67,7 @@
 		C60000000000000000000001 /* BaiduAccountCredential.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaiduAccountCredential.swift; sourceTree = "<group>"; };
 		C70000000000000000000001 /* BaiduRemoteBackupMetadataObserver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaiduRemoteBackupMetadataObserver.swift; sourceTree = "<group>"; };
 		C80000000000000000000001 /* BaiduRemoteBackupContentVerifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaiduRemoteBackupContentVerifier.swift; sourceTree = "<group>"; };
+		C90000000000000000000001 /* AppBuildIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppBuildIdentity.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -121,6 +123,7 @@
 		B00000000000000000000005 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				C90000000000000000000001 /* AppBuildIdentity.swift */,
 				C0000000000000000000000C /* BackupArchive.swift */,
 				C50000000000000000000003 /* BackupImportPresentationState.swift */,
 				C50000000000000000000001 /* BackupImportRequest.swift */,
@@ -257,6 +260,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				D00000000000000000000001 /* InkNotesApp.swift in Sources */,
+				D90000000000000000000001 /* AppBuildIdentity.swift in Sources */,
 				D0000000000000000000000A /* BackupArchive.swift in Sources */,
 				D50000000000000000000003 /* BackupImportPresentationState.swift in Sources */,
 				D50000000000000000000001 /* BackupImportRequest.swift in Sources */,
