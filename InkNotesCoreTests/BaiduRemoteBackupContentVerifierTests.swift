@@ -355,6 +355,26 @@ struct BaiduRemoteBackupContentVerifierTests {
     }
   }
 
+  @Test("Production byte streaming rejects a body shorter than its declared length")
+  func productionStreamerRejectsTruncatedDeclaredBody() async throws {
+    let path = "/proof-truncated-\(UUID().uuidString)"
+    ControlledBaiduURLProtocol.register(
+      .response(
+        statusCode: 200,
+        headers: ["Content-Length": "64"],
+        chunks: [Data(repeating: 0x44, count: 63)]
+      ),
+      path: path
+    )
+
+    await #expect(throws: BaiduRemoteBackupByteStreamError.invalidResponse) {
+      try await self.productionStreamer().streamSHA256(
+        self.downloadRequest(path: path),
+        maximumByteCount: 128
+      )
+    }
+  }
+
   @Test("Cancelling production byte streaming stops URLSession work")
   func productionStreamerCancellationStopsURLSessionWork() async throws {
     let path = "/proof-hanging-\(UUID().uuidString)"
