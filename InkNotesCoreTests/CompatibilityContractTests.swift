@@ -9,7 +9,6 @@ import Testing
 @Suite("InkNotes compatibility contract")
 struct CompatibilityContractTests {
   private let expectedBundleIdentifier = "com.salomeailin.InkNotes"
-  private let expectedInternalDisplayName = "InkNotes Dev"
   private let backupID = UUID(uuidString: "A1000000-0000-0000-0000-000000000001")!
   private let notebookID = UUID(uuidString: "B2000000-0000-0000-0000-000000000001")!
   private let blankPageID = UUID(uuidString: "C3000000-0000-0000-0000-000000000001")!
@@ -195,19 +194,108 @@ struct CompatibilityContractTests {
     #expect(readerSource.contains("Darwin.unlink(path)"))
   }
 
-  @Test("Buildable product uses the explicit internal display name")
-  func buildableProductUsesInternalDisplayName() throws {
-    let plistURL = repositoryRootURL().appendingPathComponent("InkNotes/Info.plist")
+  @Test("Buildable product uses one validated source display name")
+  func buildableProductUsesOneValidatedSourceDisplayName() throws {
+    let repositoryRoot = repositoryRootURL()
+    let plistURL = repositoryRoot.appendingPathComponent("InkNotes/Info.plist")
     let plistData = try Data(contentsOf: plistURL)
     let plist = try #require(
       try PropertyListSerialization.propertyList(from: plistData, options: [], format: nil)
         as? [String: Any]
     )
     let displayName = try #require(plist["CFBundleDisplayName"] as? String)
-    let retiredDisplayNames = ["墨记", "墨記", "墨计", "墨計"]
+    let enforcementSourcePaths = [
+      "InkNotesCoreTests/CompatibilityContractTests.swift",
+      "scripts/verify-compatibility.sh",
+      "scripts/build-signed-ipad-app.sh",
+      "scripts/verify-ipad-readiness.sh",
+      "scripts/internal-display-name-contract.zsh",
+    ]
 
-    #expect(displayName == expectedInternalDisplayName)
-    #expect(!retiredDisplayNames.contains(displayName))
+    #expect(isValidInternalDisplayName(displayName))
+    for relativePath in enforcementSourcePaths {
+      let source = try String(
+        contentsOf: repositoryRoot.appendingPathComponent(relativePath),
+        encoding: .utf8
+      )
+      #expect(!source.contains("\"\(displayName)\""))
+      #expect(!source.contains("'\(displayName)'"))
+    }
+
+    for relativePath in enforcementSourcePaths.filter({ $0.hasPrefix("scripts/") }) {
+      let source = try String(
+        contentsOf: repositoryRoot.appendingPathComponent(relativePath),
+        encoding: .utf8
+      )
+      if relativePath != "scripts/internal-display-name-contract.zsh" {
+        #expect(source.contains("notes_read_internal_display_name"))
+      }
+    }
+
+    let signedBuildSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent("scripts/build-signed-ipad-app.sh"),
+      encoding: .utf8
+    )
+    let readinessSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent("scripts/verify-ipad-readiness.sh"),
+      encoding: .utf8
+    )
+    let compatibilitySource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent("scripts/verify-compatibility.sh"),
+      encoding: .utf8
+    )
+    #expect(signedBuildSource.contains("$notes_source_root/InkNotes/Info.plist"))
+    #expect(readinessSource.contains("git cat-file blob"))
+    #expect(readinessSource.contains(":InkNotes/Info.plist"))
+    #expect(compatibilitySource.contains("INFOPLIST_KEY_CFBundleDisplayName"))
+    #expect(compatibilitySource.contains("INFOPLIST_PREPROCESS"))
+    #expect(compatibilitySource.contains("notes_assert_no_localized_display_name_override"))
+  }
+
+  @Test("Internal display-name validation fails closed")
+  func internalDisplayNameValidationFailsClosed() {
+    #expect(isValidInternalDisplayName("Valid Internal Name"))
+
+    let invalidDisplayNames = [
+      "",
+      "   ",
+      " Valid Internal Name",
+      "Valid Internal Name ",
+      "\u{3000}Valid Internal Name",
+      "Valid Internal Name\u{3000}",
+      "Valid\nInternal Name",
+      "Valid\tInternal Name",
+      "Valid\u{200B}Internal Name",
+      "Valid\u{202E}Internal Name",
+      "Valid\u{2066}Internal Name",
+      "$(",
+      "${",
+      "$(PRODUCT_NAME)",
+      "${PRODUCT_NAME}",
+      "prefix墨记suffix",
+      "prefix墨記suffix",
+      "prefix墨计suffix",
+      "prefix墨計suffix",
+    ]
+    for displayName in invalidDisplayNames {
+      #expect(!isValidInternalDisplayName(displayName))
+    }
+  }
+
+  private func isValidInternalDisplayName(_ value: String) -> Bool {
+    guard !value.isEmpty else { return false }
+    guard value == value.trimmingCharacters(in: .whitespacesAndNewlines) else {
+      return false
+    }
+    guard
+      value.unicodeScalars.allSatisfy({
+        !CharacterSet.controlCharacters.contains($0) && !CharacterSet.newlines.contains($0)
+      })
+    else {
+      return false
+    }
+    guard !value.contains("$("), !value.contains("${") else { return false }
+    return ["墨记", "墨記", "墨计", "墨計"].allSatisfy { !value.contains($0) }
   }
 
   @Test("The PencilKit tool picker belongs to the cross-page editor controller")

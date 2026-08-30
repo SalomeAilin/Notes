@@ -4,7 +4,6 @@ set -euo pipefail
 notes_repository_root="${0:A:h:h}"
 notes_developer_dir="${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer}"
 notes_expected_bundle_id="com.salomeailin.InkNotes"
-notes_expected_display_name="InkNotes Dev"
 notes_expected_minimum_os="17.0"
 notes_app_path=""
 notes_provenance_path=""
@@ -63,9 +62,18 @@ done
 [[ -d "$notes_app_path" && "$notes_app_path" == *.app ]] || fail "Signed .app bundle not found"
 [[ -f "$notes_provenance_path" ]] || fail "Provenance file not found"
 command -v rg >/dev/null || fail "ripgrep is required"
+command -v plutil >/dev/null || fail "plutil is required"
+command -v git >/dev/null || fail "git is required"
+command -v cmp >/dev/null || fail "cmp is required"
+[[ -x /usr/bin/perl ]] || fail "Perl is required"
 
 export DEVELOPER_DIR="$notes_developer_dir"
+umask 077
 cd "$notes_repository_root"
+
+notes_temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/inknotes-readiness.XXXXXX")"
+chmod 700 "$notes_temp_dir"
+trap 'rm -rf "$notes_temp_dir"' EXIT
 
 notes_provenance_schema="$(plutil -extract schemaVersion raw -o - "$notes_provenance_path" 2>/dev/null || true)"
 notes_provenance_commit="$(plutil -extract gitCommit raw -o - "$notes_provenance_path" 2>/dev/null || true)"
@@ -75,7 +83,43 @@ notes_provenance_clean="$(plutil -extract gitTreeClean raw -o - "$notes_provenan
 [[ "$notes_provenance_clean" == "true" ]] || fail "App provenance is not from a clean tree"
 [[ -z "$(git status --porcelain=v1 --untracked-files=all)" ]] || fail "Current worktree is not clean"
 
-notes_project_file="$notes_repository_root/InkNotes.xcodeproj/project.pbxproj"
+notes_committed_source_dir="$notes_temp_dir/committed-source"
+mkdir "$notes_committed_source_dir"
+chmod 700 "$notes_committed_source_dir"
+notes_display_name_contract="$notes_committed_source_dir/internal-display-name-contract.zsh"
+if ! git cat-file blob \
+  "${notes_provenance_commit}:scripts/internal-display-name-contract.zsh" \
+  > "$notes_display_name_contract"
+then
+  fail "Internal display-name contract is missing from the provenance commit"
+fi
+chmod 600 "$notes_display_name_contract"
+zsh -n "$notes_display_name_contract" || fail "Internal display-name contract is invalid"
+source "$notes_display_name_contract"
+
+notes_committed_info_plist="$notes_committed_source_dir/Info.plist"
+if ! git cat-file blob "${notes_provenance_commit}:InkNotes/Info.plist" \
+  > "$notes_committed_info_plist"
+then
+  fail "Source Info.plist is missing from the provenance commit"
+fi
+chmod 600 "$notes_committed_info_plist"
+notes_read_internal_display_name \
+  "$notes_committed_info_plist" \
+  CFBundleDisplayName \
+  "$notes_temp_dir" \
+  notes_expected_display_name \
+  notes_expected_display_name_raw \
+  "Source internal display name" \
+  || fail "Source internal display name is invalid"
+
+notes_project_file="$notes_committed_source_dir/project.pbxproj"
+if ! git cat-file blob "${notes_provenance_commit}:InkNotes.xcodeproj/project.pbxproj" \
+  > "$notes_project_file"
+then
+  fail "Xcode project is missing from the provenance commit"
+fi
+chmod 600 "$notes_project_file"
 notes_project_build="$({
   rg -o 'CURRENT_PROJECT_VERSION = [0-9]+;' "$notes_project_file" \
     | sed -E 's/.* = ([0-9]+);/\1/' \
@@ -93,7 +137,14 @@ codesign --verify --deep --strict "$notes_app_path"
 notes_plist_path="$notes_app_path/Info.plist"
 [[ -f "$notes_plist_path" ]] || fail "Built Info.plist is missing"
 notes_bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$notes_plist_path")"
-notes_display_name="$(plutil -extract CFBundleDisplayName raw -o - "$notes_plist_path")"
+notes_read_internal_display_name \
+  "$notes_plist_path" \
+  CFBundleDisplayName \
+  "$notes_temp_dir" \
+  notes_display_name \
+  notes_display_name_raw \
+  "Built internal display name" \
+  || fail "Built internal display name is invalid"
 notes_app_version="$(plutil -extract CFBundleShortVersionString raw -o - "$notes_plist_path")"
 notes_app_build="$(plutil -extract CFBundleVersion raw -o - "$notes_plist_path")"
 notes_minimum_os="$(plutil -extract MinimumOSVersion raw -o - "$notes_plist_path")"
@@ -104,7 +155,10 @@ notes_executable_name="$(plutil -extract CFBundleExecutable raw -o - "$notes_pli
 notes_executable_path="$notes_app_path/$notes_executable_name"
 
 [[ "$notes_bundle_id" == "$notes_expected_bundle_id" ]] || fail "Bundle identifier mismatch"
-[[ "$notes_display_name" == "$notes_expected_display_name" ]] || fail "Display name mismatch"
+cmp -s "$notes_display_name_raw" "$notes_expected_display_name_raw" \
+  || fail "Display name does not match the provenance commit"
+notes_assert_no_localized_display_name_override "$notes_app_path" "$notes_temp_dir" "Built app" \
+  || fail "Built app display-name localization contract failed"
 [[ "$notes_app_version" == "$notes_project_version" ]] || fail "App marketing version does not match the project"
 [[ "$notes_app_build" == "$notes_project_build" ]] || fail "App build number does not match the project"
 [[ "$notes_minimum_os" == "$notes_expected_minimum_os" ]] || fail "Minimum OS version mismatch"
@@ -134,7 +188,16 @@ assert_provenance_equal() {
 }
 
 assert_provenance_equal bundleIdentifier "$notes_bundle_id"
-assert_provenance_equal displayName "$notes_display_name"
+notes_read_internal_display_name \
+  "$notes_provenance_path" \
+  displayName \
+  "$notes_temp_dir" \
+  notes_provenance_display_name \
+  notes_provenance_display_name_raw \
+  "Provenance display name" \
+  || fail "Provenance display name is invalid"
+cmp -s "$notes_display_name_raw" "$notes_provenance_display_name_raw" \
+  || fail "Provenance display name does not match the app"
 assert_provenance_equal appVersion "$notes_app_version"
 assert_provenance_equal appBuild "$notes_app_build"
 assert_provenance_equal minimumOSVersion "$notes_minimum_os"
@@ -151,9 +214,6 @@ notes_embedded_profile="$notes_app_path/embedded.mobileprovision"
 notes_profile_sha256="$(shasum -a 256 "$notes_embedded_profile" | awk '{print $1}')"
 [[ "$notes_profile_sha256" =~ "^[0-9a-f]{64}$" ]] \
   || fail "Unable to hash the embedded development profile"
-notes_temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/inknotes-readiness.XXXXXX")"
-chmod 700 "$notes_temp_dir"
-trap 'rm -rf "$notes_temp_dir"' EXIT
 notes_decoded_profile="$notes_temp_dir/profile.plist"
 security cms -D -i "$notes_embedded_profile" -o "$notes_decoded_profile" >/dev/null 2>&1 \
   || fail "Embedded development profile cannot be decoded"

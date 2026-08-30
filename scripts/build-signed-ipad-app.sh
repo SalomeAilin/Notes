@@ -5,7 +5,6 @@ setopt null_glob
 notes_repository_root="${0:A:h:h}"
 notes_developer_dir="${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer}"
 notes_expected_bundle_id="com.salomeailin.InkNotes"
-notes_expected_display_name="InkNotes Dev"
 notes_expected_minimum_os="17.0"
 notes_configuration="Debug"
 notes_profile_override=""
@@ -59,7 +58,10 @@ command -v rg >/dev/null || fail "ripgrep is required"
 command -v security >/dev/null || fail "security is required"
 command -v shasum >/dev/null || fail "shasum is required"
 command -v tar >/dev/null || fail "tar is required"
+command -v plutil >/dev/null || fail "plutil is required"
+command -v cmp >/dev/null || fail "cmp is required"
 command -v xcodebuild >/dev/null || fail "xcodebuild is required"
+[[ -x /usr/bin/perl ]] || fail "Perl is required"
 
 export DEVELOPER_DIR="$notes_developer_dir"
 umask 077
@@ -95,6 +97,19 @@ then
   fail "Absolute external Xcode source paths are not supported by the signed source snapshot"
 fi
 chmod -R a-w "$notes_source_root"
+
+notes_display_name_contract="$notes_source_root/scripts/internal-display-name-contract.zsh"
+[[ -f "$notes_display_name_contract" && ! -L "$notes_display_name_contract" ]] \
+  || fail "Internal display-name contract is missing from the source snapshot"
+source "$notes_display_name_contract"
+notes_read_internal_display_name \
+  "$notes_source_root/InkNotes/Info.plist" \
+  CFBundleDisplayName \
+  "$notes_temp_dir" \
+  notes_expected_display_name \
+  notes_expected_display_name_raw \
+  "Source internal display name" \
+  || fail "Source internal display name is invalid"
 
 notes_project_file="$notes_source_root/InkNotes.xcodeproj/project.pbxproj"
 notes_project_build="$({
@@ -254,7 +269,14 @@ notes_final_commit="$(git rev-parse HEAD)"
 
 codesign --verify --deep --strict "$notes_app_path"
 notes_built_bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$notes_app_path/Info.plist")"
-notes_built_display_name="$(plutil -extract CFBundleDisplayName raw -o - "$notes_app_path/Info.plist")"
+notes_read_internal_display_name \
+  "$notes_app_path/Info.plist" \
+  CFBundleDisplayName \
+  "$notes_temp_dir" \
+  notes_built_display_name \
+  notes_built_display_name_raw \
+  "Built internal display name" \
+  || fail "Built internal display name is invalid"
 notes_app_version="$(plutil -extract CFBundleShortVersionString raw -o - "$notes_app_path/Info.plist")"
 notes_app_build="$(plutil -extract CFBundleVersion raw -o - "$notes_app_path/Info.plist")"
 notes_minimum_os="$(plutil -extract MinimumOSVersion raw -o - "$notes_app_path/Info.plist")"
@@ -265,7 +287,10 @@ notes_executable_name="$(plutil -extract CFBundleExecutable raw -o - "$notes_app
 notes_executable_path="$notes_app_path/$notes_executable_name"
 
 [[ "$notes_built_bundle_id" == "$notes_expected_bundle_id" ]] || fail "Built bundle identifier drifted"
-[[ "$notes_built_display_name" == "$notes_expected_display_name" ]] || fail "Built display name drifted"
+cmp -s "$notes_built_display_name_raw" "$notes_expected_display_name_raw" \
+  || fail "Built display name drifted from the exact source snapshot"
+notes_assert_no_localized_display_name_override "$notes_app_path" "$notes_temp_dir" "Built app" \
+  || fail "Built app display-name localization contract failed"
 [[ "$notes_app_version" == "$notes_project_version" ]] || fail "Built marketing version drifted"
 [[ "$notes_app_build" == "$notes_project_build" ]] || fail "Built version does not match the project"
 [[ "$notes_minimum_os" == "$notes_expected_minimum_os" ]] || fail "Built minimum OS version drifted"

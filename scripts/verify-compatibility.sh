@@ -4,7 +4,6 @@ set -euo pipefail
 notes_repository_root="${0:A:h:h}"
 notes_developer_dir="${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer}"
 notes_expected_bundle_id="com.salomeailin.InkNotes"
-notes_expected_display_name="InkNotes Dev"
 notes_expected_uti="com.salomeailin.notes.backup"
 notes_expected_extension="notesbackup"
 notes_expected_mime="application/vnd.salomeailin.notes-backup"
@@ -21,12 +20,147 @@ notes_temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/inknotes-compatibility.XXXXXX")"
 chmod 700 "$notes_temp_dir"
 trap 'rm -rf "$notes_temp_dir"' EXIT
 
+notes_display_name_contract="$notes_repository_root/scripts/internal-display-name-contract.zsh"
+if [[ ! -f "$notes_display_name_contract" || -L "$notes_display_name_contract" ]]; then
+  print -u2 "Internal display-name contract is missing or unsafe"
+  exit 1
+fi
+source "$notes_display_name_contract"
+
 assert_equal() {
   local notes_actual="$1"
   local notes_expected="$2"
   local notes_label="$3"
   if [[ "$notes_actual" != "$notes_expected" ]]; then
     print -u2 "$notes_label mismatch: expected '$notes_expected', got '$notes_actual'"
+    exit 1
+  fi
+}
+
+assert_internal_display_name_contract_rejects_invalid_values() {
+  local notes_fixture_plist
+  local notes_fixture_value
+  local notes_fixture_raw_path
+  local notes_invalid_name
+  local notes_invalid_index=0
+  local -a notes_invalid_names=(
+    ""
+    "   "
+    " Valid Name"
+    "Valid Name "
+    $'\u3000Valid Name'
+    $'Valid Name\u3000'
+    $'Valid\nName'
+    $'Valid Name\n'
+    $'Valid\tName'
+    $'Valid\u200BName'
+    $'Valid\u202EName'
+    $'Valid\u2066Name'
+    '$('
+    '${'
+    '$(PRODUCT_NAME)'
+    '${PRODUCT_NAME}'
+    "prefix墨记suffix"
+    "prefix墨記suffix"
+    "prefix墨计suffix"
+    "prefix墨計suffix"
+  )
+
+  notes_fixture_plist="$notes_temp_dir/display-name-positive-control.plist"
+  plutil -create xml1 "$notes_fixture_plist"
+  plutil -insert CFBundleDisplayName -string "Valid Name" "$notes_fixture_plist"
+  notes_read_internal_display_name \
+    "$notes_fixture_plist" \
+    CFBundleDisplayName \
+    "$notes_temp_dir" \
+    notes_fixture_value \
+    notes_fixture_raw_path \
+    "Positive control" >/dev/null
+
+  notes_fixture_plist="$notes_temp_dir/display-name-missing-key.plist"
+  plutil -create xml1 "$notes_fixture_plist"
+  if (notes_read_internal_display_name \
+    "$notes_fixture_plist" \
+    CFBundleDisplayName \
+    "$notes_temp_dir" \
+    notes_fixture_value \
+    notes_fixture_raw_path \
+    "Negative control") >/dev/null 2>&1
+  then
+    print -u2 "Internal display-name contract accepted a missing key"
+    exit 1
+  fi
+
+  notes_fixture_plist="$notes_temp_dir/display-name-non-string.plist"
+  plutil -create xml1 "$notes_fixture_plist"
+  plutil -insert CFBundleDisplayName -bool true "$notes_fixture_plist"
+  if (notes_read_internal_display_name \
+    "$notes_fixture_plist" \
+    CFBundleDisplayName \
+    "$notes_temp_dir" \
+    notes_fixture_value \
+    notes_fixture_raw_path \
+    "Negative control") >/dev/null 2>&1
+  then
+    print -u2 "Internal display-name contract accepted a non-string value"
+    exit 1
+  fi
+
+  for notes_invalid_name in "${notes_invalid_names[@]}"; do
+    (( notes_invalid_index += 1 ))
+    notes_fixture_plist="$notes_temp_dir/display-name-negative-control-$notes_invalid_index.plist"
+    plutil -create xml1 "$notes_fixture_plist"
+    plutil -insert CFBundleDisplayName -string "$notes_invalid_name" "$notes_fixture_plist"
+    if (notes_read_internal_display_name \
+      "$notes_fixture_plist" \
+      CFBundleDisplayName \
+      "$notes_temp_dir" \
+      notes_fixture_value \
+      notes_fixture_raw_path \
+      "Negative control") >/dev/null 2>&1
+    then
+      print -u2 "Internal display-name contract failed negative control $notes_invalid_index"
+      exit 1
+    fi
+  done
+}
+
+assert_internal_display_name_reader_rejects_localized_overrides() {
+  local notes_fixture_tree="$notes_temp_dir/display-name-localization-negative-control"
+
+  mkdir -p "$notes_fixture_tree/en.lproj"
+  plutil -create binary1 "$notes_fixture_tree/en.lproj/InfoPlist.strings"
+  plutil -insert CFBundleDisplayName -string "Localized Override" \
+    "$notes_fixture_tree/en.lproj/InfoPlist.strings"
+  if (notes_assert_no_localized_display_name_override \
+    "$notes_fixture_tree" \
+    "$notes_temp_dir" \
+    "Negative control") >/dev/null 2>&1
+  then
+    print -u2 "Localized display-name override escaped the contract"
+    exit 1
+  fi
+
+  plutil -replace CFBundleDisplayName -bool true \
+    "$notes_fixture_tree/en.lproj/InfoPlist.strings"
+  if (notes_assert_no_localized_display_name_override \
+    "$notes_fixture_tree" \
+    "$notes_temp_dir" \
+    "Negative control") >/dev/null 2>&1
+  then
+    print -u2 "Non-string localized display-name key escaped the contract"
+    exit 1
+  fi
+
+  plutil -remove CFBundleDisplayName "$notes_fixture_tree/en.lproj/InfoPlist.strings"
+  plutil -insert CFBundleDisplayName -array \
+    "$notes_fixture_tree/en.lproj/InfoPlist.strings"
+  if (notes_assert_no_localized_display_name_override \
+    "$notes_fixture_tree" \
+    "$notes_temp_dir" \
+    "Negative control") >/dev/null 2>&1
+  then
+    print -u2 "Array localized display-name key escaped the contract"
     exit 1
   fi
 }
@@ -138,7 +272,7 @@ assert_build_setting_absent() {
   local notes_key="$2"
   local notes_label="$3"
   if plutil -extract "0.buildSettings.$notes_key" raw -o - "$notes_settings_path" >/dev/null 2>&1; then
-    print -u2 "$notes_label contains forbidden OAuth build setting '$notes_key'"
+    print -u2 "$notes_label contains forbidden build setting '$notes_key'"
     exit 1
   fi
 }
@@ -246,6 +380,7 @@ print "[1/5] Checking Swift format"
 xcrun swift-format lint --strict --recursive InkNotes InkNotesCoreTests Package.swift
 zsh -n scripts/build-signed-ipad-app.sh
 zsh -n scripts/verify-ipad-readiness.sh
+zsh -n scripts/internal-display-name-contract.zsh
 scripts/build-signed-ipad-app.sh --help >/dev/null
 scripts/verify-ipad-readiness.sh --help >/dev/null
 
@@ -254,9 +389,17 @@ xcrun swift test
 assert_oauth_release_marker_scanner_detects_chinese_encodings
 assert_retired_brand_scanner_detects_chinese_encodings
 assert_tree_has_no_retired_brand_marker "InkNotes" "Shipping source"
+assert_internal_display_name_contract_rejects_invalid_values
+assert_internal_display_name_reader_rejects_localized_overrides
 
 notes_source_plist="InkNotes/Info.plist"
-notes_source_display_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$notes_source_plist")"
+notes_read_internal_display_name \
+  "$notes_source_plist" \
+  CFBundleDisplayName \
+  "$notes_temp_dir" \
+  notes_source_display_name \
+  notes_source_display_name_raw \
+  "Source internal display name"
 notes_source_uti="$(/usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations:0:UTTypeIdentifier' "$notes_source_plist")"
 notes_source_extension="$(/usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations:0:UTTypeTagSpecification:public.filename-extension:0' "$notes_source_plist")"
 notes_source_mime="$(/usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations:0:UTTypeTagSpecification:public.mime-type' "$notes_source_plist")"
@@ -264,7 +407,6 @@ notes_source_document_uti="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDocument
 notes_source_document_role="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDocumentTypes:0:CFBundleTypeRole' "$notes_source_plist")"
 notes_source_handler_rank="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDocumentTypes:0:LSHandlerRank' "$notes_source_plist")"
 notes_source_open_in_place="$(plutil -extract LSSupportsOpeningDocumentsInPlace raw -o - "$notes_source_plist")"
-assert_equal "$notes_source_display_name" "$notes_expected_display_name" "Source internal display name"
 assert_equal "$notes_source_uti" "$notes_expected_uti" "Source UTI"
 assert_equal "$notes_source_extension" "$notes_expected_extension" "Source filename extension"
 assert_equal "$notes_source_mime" "$notes_expected_mime" "Source MIME type"
@@ -297,11 +439,18 @@ for notes_configuration in Debug Release; do
   fi
 
   notes_bundle_id="$(plutil -extract 0.buildSettings.PRODUCT_BUNDLE_IDENTIFIER raw -o - "$notes_settings_json")"
+  notes_info_plist_file="$(plutil -extract 0.buildSettings.INFOPLIST_FILE raw -o - "$notes_settings_json")"
+  notes_generates_info_plist="$(plutil -extract 0.buildSettings.GENERATE_INFOPLIST_FILE raw -o - "$notes_settings_json")"
+  notes_preprocesses_info_plist="$(plutil -extract 0.buildSettings.INFOPLIST_PREPROCESS raw -o - "$notes_settings_json")"
   assert_equal "$notes_bundle_id" "$notes_expected_bundle_id" "$notes_configuration bundle identifier"
+  assert_equal "$notes_info_plist_file" "InkNotes/Info.plist" "$notes_configuration source Info.plist"
+  assert_equal "$notes_generates_info_plist" "NO" "$notes_configuration generated Info.plist setting"
+  assert_equal "$notes_preprocesses_info_plist" "NO" "$notes_configuration Info.plist preprocessing"
   for notes_forbidden_setting in \
     BAIDU_CLIENT_SECRET BAIDU_SECRET_KEY BAIDU_APP_SECRET CLIENT_SECRET SECRET_KEY \
     BAIDU_OAUTH_BROKER_URL BAIDU_OAUTH_CALLBACK BAIDU_CLIENT_ID BAIDU_APP_KEY \
-    CODE_SIGN_ENTITLEMENTS INFOPLIST_KEY_CFBundleURLTypes INFOPLIST_KEY_CFBundleURLSchemes \
+    CODE_SIGN_ENTITLEMENTS INFOPLIST_KEY_CFBundleDisplayName \
+    INFOPLIST_KEY_CFBundleURLTypes INFOPLIST_KEY_CFBundleURLSchemes \
     INFOPLIST_KEY_UIBackgroundModes INFOPLIST_KEY_BGTaskSchedulerPermittedIdentifiers
   do
     assert_build_setting_absent \
@@ -338,7 +487,13 @@ for notes_configuration in Debug Release; do
   fi
 
   notes_built_bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$notes_built_plist")"
-  notes_built_display_name="$(plutil -extract CFBundleDisplayName raw -o - "$notes_built_plist")"
+  notes_read_internal_display_name \
+    "$notes_built_plist" \
+    CFBundleDisplayName \
+    "$notes_temp_dir" \
+    notes_built_display_name \
+    notes_built_display_name_raw \
+    "$notes_configuration built internal display name"
   notes_minimum_os="$(plutil -extract MinimumOSVersion raw -o - "$notes_built_plist")"
   notes_device_family="$(plutil -extract UIDeviceFamily json -o - "$notes_built_plist")"
   notes_built_uti="$(/usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations:0:UTTypeIdentifier' "$notes_built_plist")"
@@ -350,7 +505,11 @@ for notes_configuration in Debug Release; do
   notes_built_open_in_place="$(plutil -extract LSSupportsOpeningDocumentsInPlace raw -o - "$notes_built_plist")"
 
   assert_equal "$notes_built_bundle_id" "$notes_expected_bundle_id" "$notes_configuration built bundle identifier"
-  assert_equal "$notes_built_display_name" "$notes_expected_display_name" "$notes_configuration built internal display name"
+  cmp -s "$notes_built_display_name_raw" "$notes_source_display_name_raw" \
+    || {
+      print -u2 "$notes_configuration built internal display name drifted from source"
+      exit 1
+    }
   assert_equal "$notes_minimum_os" "17.0" "$notes_configuration minimum iOS version"
   assert_equal "$notes_device_family" '[2]' "$notes_configuration device family"
   assert_equal "$notes_built_uti" "$notes_expected_uti" "$notes_configuration built UTI"
@@ -365,6 +524,10 @@ for notes_configuration in Debug Release; do
   assert_plist_key_absent "$notes_built_plist" "CFBundleURLSchemes" "$notes_configuration callback scheme"
   assert_plist_key_absent "$notes_built_plist" "UIBackgroundModes" "$notes_configuration background transfer capability"
   assert_plist_key_absent "$notes_built_plist" "BGTaskSchedulerPermittedIdentifiers" "$notes_configuration background task registration"
+  notes_assert_no_localized_display_name_override \
+    "${notes_built_plist:h}" \
+    "$notes_temp_dir" \
+    "$notes_configuration built app"
   assert_app_has_no_oauth_release_markers "${notes_built_plist:h}"
   assert_tree_has_no_retired_brand_marker "${notes_built_plist:h}" "$notes_configuration built app"
 done
