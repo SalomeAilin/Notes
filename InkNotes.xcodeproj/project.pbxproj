@@ -26,6 +26,8 @@
 		D10000000000000000000004 /* BaiduBackupUploadCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10000000000000000000004 /* BaiduBackupUploadCoordinator.swift */; };
 		D20000000000000000000001 /* BaiduUploadReconciliationRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000001 /* BaiduUploadReconciliationRepository.swift */; };
 		D30000000000000000000001 /* DurableFileWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C30000000000000000000001 /* DurableFileWriter.swift */; };
+		D40000000000000000000001 /* BaiduNetdiskAccount.swift in Sources */ = {isa = PBXBuildFile; fileRef = C40000000000000000000001 /* BaiduNetdiskAccount.swift */; };
+		D40000000000000000000002 /* BaiduNetdiskAccountResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C40000000000000000000002 /* BaiduNetdiskAccountResolver.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -50,6 +52,8 @@
 		C10000000000000000000004 /* BaiduBackupUploadCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaiduBackupUploadCoordinator.swift; sourceTree = "<group>"; };
 		C20000000000000000000001 /* BaiduUploadReconciliationRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaiduUploadReconciliationRepository.swift; sourceTree = "<group>"; };
 		C30000000000000000000001 /* DurableFileWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DurableFileWriter.swift; sourceTree = "<group>"; };
+		C40000000000000000000001 /* BaiduNetdiskAccount.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaiduNetdiskAccount.swift; sourceTree = "<group>"; };
+		C40000000000000000000002 /* BaiduNetdiskAccountResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaiduNetdiskAccountResolver.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -106,6 +110,7 @@
 			isa = PBXGroup;
 			children = (
 				C0000000000000000000000C /* BackupArchive.swift */,
+				C40000000000000000000001 /* BaiduNetdiskAccount.swift */,
 				C10000000000000000000001 /* BaiduNetdiskBackup.swift */,
 				C00000000000000000000002 /* LibraryDocument.swift */,
 			);
@@ -157,6 +162,7 @@
 			children = (
 				C10000000000000000000004 /* BaiduBackupUploadCoordinator.swift */,
 				C10000000000000000000002 /* BaiduHTTPTransport.swift */,
+				C40000000000000000000002 /* BaiduNetdiskAccountResolver.swift */,
 				C10000000000000000000003 /* BaiduNetdiskBackupUploader.swift */,
 			);
 			path = Networking;
@@ -234,9 +240,11 @@
 			files = (
 				D00000000000000000000001 /* InkNotesApp.swift in Sources */,
 				D0000000000000000000000A /* BackupArchive.swift in Sources */,
+				D40000000000000000000001 /* BaiduNetdiskAccount.swift in Sources */,
 				D10000000000000000000001 /* BaiduNetdiskBackup.swift in Sources */,
 				D00000000000000000000002 /* LibraryDocument.swift in Sources */,
 				D10000000000000000000002 /* BaiduHTTPTransport.swift in Sources */,
+				D40000000000000000000002 /* BaiduNetdiskAccountResolver.swift in Sources */,
 				D10000000000000000000004 /* BaiduBackupUploadCoordinator.swift in Sources */,
 				D10000000000000000000003 /* BaiduNetdiskBackupUploader.swift in Sources */,
 				D0000000000000000000000B /* BackupArchiveCodec.swift in Sources */,
