@@ -193,7 +193,7 @@ notes_signed_app_identifier="$(
   plutil -extract application-identifier raw -o - "$notes_signed_entitlements" 2>/dev/null || true
 )"
 notes_signed_entitlement_team="$(
-  plutil -extract com.apple.developer.team-identifier raw -o - "$notes_signed_entitlements" \
+  plutil -extract 'com\.apple\.developer\.team-identifier' raw -o - "$notes_signed_entitlements" \
     2>/dev/null || true
 )"
 notes_signed_get_task_allow="$(

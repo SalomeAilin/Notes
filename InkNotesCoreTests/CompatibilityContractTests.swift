@@ -159,6 +159,7 @@ struct CompatibilityContractTests {
     #expect(buildScript.contains("notes_output_relative"))
     #expect(readinessScript.contains("codesign --verify --deep --strict"))
     #expect(readinessScript.contains("codesign -d --entitlements :-"))
+    #expect(readinessScript.contains("com\\.apple\\.developer\\.team-identifier"))
     #expect(readinessScript.contains("ProvisionedDevices"))
     #expect(readinessScript.contains("embeddedProfileSHA256"))
     #expect(readinessScript.contains("notes_device_connection_state"))
