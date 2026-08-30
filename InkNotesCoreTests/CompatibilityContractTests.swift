@@ -384,13 +384,22 @@ struct CompatibilityContractTests {
       contentsOf: repositoryRoot.appendingPathComponent("scripts/verify-ipad-readiness.sh"),
       encoding: .utf8
     )
-    for script in [buildScript, readinessScript] {
+    let materializerScript = try String(
+      contentsOf: repositoryRoot.appendingPathComponent(
+        "scripts/materialize-exact-git-source.zsh"
+      ),
+      encoding: .utf8
+    )
+    for script in [buildScript, readinessScript, materializerScript] {
       #expect(!script.contains("-allowProvisioningUpdates"))
       #expect(!script.contains("-allowProvisioningDeviceRegistration"))
     }
     #expect(buildScript.contains("TeamIdentifier.0"))
-    #expect(buildScript.contains("git status --porcelain=v1"))
-    #expect(buildScript.contains("git archive --format=tar \"$notes_source_commit\""))
+    #expect(buildScript.contains("notes_assert_clean_worktree initial"))
+    #expect(buildScript.contains("status --porcelain=v1 --untracked-files=all"))
+    #expect(buildScript.contains("scripts/materialize-exact-git-source.zsh"))
+    #expect(buildScript.contains("--commit \"$notes_source_commit\""))
+    #expect(buildScript.contains("cmp -s \"$notes_script_path\""))
     #expect(buildScript.contains("-project \"$notes_source_root/InkNotes.xcodeproj\""))
     #expect(!buildScript.contains("-project InkNotes.xcodeproj"))
     #expect(!buildScript.contains("PROVISIONING_PROFILE_SPECIFIER="))
@@ -399,17 +408,30 @@ struct CompatibilityContractTests {
     #expect(buildScript.contains("notes_actual_profile_sha256\" == \"$notes_selected_sha256"))
     #expect(buildScript.contains("embeddedProfileSHA256"))
     #expect(buildScript.contains("notes_output_relative"))
+    #expect(buildScript.contains("INKNOTES_READINESS_REPOSITORY_ROOT=\"$notes_repository_root\""))
+    #expect(buildScript.contains("zsh \"$notes_committed_readiness_script\""))
     #expect(readinessScript.contains("codesign --verify --deep --strict"))
     #expect(readinessScript.contains("codesign -d --entitlements :-"))
     #expect(readinessScript.contains("com\\.apple\\.developer\\.team-identifier"))
     #expect(readinessScript.contains("ProvisionedDevices"))
     #expect(readinessScript.contains("embeddedProfileSHA256"))
+    #expect(readinessScript.contains("/usr/bin/git --no-replace-objects"))
+    #expect(readinessScript.contains("cmp -s \"$notes_script_path\""))
+    #expect(readinessScript.contains("INKNOTES_READINESS_REPOSITORY_ROOT"))
     #expect(readinessScript.contains("notes_device_connection_state"))
     #expect(readinessScript.contains("devicectl.list.devices"))
     #expect(readinessScript.contains("com.apple.coredevice.feature.installapp"))
     #expect(
       readinessScript.components(separatedBy: "xcrun devicectl list devices").count - 1 == 1
     )
+    #expect(materializerScript.contains("GIT_OBJECT_DIRECTORY=\"$notes_object_directory\""))
+    #expect(materializerScript.contains("GIT_NO_REPLACE_OBJECTS=1"))
+    #expect(materializerScript.contains("GIT_ATTR_NOSYSTEM=1"))
+    #expect(materializerScript.contains("GIT_CONFIG_GLOBAL=/dev/null"))
+    #expect(materializerScript.contains("core.attributesFile=/dev/null"))
+    #expect(materializerScript.contains("ls-tree -rz --full-tree"))
+    #expect(materializerScript.contains("hash-object --no-filters"))
+    #expect(materializerScript.contains("$mode eq \"120000\" || $mode eq \"160000\""))
   }
 
   @Test("An orphan app target cannot hide a mounted main-app identifier drift")

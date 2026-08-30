@@ -376,13 +376,298 @@ assert_oauth_release_marker_scanner_detects_chinese_encodings() {
   done
 }
 
+assert_exact_git_source_materializer_isolated() {
+  local notes_fixture_root="$notes_temp_dir/exact-source-negative-control"
+  local notes_fixture_repo="$notes_fixture_root/repository"
+  local notes_fixture_home="$notes_fixture_root/home"
+  local notes_materializer="$notes_repository_root/scripts/materialize-exact-git-source.zsh"
+  local notes_original_tree
+  local notes_original_commit
+  local notes_replacement_tree
+  local notes_replacement_commit
+  local notes_vulnerable_archive="$notes_fixture_root/vulnerable.tar"
+  local notes_vulnerable_source="$notes_fixture_root/vulnerable-source"
+  local notes_exact_source="$notes_fixture_root/exact-source"
+  local notes_global_exact_source="$notes_fixture_root/global-exact-source"
+  local notes_system_exact_source="$notes_fixture_root/system-exact-source"
+  local notes_global_attributes="$notes_fixture_root/global-attributes"
+  local notes_global_config="$notes_fixture_root/global.gitconfig"
+  local notes_system_attributes="$notes_fixture_root/system-attributes"
+  local notes_system_config="$notes_fixture_root/system.gitconfig"
+  local notes_special_directory
+  local notes_special_file
+  local notes_blob
+  local notes_second_blob
+  local notes_tree
+  local notes_commit
+
+  mkdir -m 700 "$notes_fixture_root" "$notes_fixture_repo" "$notes_fixture_home"
+  /usr/bin/env -i \
+    HOME="$notes_fixture_home" \
+    PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+    LC_ALL=C \
+    GIT_CONFIG_NOSYSTEM=1 \
+    GIT_CONFIG_GLOBAL=/dev/null \
+    /usr/bin/git init --quiet "$notes_fixture_repo"
+
+  notes_fixture_git() {
+    /usr/bin/env -i \
+      HOME="$notes_fixture_home" \
+      PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+      LC_ALL=C \
+      GIT_CONFIG_NOSYSTEM=1 \
+      GIT_CONFIG_GLOBAL=/dev/null \
+      /usr/bin/git -C "$notes_fixture_repo" "$@"
+  }
+
+  mkdir -p \
+    "$notes_fixture_repo/InkNotes" \
+    "$notes_fixture_repo/InkNotes.xcodeproj" \
+    "$notes_fixture_repo/scripts"
+  print -r -- "ORIGINAL_INFO" > "$notes_fixture_repo/InkNotes/Info.plist"
+  print -r -- "ORIGINAL_PROJECT" > "$notes_fixture_repo/InkNotes.xcodeproj/project.pbxproj"
+  print -r -- 'ORIGINAL_HELPER $Format:%H$' \
+    > "$notes_fixture_repo/scripts/internal-display-name-contract.zsh"
+  print -r -- "ORIGINAL_PAYLOAD" > "$notes_fixture_repo/payload.txt"
+  print -r -- 'ORIGINAL_TEMPLATE $Format:%H$' > "$notes_fixture_repo/template.txt"
+  print -r -- "NON_EXECUTABLE" > "$notes_fixture_repo/non-executable.txt"
+  print -r -- "EXECUTABLE" > "$notes_fixture_repo/executable.sh"
+  chmod 755 "$notes_fixture_repo/executable.sh"
+  notes_special_directory="$notes_fixture_repo/space and"$'\n'"newline"
+  notes_special_file="$notes_special_directory/tab"$'\t'"file.txt"
+  mkdir -p "$notes_special_directory"
+  print -r -- "SPECIAL_PATH" > "$notes_special_file"
+  notes_fixture_git add --all
+  notes_original_tree="$(notes_fixture_git write-tree)"
+  notes_original_commit="$(
+    print -r -- "original" \
+      | notes_fixture_git \
+        -c user.name=Compatibility \
+        -c user.email=compatibility@example.invalid \
+        -c commit.gpgsign=false \
+        commit-tree "$notes_original_tree"
+  )"
+
+  print -r -- "REPLACED_INFO" > "$notes_fixture_repo/InkNotes/Info.plist"
+  print -r -- "REPLACED_PROJECT" > "$notes_fixture_repo/InkNotes.xcodeproj/project.pbxproj"
+  print -r -- "REPLACED_PAYLOAD" > "$notes_fixture_repo/payload.txt"
+  notes_fixture_git add --all
+  notes_replacement_tree="$(notes_fixture_git write-tree)"
+  notes_replacement_commit="$(
+    print -r -- "replacement" \
+      | notes_fixture_git \
+        -c user.name=Compatibility \
+        -c user.email=compatibility@example.invalid \
+        -c commit.gpgsign=false \
+        commit-tree "$notes_replacement_tree"
+  )"
+  notes_fixture_git replace "$notes_original_commit" "$notes_replacement_commit"
+
+  print -r -- "InkNotes/Info.plist export-ignore" \
+    > "$notes_fixture_repo/.git/info/attributes"
+  print -r -- "scripts/internal-display-name-contract.zsh export-subst" \
+    >> "$notes_fixture_repo/.git/info/attributes"
+  print -r -- "payload.txt export-ignore" >> "$notes_fixture_repo/.git/info/attributes"
+  print -r -- "template.txt export-subst" >> "$notes_fixture_repo/.git/info/attributes"
+
+  [[ "$(notes_fixture_git cat-file blob "$notes_original_commit:InkNotes/Info.plist")" \
+    == "REPLACED_INFO" ]] \
+    || {
+      print -u2 "Git replace negative control did not alter default cat-file output"
+      exit 1
+    }
+  notes_fixture_git archive --format=tar --output="$notes_vulnerable_archive" \
+    "$notes_original_commit"
+  mkdir -m 700 "$notes_vulnerable_source"
+  /usr/bin/tar -xpf "$notes_vulnerable_archive" -C "$notes_vulnerable_source"
+  [[ ! -e "$notes_vulnerable_source/InkNotes/Info.plist" \
+    && ! -e "$notes_vulnerable_source/payload.txt" ]] \
+    || {
+      print -u2 "Git info/attributes export-ignore negative control did not alter the archive"
+      exit 1
+    }
+  [[ "$(< "$notes_vulnerable_source/template.txt")" \
+    != 'ORIGINAL_TEMPLATE $Format:%H$' ]] \
+    || {
+      print -u2 "Git info/attributes export-subst negative control did not alter the archive"
+      exit 1
+    }
+
+  print -r -- "* export-ignore" > "$notes_global_attributes"
+  print -r -- "[core]" > "$notes_global_config"
+  print -r -- "    attributesFile = $notes_global_attributes" >> "$notes_global_config"
+  print -r -- "* export-subst" > "$notes_system_attributes"
+  print -r -- "[core]" > "$notes_system_config"
+  print -r -- "    attributesFile = $notes_system_attributes" >> "$notes_system_config"
+
+  GIT_DIR="$notes_fixture_repo/.git" \
+  GIT_WORK_TREE="$notes_fixture_repo" \
+  GIT_COMMON_DIR="$notes_fixture_repo/.git" \
+  GIT_OBJECT_DIRECTORY="$notes_fixture_root/nonexistent-objects" \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES="$notes_fixture_root/nonexistent-alternates" \
+  GIT_ATTR_SOURCE="$notes_replacement_commit" \
+  GIT_CONFIG_COUNT=1 \
+  GIT_CONFIG_KEY_0=core.attributesFile \
+  GIT_CONFIG_VALUE_0="$notes_global_attributes" \
+    zsh "$notes_materializer" \
+      --repository "$notes_fixture_repo" \
+      --commit "$notes_original_commit" \
+      --destination "$notes_exact_source" >/dev/null
+
+  GIT_CONFIG_GLOBAL="$notes_global_config" \
+    zsh "$notes_materializer" \
+      --repository "$notes_fixture_repo" \
+      --commit "$notes_original_commit" \
+      --destination "$notes_global_exact_source" >/dev/null
+  [[ "$(< "$notes_global_exact_source/payload.txt")" == "ORIGINAL_PAYLOAD" ]] \
+    || {
+      print -u2 "Exact source materializer accepted a global attribute override"
+      exit 1
+    }
+
+  GIT_CONFIG_SYSTEM="$notes_system_config" \
+    zsh "$notes_materializer" \
+      --repository "$notes_fixture_repo" \
+      --commit "$notes_original_commit" \
+      --destination "$notes_system_exact_source" >/dev/null
+  [[ "$(< "$notes_system_exact_source/template.txt")" \
+    == 'ORIGINAL_TEMPLATE $Format:%H$' ]] \
+    || {
+      print -u2 "Exact source materializer accepted a system attribute override"
+      exit 1
+    }
+
+  [[ "$(< "$notes_exact_source/InkNotes/Info.plist")" == "ORIGINAL_INFO" ]] \
+    || {
+      print -u2 "Exact source materializer accepted replacement commit content"
+      exit 1
+    }
+  [[ "$(< "$notes_exact_source/InkNotes.xcodeproj/project.pbxproj")" \
+    == "ORIGINAL_PROJECT" ]] \
+    || {
+      print -u2 "Exact source materializer changed the committed project"
+      exit 1
+    }
+  [[ "$(< "$notes_exact_source/scripts/internal-display-name-contract.zsh")" \
+    == 'ORIGINAL_HELPER $Format:%H$' ]] \
+    || {
+      print -u2 "Exact source materializer expanded an isolated archive attribute"
+      exit 1
+    }
+  [[ "$(< "$notes_exact_source/payload.txt")" == "ORIGINAL_PAYLOAD" ]] \
+    || {
+      print -u2 "Exact source materializer omitted or replaced a committed payload"
+      exit 1
+    }
+  [[ "$(< "$notes_exact_source/template.txt")" \
+    == 'ORIGINAL_TEMPLATE $Format:%H$' ]] \
+    || {
+      print -u2 "Exact source materializer changed a literal export placeholder"
+      exit 1
+    }
+  [[ "$(< "$notes_exact_source/space and"$'\n'"newline/tab"$'\t'"file.txt")" \
+    == "SPECIAL_PATH" ]] \
+    || {
+      print -u2 "Exact source materializer did not preserve a special-character path"
+      exit 1
+    }
+  [[ "$(/usr/bin/stat -f '%Lp' "$notes_exact_source/executable.sh")" == "755" \
+    && "$(/usr/bin/stat -f '%Lp' "$notes_exact_source/non-executable.txt")" == "644" ]] \
+    || {
+      print -u2 "Exact source materializer did not preserve executable modes"
+      exit 1
+    }
+
+  notes_expect_unsafe_tree_rejected() {
+    local notes_unsafe_commit="$1"
+    local notes_label="$2"
+    local notes_unsafe_destination="$notes_fixture_root/rejected-$notes_label"
+    if zsh "$notes_materializer" \
+      --repository "$notes_fixture_repo" \
+      --commit "$notes_unsafe_commit" \
+      --destination "$notes_unsafe_destination" >/dev/null 2>&1
+    then
+      print -u2 "Exact source materializer accepted unsafe $notes_label tree"
+      exit 1
+    fi
+    [[ ! -e "$notes_unsafe_destination" ]] \
+      || {
+        print -u2 "Exact source materializer retained failed $notes_label output"
+        exit 1
+      }
+  }
+
+  notes_blob="$(print -rn -- "* export-ignore" | notes_fixture_git hash-object -w --stdin)"
+  notes_fixture_git read-tree --empty
+  notes_fixture_git update-index --add --cacheinfo \
+    "100644,$notes_blob,nested"$'\n'"directory/.gitattributes"
+  notes_tree="$(notes_fixture_git write-tree)"
+  notes_commit="$(
+    print -r -- "unsafe attributes" \
+      | notes_fixture_git \
+        -c user.name=Compatibility \
+        -c user.email=compatibility@example.invalid \
+        -c commit.gpgsign=false \
+        commit-tree "$notes_tree"
+  )"
+  notes_expect_unsafe_tree_rejected "$notes_commit" gitattributes
+
+  notes_blob="$(print -rn -- "target" | notes_fixture_git hash-object -w --stdin)"
+  notes_fixture_git read-tree --empty
+  notes_fixture_git update-index --add --cacheinfo "120000,$notes_blob,unsafe-link"
+  notes_tree="$(notes_fixture_git write-tree)"
+  notes_commit="$(
+    print -r -- "unsafe symlink" \
+      | notes_fixture_git \
+        -c user.name=Compatibility \
+        -c user.email=compatibility@example.invalid \
+        -c commit.gpgsign=false \
+        commit-tree "$notes_tree"
+  )"
+  notes_expect_unsafe_tree_rejected "$notes_commit" symlink
+
+  notes_fixture_git read-tree --empty
+  notes_fixture_git update-index --add --cacheinfo \
+    "160000,$notes_original_commit,unsafe-submodule"
+  notes_tree="$(notes_fixture_git write-tree)"
+  notes_commit="$(
+    print -r -- "unsafe gitlink" \
+      | notes_fixture_git \
+        -c user.name=Compatibility \
+        -c user.email=compatibility@example.invalid \
+        -c commit.gpgsign=false \
+        commit-tree "$notes_tree"
+  )"
+  notes_expect_unsafe_tree_rejected "$notes_commit" gitlink
+
+  notes_blob="$(print -rn -- "UPPER" | notes_fixture_git hash-object -w --stdin)"
+  notes_second_blob="$(print -rn -- "lower" | notes_fixture_git hash-object -w --stdin)"
+  notes_fixture_git read-tree --empty
+  notes_fixture_git -c core.ignoreCase=false update-index --add --cacheinfo \
+    "100644,$notes_blob,Collision.txt"
+  notes_fixture_git -c core.ignoreCase=false update-index --add --cacheinfo \
+    "100644,$notes_second_blob,collision.txt"
+  notes_tree="$(notes_fixture_git write-tree)"
+  notes_commit="$(
+    print -r -- "unsafe path collision" \
+      | notes_fixture_git \
+        -c user.name=Compatibility \
+        -c user.email=compatibility@example.invalid \
+        -c commit.gpgsign=false \
+        commit-tree "$notes_tree"
+  )"
+  notes_expect_unsafe_tree_rejected "$notes_commit" path-collision
+}
+
 print "[1/5] Checking Swift format"
 xcrun swift-format lint --strict --recursive InkNotes InkNotesCoreTests Package.swift
 zsh -n scripts/build-signed-ipad-app.sh
 zsh -n scripts/verify-ipad-readiness.sh
 zsh -n scripts/internal-display-name-contract.zsh
+zsh -n scripts/materialize-exact-git-source.zsh
 scripts/build-signed-ipad-app.sh --help >/dev/null
 scripts/verify-ipad-readiness.sh --help >/dev/null
+scripts/materialize-exact-git-source.zsh --help >/dev/null
 
 print "[2/5] Running Swift compatibility tests"
 xcrun swift test
@@ -391,6 +676,7 @@ assert_retired_brand_scanner_detects_chinese_encodings
 assert_tree_has_no_retired_brand_marker "InkNotes" "Shipping source"
 assert_internal_display_name_contract_rejects_invalid_values
 assert_internal_display_name_reader_rejects_localized_overrides
+assert_exact_git_source_materializer_isolated
 
 notes_source_plist="InkNotes/Info.plist"
 notes_read_internal_display_name \

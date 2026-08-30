@@ -1,7 +1,8 @@
 #!/bin/zsh
 set -euo pipefail
 
-notes_repository_root="${0:A:h:h}"
+notes_repository_root="${INKNOTES_READINESS_REPOSITORY_ROOT:-${0:A:h:h}}"
+notes_script_path="${0:A}"
 notes_developer_dir="${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer}"
 notes_expected_bundle_id="com.salomeailin.InkNotes"
 notes_expected_minimum_os="17.0"
@@ -58,6 +59,9 @@ while (( $# > 0 )); do
   esac
 done
 
+notes_repository_root="$(cd "$notes_repository_root" 2>/dev/null && pwd -P)" \
+  || fail "Repository directory not found"
+unset INKNOTES_READINESS_REPOSITORY_ROOT
 [[ -d "$notes_developer_dir" ]] || fail "Xcode developer directory not found"
 [[ -d "$notes_app_path" && "$notes_app_path" == *.app ]] || fail "Signed .app bundle not found"
 [[ -f "$notes_provenance_path" ]] || fail "Provenance file not found"
@@ -66,6 +70,7 @@ command -v plutil >/dev/null || fail "plutil is required"
 command -v git >/dev/null || fail "git is required"
 command -v cmp >/dev/null || fail "cmp is required"
 [[ -x /usr/bin/perl ]] || fail "Perl is required"
+[[ -x /usr/bin/git ]] || fail "Apple Git is required"
 
 export DEVELOPER_DIR="$notes_developer_dir"
 umask 077
@@ -74,20 +79,63 @@ cd "$notes_repository_root"
 notes_temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/inknotes-readiness.XXXXXX")"
 chmod 700 "$notes_temp_dir"
 trap 'rm -rf "$notes_temp_dir"' EXIT
+mkdir -m 700 "$notes_temp_dir/git-home" "$notes_temp_dir/git-xdg" "$notes_temp_dir/git-tmp"
+
+notes_repository_git() {
+  /usr/bin/env -i \
+    HOME="$notes_temp_dir/git-home" \
+    XDG_CONFIG_HOME="$notes_temp_dir/git-xdg" \
+    PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+    TMPDIR="$notes_temp_dir/git-tmp" \
+    LC_ALL=C \
+    GIT_NO_REPLACE_OBJECTS=1 \
+    GIT_ATTR_NOSYSTEM=1 \
+    GIT_CONFIG_NOSYSTEM=1 \
+    GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_CONFIG_SYSTEM=/dev/null \
+    GIT_OPTIONAL_LOCKS=0 \
+    /usr/bin/git --no-replace-objects -C "$notes_repository_root" "$@"
+}
+
+notes_assert_clean_worktree() {
+  local notes_status_path="$notes_temp_dir/git-status"
+  if ! notes_repository_git -c core.fsmonitor=false -c core.untrackedCache=false \
+    status --porcelain=v1 --untracked-files=all > "$notes_status_path"
+  then
+    fail "Unable to verify the current worktree state"
+  fi
+  chmod 600 "$notes_status_path"
+  [[ ! -s "$notes_status_path" ]] || fail "Current worktree is not clean"
+}
 
 notes_provenance_schema="$(plutil -extract schemaVersion raw -o - "$notes_provenance_path" 2>/dev/null || true)"
 notes_provenance_commit="$(plutil -extract gitCommit raw -o - "$notes_provenance_path" 2>/dev/null || true)"
 notes_provenance_clean="$(plutil -extract gitTreeClean raw -o - "$notes_provenance_path" 2>/dev/null || true)"
 [[ "$notes_provenance_schema" == "2" ]] || fail "Unsupported provenance schema"
-[[ "$notes_provenance_commit" == "$(git rev-parse HEAD)" ]] || fail "App provenance does not match exact Git HEAD"
+notes_exact_head="$(notes_repository_git rev-parse --verify 'HEAD^{commit}')" \
+  || fail "Unable to resolve exact Git HEAD without replacement objects"
+[[ "$notes_provenance_commit" == "$notes_exact_head" ]] \
+  || fail "App provenance does not match exact Git HEAD"
 [[ "$notes_provenance_clean" == "true" ]] || fail "App provenance is not from a clean tree"
-[[ -z "$(git status --porcelain=v1 --untracked-files=all)" ]] || fail "Current worktree is not clean"
+notes_assert_clean_worktree
 
 notes_committed_source_dir="$notes_temp_dir/committed-source"
 mkdir "$notes_committed_source_dir"
 chmod 700 "$notes_committed_source_dir"
+notes_committed_readiness_script="$notes_committed_source_dir/verify-ipad-readiness.sh"
+if ! notes_repository_git cat-file blob \
+  "${notes_provenance_commit}:scripts/verify-ipad-readiness.sh" \
+  > "$notes_committed_readiness_script"
+then
+  fail "iPad readiness script is missing from the provenance commit"
+fi
+chmod 600 "$notes_committed_readiness_script"
+zsh -n "$notes_committed_readiness_script" || fail "Committed iPad readiness script is invalid"
+cmp -s "$notes_script_path" "$notes_committed_readiness_script" \
+  || fail "Running iPad readiness script differs from the provenance commit"
+
 notes_display_name_contract="$notes_committed_source_dir/internal-display-name-contract.zsh"
-if ! git cat-file blob \
+if ! notes_repository_git cat-file blob \
   "${notes_provenance_commit}:scripts/internal-display-name-contract.zsh" \
   > "$notes_display_name_contract"
 then
@@ -98,7 +146,7 @@ zsh -n "$notes_display_name_contract" || fail "Internal display-name contract is
 source "$notes_display_name_contract"
 
 notes_committed_info_plist="$notes_committed_source_dir/Info.plist"
-if ! git cat-file blob "${notes_provenance_commit}:InkNotes/Info.plist" \
+if ! notes_repository_git cat-file blob "${notes_provenance_commit}:InkNotes/Info.plist" \
   > "$notes_committed_info_plist"
 then
   fail "Source Info.plist is missing from the provenance commit"
@@ -114,7 +162,8 @@ notes_read_internal_display_name \
   || fail "Source internal display name is invalid"
 
 notes_project_file="$notes_committed_source_dir/project.pbxproj"
-if ! git cat-file blob "${notes_provenance_commit}:InkNotes.xcodeproj/project.pbxproj" \
+if ! notes_repository_git cat-file blob \
+  "${notes_provenance_commit}:InkNotes.xcodeproj/project.pbxproj" \
   > "$notes_project_file"
 then
   fail "Xcode project is missing from the provenance commit"
@@ -369,4 +418,6 @@ if [[ -n "$notes_device_name" ]]; then
   print -- "Device readiness passed: physical paired iPad, iPadOS $notes_device_os, connected and install-capable"
 fi
 
+cmp -s "$notes_script_path" "$notes_committed_readiness_script" \
+  || fail "Running iPad readiness script changed during verification"
 print -- "Artifact readiness passed: $notes_app_version ($notes_app_build), exact HEAD, signed arm64 iPad app"

@@ -3,6 +3,7 @@ set -euo pipefail
 setopt null_glob
 
 notes_repository_root="${0:A:h:h}"
+notes_script_path="${0:A}"
 notes_developer_dir="${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer}"
 notes_expected_bundle_id="com.salomeailin.InkNotes"
 notes_expected_minimum_os="17.0"
@@ -62,32 +63,104 @@ command -v plutil >/dev/null || fail "plutil is required"
 command -v cmp >/dev/null || fail "cmp is required"
 command -v xcodebuild >/dev/null || fail "xcodebuild is required"
 [[ -x /usr/bin/perl ]] || fail "Perl is required"
+[[ -x /usr/bin/git ]] || fail "Apple Git is required"
 
 export DEVELOPER_DIR="$notes_developer_dir"
 umask 077
 cd "$notes_repository_root"
 
-[[ -z "$(git status --porcelain=v1 --untracked-files=all)" ]] \
-  || fail "Refusing to build from a dirty worktree"
-
-notes_source_commit="$(git rev-parse HEAD)"
-notes_source_commit_short="$(git rev-parse --short=12 "$notes_source_commit")"
 notes_temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/inknotes-signed-build.XXXXXX")"
 chmod 700 "$notes_temp_dir"
 trap 'chmod -R u+w "$notes_temp_dir" 2>/dev/null || true; rm -rf "$notes_temp_dir"' EXIT
+mkdir -m 700 "$notes_temp_dir/git-home" "$notes_temp_dir/git-xdg" "$notes_temp_dir/git-tmp"
+
+notes_repository_git() {
+  /usr/bin/env -i \
+    HOME="$notes_temp_dir/git-home" \
+    XDG_CONFIG_HOME="$notes_temp_dir/git-xdg" \
+    PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+    TMPDIR="$notes_temp_dir/git-tmp" \
+    LC_ALL=C \
+    GIT_NO_REPLACE_OBJECTS=1 \
+    GIT_ATTR_NOSYSTEM=1 \
+    GIT_CONFIG_NOSYSTEM=1 \
+    GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_CONFIG_SYSTEM=/dev/null \
+    GIT_OPTIONAL_LOCKS=0 \
+    /usr/bin/git --no-replace-objects -C "$notes_repository_root" "$@"
+}
+
+notes_assert_clean_worktree() {
+  local notes_label="$1"
+  local notes_status_path="$notes_temp_dir/git-status-$notes_label"
+  if ! notes_repository_git -c core.fsmonitor=false -c core.untrackedCache=false \
+    status --porcelain=v1 --untracked-files=all > "$notes_status_path"
+  then
+    fail "Unable to verify the $notes_label worktree state"
+  fi
+  chmod 600 "$notes_status_path"
+  [[ ! -s "$notes_status_path" ]] || fail "Refusing to build from a dirty worktree"
+}
+
+notes_assert_clean_worktree initial
+
+notes_source_commit="$(notes_repository_git rev-parse --verify 'HEAD^{commit}')" \
+  || fail "Unable to resolve exact Git HEAD without replacement objects"
+[[ "$notes_source_commit" =~ "^[0-9a-f]{40}$|^[0-9a-f]{64}$" ]] \
+  || fail "Exact Git HEAD is not a full object ID"
+notes_source_commit_short="${notes_source_commit[1,12]}"
+notes_bootstrap_dir="$notes_temp_dir/committed-scripts"
+mkdir -m 700 "$notes_bootstrap_dir"
+
+notes_extract_committed_script() {
+  local notes_relative_path="$1"
+  local notes_output_path="$2"
+  local notes_label="$3"
+  if ! notes_repository_git cat-file blob \
+    "${notes_source_commit}:${notes_relative_path}" > "$notes_output_path"
+  then
+    fail "$notes_label is missing from the exact source commit"
+  fi
+  chmod 600 "$notes_output_path"
+  zsh -n "$notes_output_path" || fail "$notes_label is not valid zsh"
+}
+
+notes_committed_build_script="$notes_bootstrap_dir/build-signed-ipad-app.sh"
+notes_extract_committed_script \
+  scripts/build-signed-ipad-app.sh \
+  "$notes_committed_build_script" \
+  "Signed build script"
+cmp -s "$notes_script_path" "$notes_committed_build_script" \
+  || fail "Running signed build script differs from the exact source commit"
+
+notes_materializer="$notes_bootstrap_dir/materialize-exact-git-source.zsh"
+notes_extract_committed_script \
+  scripts/materialize-exact-git-source.zsh \
+  "$notes_materializer" \
+  "Exact source materializer"
+
+notes_committed_readiness_script="$notes_bootstrap_dir/verify-ipad-readiness.sh"
+notes_extract_committed_script \
+  scripts/verify-ipad-readiness.sh \
+  "$notes_committed_readiness_script" \
+  "iPad readiness script"
+cmp -s \
+  "$notes_repository_root/scripts/verify-ipad-readiness.sh" \
+  "$notes_committed_readiness_script" \
+  || fail "iPad readiness script differs from the exact source commit"
+
 notes_source_root="$notes_temp_dir/source"
-mkdir "$notes_source_root"
-if git ls-tree -r "$notes_source_commit" \
-  | awk '$1 == "120000" || $1 == "160000" { found = 1 } END { exit(found ? 0 : 1) }'
-then
-  fail "Tracked symbolic links and submodules are not supported by the signed source snapshot"
-fi
-if git ls-tree -r --name-only "$notes_source_commit" \
-  | awk -F/ '$NF == ".gitattributes" { found = 1 } END { exit(found ? 0 : 1) }'
-then
-  fail "Committed .gitattributes requires an explicit signed snapshot review"
-fi
-git archive --format=tar "$notes_source_commit" | tar -xf - -C "$notes_source_root"
+zsh "$notes_materializer" \
+  --repository "$notes_repository_root" \
+  --commit "$notes_source_commit" \
+  --destination "$notes_source_root" \
+  || fail "Unable to materialize the exact signed source snapshot"
+cmp -s "$notes_source_root/scripts/build-signed-ipad-app.sh" "$notes_committed_build_script" \
+  || fail "Materialized signed build script differs from the exact commit"
+cmp -s "$notes_source_root/scripts/materialize-exact-git-source.zsh" "$notes_materializer" \
+  || fail "Materialized exact source helper differs from the exact commit"
+cmp -s "$notes_source_root/scripts/verify-ipad-readiness.sh" "$notes_committed_readiness_script" \
+  || fail "Materialized readiness script differs from the exact commit"
 if rg -l '^version https://git-lfs.github.com/spec/v1$' "$notes_source_root" >/dev/null 2>&1; then
   fail "Git LFS pointer files are not supported by the signed source snapshot"
 fi
@@ -152,7 +225,7 @@ fi
   || fail "Output directory escaped repository DerivedData"
 [[ -O "$notes_output_dir" ]] || fail "Output directory is not owned by the current user"
 notes_output_relative="${notes_output_dir#$notes_repository_root/}"
-git check-ignore -q -- "$notes_output_relative/" \
+notes_repository_git check-ignore -q -- "$notes_output_relative/" \
   || fail "Output directory must remain ignored by Git"
 chmod 700 "$notes_output_dir"
 
@@ -262,10 +335,9 @@ mv "$notes_build_log_temp" "$notes_build_log"
 notes_app_path="$notes_output_dir/Build/Products/$notes_configuration-iphoneos/InkNotes.app"
 [[ -d "$notes_app_path" ]] || fail "Signed app bundle was not produced"
 
-notes_final_commit="$(git rev-parse HEAD)"
+notes_final_commit="$(notes_repository_git rev-parse --verify 'HEAD^{commit}')"
 [[ "$notes_final_commit" == "$notes_source_commit" ]] || fail "Git HEAD changed during the build"
-[[ -z "$(git status --porcelain=v1 --untracked-files=all)" ]] \
-  || fail "Worktree changed during the build"
+notes_assert_clean_worktree final
 
 codesign --verify --deep --strict "$notes_app_path"
 notes_built_bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$notes_app_path/Info.plist")"
@@ -373,9 +445,16 @@ plutil -convert json -o "$notes_provenance_json" "$notes_provenance_plist"
 chmod 600 "$notes_provenance_json"
 mv "$notes_provenance_json" "$notes_provenance_path"
 
-"$notes_repository_root/scripts/verify-ipad-readiness.sh" \
-  --app "$notes_app_path" \
-  --provenance "$notes_provenance_path"
+cmp -s "$notes_script_path" "$notes_committed_build_script" \
+  || fail "Running signed build script changed during the build"
+cmp -s \
+  "$notes_repository_root/scripts/verify-ipad-readiness.sh" \
+  "$notes_committed_readiness_script" \
+  || fail "iPad readiness script changed during the build"
+INKNOTES_READINESS_REPOSITORY_ROOT="$notes_repository_root" \
+  zsh "$notes_committed_readiness_script" \
+    --app "$notes_app_path" \
+    --provenance "$notes_provenance_path"
 
 print -- "Signed iPad app ready: $notes_app_path"
 print -- "Provenance ready: $notes_provenance_path"
