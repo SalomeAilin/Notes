@@ -142,9 +142,13 @@ struct CompatibilityContractTests {
     #expect(appSource.contains("pendingBackupImports.enqueue(request)"))
     #expect(!appSource.contains("importBackupAsCopy"))
     #expect(librarySource.contains("BackupTransferView(importQueue:"))
-    #expect(librarySource.contains("!store.isLoading && !store.isDrawingLoading"))
-    #expect(librarySource.contains("namingAction == nil"))
-    #expect(librarySource.contains("deletionTarget == nil"))
+    #expect(
+      librarySource.contains(
+        "handleBackupImportPresentationEvent(.presentationStateChanged)"
+      )
+    )
+    #expect(librarySource.contains("handleBackupImportPresentationEvent(.queueChanged)"))
+    #expect(librarySource.contains("hasQueuedImport: !pendingBackupImports.isEmpty"))
     #expect(!librarySource.contains("importBackupAsCopy"))
     #expect(transferSource.contains(".task(id: importQueue.current?.id)"))
     #expect(transferSource.contains("await handleQueuedImportRequest(request)"))
