@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Notes 发布门禁证据快照（2026-08-30）</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #172033;
+      --muted: #5f6b7a;
+      --line: #d9e0e8;
+      --panel: #f7f9fc;
+      --accent: #3157c8;
+      --warn: #8a4b08;
+      --warn-bg: #fff6e6;
+      --ok: #17633b;
+      --ok-bg: #edf8f1;
+      --stop: #9a2a2a;
+      --stop-bg: #fff0f0;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: #eef2f7;
+      font: 16px/1.65 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    main {
+      width: min(1060px, calc(100% - 32px));
+      margin: 32px auto;
+      padding: 32px;
+      background: white;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: 0 10px 30px rgba(23, 32, 51, .07);
+    }
+    h1, h2, h3 { line-height: 1.25; }
+    h1 { margin-top: 0; font-size: clamp(1.8rem, 4vw, 2.6rem); }
+    h2 { margin-top: 2.2rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+    h3 { margin-top: 1.6rem; }
+    a { color: var(--accent); overflow-wrap: anywhere; }
+    code {
+      padding: .12em .35em;
+      border-radius: 5px;
+      background: #eef2f7;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .meta, .note, .decision {
+      padding: 16px 18px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel);
+    }
+    .decision { border-color: #f0cf91; background: var(--warn-bg); }
+    .stop { border-color: #efb4b4; background: var(--stop-bg); }
+    .ok { border-color: #b8dfc6; background: var(--ok-bg); }
+    .pill {
+      display: inline-block;
+      margin: 0 .4rem .35rem 0;
+      padding: .18rem .58rem;
+      border-radius: 999px;
+      font-size: .88rem;
+      font-weight: 650;
+      background: var(--warn-bg);
+      color: var(--warn);
+      border: 1px solid #f0cf91;
+    }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+    th, td { padding: 10px 12px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: var(--panel); }
+    ul, ol { padding-left: 1.4rem; }
+    .muted { color: var(--muted); }
+    .small { font-size: .91rem; }
+    @media (max-width: 760px) {
+      main { width: 100%; margin: 0; padding: 22px 16px; border: 0; border-radius: 0; }
+      .table-wrap { overflow-x: auto; }
+      table { min-width: 760px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Notes 发布门禁证据快照</h1>
+  <p class="muted">证据时间：2026-08-30（Asia/Shanghai）｜代码基线：<code>4176180b092c898e805df10650cbc8e14cf5d37a</code></p>
+
+  <div class="decision stop">
+    <strong>当前不能公开发布。</strong>
+    <span class="pill">正式名称未确定</span>
+    <span class="pill">CNIPA 未登录核查</span>
+    <span class="pill">百度 broker 未部署</span>
+    <span class="pill">远端完整字节未证明</span>
+    <p>本报告是工程侧公开入口初筛与安全门禁记录，不是法律意见，也不构成商标可注册、无侵权或 App Store 可上架的保证。</p>
+  </div>
+
+  <h2>一、品牌名称边界</h2>
+
+  <h3>已经确定的决定</h3>
+  <ul>
+    <li><code>InkNotes Dev</code> 只作为个人侧载开发包的内部占位显示名，不作为正式品牌。</li>
+    <li>“墨记／墨記／墨计／墨計”继续从可构建产品中排除。</li>
+    <li>正式更名只改展示层；Bundle Identifier、应用沙盒目录、备份 UTI、扩展名、MIME、magic 和 schema 保持不变。</li>
+  </ul>
+
+  <h3>已有名称的公开市场证据</h3>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>名称</th><th>本轮看到的证据</th><th>工程结论</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>InkNotes Dev / InkNotes</td>
+          <td>Apple 中国区精确标题初筛为 0，但存在近似标题 <a href="https://apps.apple.com/cn/app/ink-notes-lists-to-dos/id6763797883">Ink: Notes, Lists &amp; To-Dos</a>；<a href="https://github.com/search?q=InkNotes+in%3Aname&amp;type=repositories">GitHub 名称检索</a>有多个 InkNotes 仓库。</td>
+          <td>可继续作内部占位；不能据此升级为正式品牌。</td>
+        </tr>
+        <tr>
+          <td>墨记／墨記</td>
+          <td>中国区已有在架应用 <a href="https://apps.apple.com/cn/app/%E5%A2%A8%E8%AE%B0-%E7%B2%BE%E7%BE%8E%E6%97%A5%E8%AE%B0%E6%9C%AC-%E7%AC%94%E8%AE%B0%E6%9C%AC/id1221871966">墨记-精美日记本·笔记本</a>。</td>
+          <td>维持排除。</td>
+        </tr>
+        <tr>
+          <td>墨计／墨計</td>
+          <td>中国区已有精确标题在架应用 <a href="https://apps.apple.com/cn/app/%E5%A2%A8%E8%AE%A1/id1527362440">墨计</a>。</td>
+          <td>维持排除。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>候选名称初筛</h3>
+  <p>Apple 数据来自中国区官方 Search API。<strong>返回量是模糊搜索结果数，不是同名冲突数；精确标题为 0 也不表示可注册。</strong>GitHub 只补充检查明显同名技术仓库，不代表商业使用或商标状态。本表不作排序。</p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>候选</th><th>Apple 模糊返回</th><th>精确标题</th><th>完整子串</th><th>GitHub 精确仓库名</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><a href="https://itunes.apple.com/search?term=%E7%BA%B8%E4%B8%8A%E5%B1%BF&amp;country=cn&amp;media=software&amp;entity=software&amp;limit=200">纸上屿</a></td><td>172</td><td>0</td><td>0</td><td><a href="https://github.com/search?q=%E7%BA%B8%E4%B8%8A%E5%B1%BF%20in%3Aname&amp;type=repositories">0</a></td></tr>
+        <tr><td><a href="https://itunes.apple.com/search?term=%E5%AD%97%E6%88%90%E6%9E%97&amp;country=cn&amp;media=software&amp;entity=software&amp;limit=200">字成林</a></td><td>21</td><td>0</td><td>0</td><td><a href="https://github.com/search?q=%E5%AD%97%E6%88%90%E6%9E%97%20in%3Aname&amp;type=repositories">0</a></td></tr>
+        <tr><td><a href="https://itunes.apple.com/search?term=%E7%A0%9A%E6%98%9F%E5%B1%BF&amp;country=cn&amp;media=software&amp;entity=software&amp;limit=200">砚星屿</a></td><td>169</td><td>0</td><td>0</td><td><a href="https://github.com/search?q=%E7%A0%9A%E6%98%9F%E5%B1%BF%20in%3Aname&amp;type=repositories">0</a></td></tr>
+        <tr><td><a href="https://itunes.apple.com/search?term=%E7%AC%94%E7%AB%AF%E5%B2%9A&amp;country=cn&amp;media=software&amp;entity=software&amp;limit=200">笔端岚</a></td><td>0</td><td>0</td><td>0</td><td><a href="https://github.com/search?q=%E7%AC%94%E7%AB%AF%E5%B2%9A%20in%3Aname&amp;type=repositories">0</a></td></tr>
+        <tr><td><a href="https://itunes.apple.com/search?term=%E8%BF%B9%E8%AF%AD%E5%B2%9B&amp;country=cn&amp;media=software&amp;entity=software&amp;limit=200">迹语岛</a></td><td>175</td><td>0</td><td>0</td><td><a href="https://github.com/search?q=%E8%BF%B9%E8%AF%AD%E5%B2%9B%20in%3Aname&amp;type=repositories">0</a></td></tr>
+        <tr><td><a href="https://itunes.apple.com/search?term=%E6%BE%84%E6%80%9D%E7%AC%BA&amp;country=cn&amp;media=software&amp;entity=software&amp;limit=200">澄思笺</a></td><td>139</td><td>0</td><td>0</td><td><a href="https://github.com/search?q=%E6%BE%84%E6%80%9D%E7%AC%BA%20in%3Aname&amp;type=repositories">0</a></td></tr>
+        <tr><td><a href="https://itunes.apple.com/search?term=%E9%A1%B5%E5%85%89%E8%88%9F&amp;country=cn&amp;media=software&amp;entity=software&amp;limit=200">页光舟</a></td><td>17</td><td>0</td><td>0</td><td><a href="https://github.com/search?q=%E9%A1%B5%E5%85%89%E8%88%9F%20in%3Aname&amp;type=repositories">0</a></td></tr>
+        <tr><td><a href="https://itunes.apple.com/search?term=%E7%B4%A0%E7%AC%94%E5%BE%84&amp;country=cn&amp;media=software&amp;entity=software&amp;limit=200">素笔径</a></td><td>73</td><td>0</td><td>0</td><td><a href="https://github.com/search?q=%E7%B4%A0%E7%AC%94%E5%BE%84%20in%3Aname&amp;type=repositories">0</a></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <strong>CNIPA 仍未完成：</strong>
+    <a href="https://wcjs.sbj.cnipa.gov.cn/home">商标网上检索系统</a>可打开，并提示公开数据有滞后且不具有法律效力；近似查询会进入统一身份认证，未登录无法完成第 9 类、第 42 类逐词核查，自动请求还会被反机器人策略拒绝。商标局<a href="https://sbj.cnipa.gov.cn/sbj/tzgg/202512/t20251203_36767.html">统一身份认证通知</a>说明相关系统已切换登录入口。因此，本轮没有任何候选可以写成“已完成商标清查”。
+  </div>
+
+  <h3>正式选名前的停止条件</h3>
+  <ol>
+    <li>用户先从候选中确定少量偏好，避免无边界检索。</li>
+    <li>由权利人登录 CNIPA，至少对相关文字及近似组合做第 9 类、第 42 类查询并保存证据。</li>
+    <li>公开发布前由合格的商标代理人或律师结合申请人、类别、地域和实际使用方式判断。</li>
+    <li>只有通过上述门禁后，才修改 <code>CFBundleDisplayName</code> 和界面文字；不得顺手更改稳定技术身份。</li>
+  </ol>
+
+  <h2>二、百度网盘安全接入边界</h2>
+
+  <h3>OAuth 公开证据</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>模式</th><th>官方公开要求</th><th>当前决定</th></tr></thead>
+      <tbody>
+        <tr><td><a href="https://pan.baidu.com/union/doc/%E4%BD%BF%E7%94%A8%E5%85%A5%E9%97%A8/%E6%8E%A5%E5%85%A5%E6%8E%88%E6%9D%83/%E6%8E%88%E6%9D%83%E7%A0%81%E6%A8%A1%E5%BC%8F/">授权码</a></td><td>换 token 和 refresh 均要求 <code>client_secret</code>。</td><td>不能在 iOS 包内直连换 token。</td></tr>
+        <tr><td><a href="https://pan.baidu.com/union/doc/%E4%BD%BF%E7%94%A8%E5%85%A5%E9%97%A8/%E6%8E%A5%E5%85%A5%E6%8E%88%E6%9D%83/%E8%AE%BE%E5%A4%87%E7%A0%81%E6%A8%A1%E5%BC%8F%E6%8E%88%E6%9D%83/">设备码</a></td><td>取 device_code 只需 client_id，但轮询换 token 和 refresh 仍要求 <code>client_secret</code>。</td><td>不是无密钥 token 流程。</td></tr>
+        <tr><td><a href="https://pan.baidu.com/union/doc/%E4%BD%BF%E7%94%A8%E5%85%A5%E9%97%A8/%E6%8E%A5%E5%85%A5%E6%8E%88%E6%9D%83/%E7%AE%80%E5%8C%96%E6%A8%A1%E5%BC%8F%E6%8E%A5%E5%85%A5/">简化模式</a></td><td>不要求 secret，但 access token 直接进入回调片段且不支持 refresh。</td><td>不作为与 broker 等价的正式方案。</td></tr>
+        <tr><td><a href="https://pan.baidu.com/union/doc/sdk/ios/%E5%9F%BA%E7%A1%80%E6%A8%A1%E5%9D%97/">官方 iOS 基础模块</a></td><td>公开示例直接接收 secretKey 来换取和刷新 token。</td><td>SecretKey 留在可信服务端。</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>本轮检查当前官方授权/iOS 文档和官方 Go SDK，没有发现 <code>PKCE</code>、<code>code_challenge</code>、<code>code_verifier</code> 或 <code>S256</code>。这只证明<strong>当前公开资料没有公开或实现 PKCE</strong>，不能外推为服务端必然拒绝未文档化参数。</p>
+
+  <div class="decision">
+    <strong>保留 broker 边界。</strong>SecretKey、refresh token 和 refresh token 的原子轮换由服务端处理；iPad 只通过 <code>ASWebAuthenticationSession</code> 与真实 HTTPS broker 交互，并使用强 state、一次性票据和可验证回调。Notes 与自有 broker 之间可以另行设计 PKCE，但不得把它称作“百度 PKCE”。
+  </div>
+
+  <h3>什么才算“远端内容已证明”</h3>
+  <p><a href="https://pan.baidu.com/union/doc/%E5%9F%BA%E7%A1%80%E7%BD%91%E7%9B%98%E6%9C%8D%E5%8A%A1/%E4%B8%8A%E4%BC%A0/%E5%88%9B%E5%BB%BA%E6%96%87%E4%BB%B6/">创建文件接口</a>只返回 fs_id、path、size、MD5 等元数据，没有“服务端重新读取持久化对象并签发 SHA-256 字节证明”的公开契约。因此 create 成功、列表命中或 MD5/size 一致都继续标记为“内容未证明”。</p>
+
+  <div class="note ok">
+    <strong>可实现的强核对链：</strong>用 fs_id 调用<a href="https://pan.baidu.com/union/doc/%E5%9F%BA%E7%A1%80%E7%BD%91%E7%9B%98%E6%9C%8D%E5%8A%A1/%E8%8E%B7%E5%8F%96%E6%96%87%E4%BB%B6%E4%BF%A1%E6%81%AF/%E6%9F%A5%E8%AF%A2%E6%96%87%E4%BB%B6%E4%BF%A1%E6%81%AF/">查询文件信息</a>取得 dlink，再按<a href="https://pan.baidu.com/union/doc/%E5%9F%BA%E7%A1%80%E7%BD%91%E7%9B%98%E6%9C%8D%E5%8A%A1/%E4%B8%8B%E8%BD%BD/">下载接口</a>鉴权流式读取全部远端字节；在设备端计算 SHA-256，只有与本地备份清单的 <code>archiveSHA256</code> 完全一致时才可进入 <code>contentVerified</code>。
+  </div>
+
+  <h3>百度功能的发行门禁</h3>
+  <ul>
+    <li>没有生产 broker、正式回调身份和真实账号验收时，不展示“已连接”或上传按钮。</li>
+    <li>App、Info.plist、xcconfig、Keychain、日志和 Git 历史不得包含 client secret。</li>
+    <li>上传 create 之后继续保留本地不可变对账记录；远端字节强核对成功前不得核销、宣称完成或授权盲重传。</li>
+    <li>下载核对只接受 HTTPS，限制长度，使用短期凭据，不持久化 token；失败、取消、重定向异常或哈希不符都保持“未验证”。</li>
+    <li>真实账号联调还需验证授权目录、配额、路径冲突、前后台行为、限流、撤销授权和账号切换。</li>
+  </ul>
+
+  <h2>三、当前可做与不可做</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>可以继续</th><th>暂时停止</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>内部占位包侧载；本地备份/恢复；百度数据面离线测试；隔离实现远端下载 SHA-256 核对核心；候选名称收敛。</td>
+          <td>公开使用正式品牌；声称名称无法律风险；把 SecretKey 放入 App；上线百度登录 UI；把 create/MD5 当成远端内容证明；在设备离线时强制安装。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="small muted">方法边界：本轮未登录 CNIPA、未申请百度应用、未调用真实百度账号接口，也未进行法律意见检索。动态平台结果可能变化，正式发布前必须重新核验。</p>
+</main>
+</body>
+</html>
