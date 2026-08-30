@@ -35,6 +35,12 @@ private struct PendingBackupImport: Sendable {
   let data: Data
   let filename: String
   let preview: BackupArchivePreview
+  let inboxCleanupWarning: String?
+}
+
+private enum BackupInspectionOutcome: Equatable {
+  case consumed
+  case notStarted
 }
 
 private struct BackupTransferNotice: Identifiable {
@@ -47,76 +53,10 @@ private func formatBackupByteCount(_ count: Int) -> String {
   ByteCountFormatter.string(fromByteCount: Int64(count), countStyle: .file)
 }
 
-private enum BackupTransferViewError: LocalizedError {
-  case fileIsNotRegular
-  case fileTooLarge(actual: Int, maximum: Int)
-
-  var errorDescription: String? {
-    switch self {
-    case .fileIsNotRegular:
-      "请选择一个普通的笔记备份文件。"
-    case .fileTooLarge(_, let maximum):
-      "备份文件超过 \(formatBackupByteCount(maximum)) 的安全上限。"
-    }
-  }
-}
-
-private enum BackupFileReader {
-  static let maximumByteCount = BackupArchiveLimits.maximumArchiveByteCount
-  private static let chunkByteCount = 1024 * 1024
-
-  static func read(from url: URL) async throws -> Data {
-    try await Task.detached(priority: .userInitiated) {
-      let isSecurityScoped = url.startAccessingSecurityScopedResource()
-      defer {
-        if isSecurityScoped {
-          url.stopAccessingSecurityScopedResource()
-        }
-      }
-
-      let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
-      if values.isRegularFile == false {
-        throw BackupTransferViewError.fileIsNotRegular
-      }
-      if let fileSize = values.fileSize, fileSize > maximumByteCount {
-        throw BackupTransferViewError.fileTooLarge(
-          actual: fileSize,
-          maximum: maximumByteCount
-        )
-      }
-
-      let handle = try FileHandle(forReadingFrom: url)
-      defer { try? handle.close() }
-
-      var data = Data()
-      if let fileSize = values.fileSize, fileSize > 0 {
-        data.reserveCapacity(min(fileSize, maximumByteCount))
-      }
-
-      while true {
-        try Task.checkCancellation()
-        let remainingByteCount = maximumByteCount - data.count
-        let requestedByteCount = min(chunkByteCount, remainingByteCount + 1)
-        let chunk = try handle.read(upToCount: requestedByteCount) ?? Data()
-        guard !chunk.isEmpty else { break }
-
-        let (nextByteCount, overflow) = data.count.addingReportingOverflow(chunk.count)
-        guard !overflow, nextByteCount <= maximumByteCount else {
-          throw BackupTransferViewError.fileTooLarge(
-            actual: overflow ? Int.max : nextByteCount,
-            maximum: maximumByteCount
-          )
-        }
-        data.append(chunk)
-      }
-      return data
-    }.value
-  }
-}
-
 struct BackupTransferView: View {
   @Environment(\.dismiss) private var dismiss
   @EnvironmentObject private var store: LibraryStore
+  @Binding var importQueue: BackupImportQueue
 
   @State private var preparedBackup: PreparedBackup?
   @State private var pendingImport: PendingBackupImport?
@@ -173,12 +113,14 @@ struct BackupTransferView: View {
       titleVisibility: .visible
     ) {
       Button("作为副本导入") {
-        guard let pendingImport else { return }
+        guard let pendingImport, canStartOperation else { return }
+        operationMessage = "正在作为副本导入…"
         self.pendingImport = nil
         Task {
           await restoreBackup(pendingImport)
         }
       }
+      .disabled(!canStartOperation)
       Button("取消", role: .cancel) {
         pendingImport = nil
       }
@@ -194,6 +136,11 @@ struct BackupTransferView: View {
         dismissButton: .default(Text("知道了"))
       )
     }
+    .task(id: importQueue.current?.id) {
+      guard let request = importQueue.current else { return }
+      await handleQueuedImportRequest(request)
+    }
+    .interactiveDismissDisabled(isBusy)
   }
 
   private var exportSection: some View {
@@ -282,11 +229,17 @@ struct BackupTransferView: View {
   }
 
   private var isBusy: Bool {
-    operationMessage != nil || store.isBackupTransferInProgress
+    operationMessage != nil || store.isBackupTransferInProgress || pendingImport != nil
+      || isImporterPresented || isExporterPresented || !importQueue.isEmpty
   }
 
   private var canStartOperation: Bool {
-    operationMessage == nil && store.canManageBackups
+    operationMessage == nil && !isImporterPresented && !isExporterPresented
+      && store.canManageBackups
+  }
+
+  private var canInspectNewBackup: Bool {
+    canStartOperation && pendingImport == nil && notice == nil
   }
 
   private var importConfirmationIsPresented: Binding<Bool> {
@@ -337,37 +290,97 @@ struct BackupTransferView: View {
   private func handleImportSelection(_ result: Result<URL, Error>) {
     switch result {
     case .success(let url):
-      Task {
-        await inspectSelectedBackup(at: url)
+      guard let request = BackupImportRequest(url: url, source: .fileImporter) else {
+        presentError(BackupFileReaderError.unsupportedURL, action: "读取备份失败")
+        return
       }
+      importQueue.enqueue(request)
     case .failure(let error):
       presentError(error, action: "读取备份失败")
     }
   }
 
   @MainActor
-  private func inspectSelectedBackup(at url: URL) async {
-    guard canStartOperation else { return }
+  private func handleQueuedImportRequest(_ request: BackupImportRequest) async {
+    do {
+      while true {
+        while !canInspectNewBackup {
+          try Task.checkCancellation()
+          if canReportReadOnlyImportFailure {
+            let cleanupWarning = cleanupWarning(for: request.url, source: request.source)
+            let message = [
+              "应用处于只读保护状态，未读取或导入这份备份。",
+              cleanupWarning,
+            ]
+            .compactMap { $0 }
+            .joined(separator: "\n\n")
+            notice = BackupTransferNotice(
+              title: "无法校验备份",
+              message: message
+            )
+            clearQueuedImportRequest(ifMatching: request.id)
+            return
+          }
+          try await Task.sleep(for: .milliseconds(100))
+        }
+
+        try Task.checkCancellation()
+        let outcome = try await inspectSelectedBackup(at: request.url, source: request.source)
+        guard outcome == .consumed else { continue }
+        clearQueuedImportRequest(ifMatching: request.id)
+        return
+      }
+    } catch is CancellationError {
+      return
+    } catch {
+      presentError(error, action: "读取备份失败")
+      clearQueuedImportRequest(ifMatching: request.id)
+    }
+  }
+
+  private func clearQueuedImportRequest(ifMatching requestID: UUID) {
+    importQueue.removeCurrent(ifMatching: requestID)
+  }
+
+  private var canReportReadOnlyImportFailure: Bool {
+    store.isReadOnly && pendingImport == nil && operationMessage == nil && notice == nil
+      && !isImporterPresented && !isExporterPresented
+  }
+
+  @MainActor
+  private func inspectSelectedBackup(
+    at url: URL,
+    source: BackupImportSource
+  ) async throws -> BackupInspectionOutcome {
+    guard canInspectNewBackup else { return .notStarted }
     operationMessage = "正在读取并校验备份…"
     defer { operationMessage = nil }
 
     do {
-      let data = try await BackupFileReader.read(from: url)
+      let data = try await BackupFileReader().read(from: url)
       let preview = try await store.inspectBackup(data)
+      let inboxCleanupWarning = cleanupWarning(for: url, source: source)
       pendingImport = PendingBackupImport(
         data: data,
         filename: url.lastPathComponent,
-        preview: preview
+        preview: preview,
+        inboxCleanupWarning: inboxCleanupWarning
       )
+      return .consumed
+    } catch is CancellationError {
+      throw CancellationError()
     } catch {
-      presentError(error, action: "备份校验失败")
+      presentError(
+        error,
+        action: "备份校验失败",
+        additionalMessage: cleanupWarning(for: url, source: source)
+      )
+      return .consumed
     }
   }
 
   @MainActor
   private func restoreBackup(_ pendingImport: PendingBackupImport) async {
-    guard canStartOperation else { return }
-    operationMessage = "正在作为副本导入…"
     defer { operationMessage = nil }
 
     do {
@@ -380,25 +393,36 @@ struct BackupTransferView: View {
           + "\(result.importedPageCount) 页；原有笔记未被覆盖。"
         notice = BackupTransferNotice(
           title: "导入完成",
-          message: message
+          message: appendingInboxCleanupWarning(to: message, pendingImport: pendingImport)
         )
       case .alreadyImported:
         if result.repairedDrawingCount > 0 {
           notice = BackupTransferNotice(
             title: "恢复完成",
             message:
-              "这份备份此前已导入；本次补回 \(result.repairedDrawingCount) 页缺失笔迹，"
-              + "未新增笔记本或页面，也未覆盖已有笔迹。"
+              appendingInboxCleanupWarning(
+                to:
+                  "这份备份此前已导入；本次补回 \(result.repairedDrawingCount) 页缺失笔迹，"
+                  + "未新增笔记本或页面，也未覆盖已有笔迹。",
+                pendingImport: pendingImport
+              )
           )
         } else {
           notice = BackupTransferNotice(
             title: "无需重复导入",
-            message: "这份备份此前已导入，本次未新增笔记本或页面，也未覆盖已有笔迹。"
+            message: appendingInboxCleanupWarning(
+              to: "这份备份此前已导入，本次未新增笔记本或页面，也未覆盖已有笔迹。",
+              pendingImport: pendingImport
+            )
           )
         }
       }
     } catch {
-      presentError(error, action: "导入备份失败")
+      presentError(
+        error,
+        action: "导入备份失败",
+        additionalMessage: pendingImport.inboxCleanupWarning
+      )
     }
   }
 
@@ -418,6 +442,7 @@ struct BackupTransferView: View {
     return
       "“\(pendingImport.filename)”创建于 \(createdAt)，包含 \(contents)，\(source)。"
       + "导入会创建副本，不覆盖现有笔记。"
+      + (pendingImport.inboxCleanupWarning.map { "\n\n\($0)" } ?? "")
   }
 
   private func backupFilename(createdAt: Date) -> String {
@@ -428,10 +453,35 @@ struct BackupTransferView: View {
     return "笔记备份-\(formatter.string(from: createdAt)).\(BackupArchiveCodec.fileExtension)"
   }
 
-  private func presentError(_ error: Error, action: String) {
+  private func cleanupWarning(for url: URL, source: BackupImportSource) -> String? {
+    guard source == .externalOpen else { return nil }
+    do {
+      _ = try BackupInboxCopyCleaner().removeIfInboxCopy(at: url)
+      return nil
+    } catch {
+      return "系统交付的临时备份副本未能自动清理：\(error.localizedDescription)"
+    }
+  }
+
+  private func appendingInboxCleanupWarning(
+    to message: String,
+    pendingImport: PendingBackupImport
+  ) -> String {
+    guard let warning = pendingImport.inboxCleanupWarning else { return message }
+    return "\(message)\n\n\(warning)"
+  }
+
+  private func presentError(
+    _ error: Error,
+    action: String,
+    additionalMessage: String? = nil
+  ) {
+    let message = [error.localizedDescription, additionalMessage]
+      .compactMap { $0 }
+      .joined(separator: "\n\n")
     notice = BackupTransferNotice(
       title: action,
-      message: error.localizedDescription
+      message: message
     )
   }
 }

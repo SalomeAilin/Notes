@@ -2,6 +2,7 @@ import SwiftUI
 
 struct LibrarySplitView: View {
   @EnvironmentObject private var store: LibraryStore
+  @Binding var pendingBackupImports: BackupImportQueue
   @State private var columnVisibility: NavigationSplitViewVisibility = .all
   @State private var namingAction: NamingAction?
   @State private var draftTitle = ""
@@ -65,8 +66,17 @@ struct LibrarySplitView: View {
     } message: {
       Text(store.persistenceError ?? "")
     }
+    .onAppear {
+      presentPendingBackupImportIfPossible()
+    }
+    .onChange(of: pendingBackupImports.current?.id) {
+      presentPendingBackupImportIfPossible()
+    }
+    .onChange(of: canPresentQueuedBackupImport) {
+      presentPendingBackupImportIfPossible()
+    }
     .sheet(isPresented: $showingBackupTransfer) {
-      BackupTransferView()
+      BackupTransferView(importQueue: $pendingBackupImports)
         .environmentObject(store)
     }
   }
@@ -174,6 +184,16 @@ struct LibrarySplitView: View {
 
   private func selectionColor(_ isSelected: Bool) -> Color {
     isSelected ? Color.accentColor.opacity(0.14) : .clear
+  }
+
+  private func presentPendingBackupImportIfPossible() {
+    guard !pendingBackupImports.isEmpty, canPresentQueuedBackupImport else { return }
+    showingBackupTransfer = true
+  }
+
+  private var canPresentQueuedBackupImport: Bool {
+    !store.isLoading && !store.isDrawingLoading && namingAction == nil
+      && deletionTarget == nil && store.persistenceError == nil
   }
 
   private var namingAlertIsPresented: Binding<Bool> {

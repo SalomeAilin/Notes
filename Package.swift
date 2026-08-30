@@ -14,6 +14,7 @@ let package = Package(
       exclude: ["App", "Assets.xcassets", "Info.plist", "Views"],
       sources: [
         "Models/BackupArchive.swift",
+        "Models/BackupImportRequest.swift",
         "Models/BaiduNetdiskAccount.swift",
         "Models/BaiduNetdiskBackup.swift",
         "Models/LibraryDocument.swift",
@@ -22,6 +23,7 @@ let package = Package(
         "Networking/BaiduNetdiskAccountResolver.swift",
         "Networking/BaiduNetdiskBackupUploader.swift",
         "Persistence/BackupArchiveCodec.swift",
+        "Persistence/BackupFileReader.swift",
         "Persistence/BackupSnapshotRepository.swift",
         "Persistence/BaiduUploadReconciliationRepository.swift",
         "Persistence/DrawingRepository.swift",
