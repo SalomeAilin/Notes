@@ -100,7 +100,8 @@ final class ControlledBaiduURLProtocol: URLProtocol, @unchecked Sendable {
   }
 
   override class func canInit(with request: URLRequest) -> Bool {
-    request.url?.host == "baidu-transport.test"
+    guard let host = request.url?.host else { return false }
+    return host == "baidu-transport.test" || host == "d.pcs.baidu.com"
   }
 
   override class func canonicalRequest(for request: URLRequest) -> URLRequest {

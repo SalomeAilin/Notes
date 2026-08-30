@@ -47,6 +47,7 @@ struct BaiduAuthSecurityContractTests {
       "InkNotes/Networking/BaiduHTTPTransport.swift",
       "InkNotes/Networking/BaiduNetdiskAccountResolver.swift",
       "InkNotes/Networking/BaiduNetdiskBackupUploader.swift",
+      "InkNotes/Networking/BaiduRemoteBackupContentVerifier.swift",
       "InkNotes/Networking/BaiduRemoteBackupMetadataObserver.swift",
       "InkNotes/Persistence/BaiduUploadReconciliationRepository.swift",
     ])
@@ -113,14 +114,40 @@ struct BaiduAuthSecurityContractTests {
     #expect(!coordinator.contains("alreadyCompletedThisSession"))
     #expect(!coordinator.contains("contentVerified"))
 
+    let verifierPath = "InkNotes/Networking/BaiduRemoteBackupContentVerifier.swift"
     for sourceURL in try productionSwiftURLs(repositoryRoot: rootURL) {
       let path = relativePath(sourceURL, repositoryRoot: rootURL)
+      guard path != verifierPath else { continue }
       let contents = try String(contentsOf: sourceURL, encoding: .utf8).lowercased()
       for forbiddenClaim in ["verifiedremote", "contentverified"]
       where contents.contains(forbiddenClaim) {
         Issue.record("Unproven remote content claim \(forbiddenClaim) in \(path)")
       }
     }
+  }
+
+  @Test("Full-byte verification is isolated and cannot reconcile persistent records")
+  func fullByteVerificationRemainsIsolated() throws {
+    let rootURL = try repositoryRootURL()
+    let verifier = try String(
+      contentsOf: rootURL.appendingPathComponent(
+        "InkNotes/Networking/BaiduRemoteBackupContentVerifier.swift"
+      ),
+      encoding: .utf8
+    )
+
+    #expect(verifier.contains("case contentVerified"))
+    #expect(verifier.contains("streamSHA256"))
+    #expect(verifier.contains("BaiduHTTPSOnlyRedirectDelegate"))
+    #expect(verifier.contains("maximumArchiveByteCount"))
+    #expect(!verifier.contains("BaiduUploadReconciliationStoring"))
+    #expect(!verifier.contains("BaiduUploadReconciliationRepository"))
+    #expect(!verifier.contains("removeOwned"))
+    #expect(!verifier.contains("removeItem"))
+    #expect(!verifier.contains("FileManager"))
+    #expect(!verifier.contains("UserDefaults"))
+    #expect(!verifier.contains("Keychain"))
+    #expect(!verifier.contains("unlink"))
   }
 
   @Test("Account scope is broker-bound, redacted, and never derived from token or UInfo")

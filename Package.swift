@@ -24,6 +24,7 @@ let package = Package(
         "Networking/BaiduHTTPTransport.swift",
         "Networking/BaiduNetdiskAccountResolver.swift",
         "Networking/BaiduNetdiskBackupUploader.swift",
+        "Networking/BaiduRemoteBackupContentVerifier.swift",
         "Networking/BaiduRemoteBackupMetadataObserver.swift",
         "Persistence/BackupArchiveCodec.swift",
         "Persistence/BackupFileReader.swift",
