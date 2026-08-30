@@ -1,7 +1,11 @@
+import Darwin
 import Foundation
 import Testing
 
 @testable import InkNotesCore
+
+@_silgen_name("flock")
+private func reconciliationTestFlock(_ descriptor: Int32, _ operation: Int32) -> Int32
 
 @Suite("Baidu upload reconciliation repository")
 struct BaiduUploadReconciliationRepositoryTests {
@@ -30,7 +34,9 @@ struct BaiduUploadReconciliationRepositoryTests {
     let expected = record()
 
     let firstRepository = BaiduUploadReconciliationRepository(rootURL: rootURL)
-    #expect(try await firstRepository.admit(expected) == .created)
+    let firstLease = try #require(
+      (try await firstRepository.admit(expected)).createdLease
+    )
 
     let recordURL = self.recordURL(rootURL: rootURL, backupID: backupID)
     let directoryURL = recordURL.deletingLastPathComponent()
@@ -39,6 +45,7 @@ struct BaiduUploadReconciliationRepositoryTests {
     #expect(try permissions(at: recordURL, fileManager: fileManager) == 0o600)
     #expect(try permissions(at: lockURL, fileManager: fileManager) == 0o600)
     let originalBytes = try Data(contentsOf: recordURL)
+    firstLease.release()
 
     let restartedRepository = BaiduUploadReconciliationRepository(rootURL: rootURL)
     #expect(
@@ -73,19 +80,22 @@ struct BaiduUploadReconciliationRepositoryTests {
     defer { try? fileManager.removeItem(at: rootURL) }
     let repository = BaiduUploadReconciliationRepository(rootURL: rootURL)
     let original = record()
-    #expect(try await repository.admit(original) == .created)
+    let originalLease = try #require(
+      (try await repository.admit(original)).createdLease
+    )
     let url = recordURL(rootURL: rootURL, backupID: backupID)
     let originalBytes = try Data(contentsOf: url)
 
     let restartedAttempt = record(
       attemptID: UUID(uuidString: "A2000000-0000-0000-0000-000000000002")!
     )
+    originalLease.release()
     #expect(try await repository.admit(restartedAttempt) == .existing)
     #expect(try Data(contentsOf: url) == originalBytes)
     #expect(
       try await repository.load(accountScope: self.accountScope(), backupID: backupID) == original)
-    await #expect(throws: BaiduUploadReconciliationRepositoryError.identityConflict) {
-      try await repository.removeOwned(restartedAttempt)
+    await #expect(throws: BaiduUploadReconciliationRepositoryError.invalidLease) {
+      try await repository.removeOwned(.testingOnly(record: restartedAttempt))
     }
   }
 
@@ -96,7 +106,10 @@ struct BaiduUploadReconciliationRepositoryTests {
     defer { try? fileManager.removeItem(at: rootURL) }
     let repository = BaiduUploadReconciliationRepository(rootURL: rootURL)
     let original = record()
-    #expect(try await repository.admit(original) == .created)
+    let originalLease = try #require(
+      (try await repository.admit(original)).createdLease
+    )
+    defer { originalLease.release() }
     let url = recordURL(rootURL: rootURL, backupID: backupID)
     let originalBytes = try Data(contentsOf: url)
 
@@ -112,32 +125,32 @@ struct BaiduUploadReconciliationRepositoryTests {
     }
   }
 
-  @Test("Only the owning attempt and full identity can remove a record")
-  func removalRequiresExactOwnership() async throws {
+  @Test("Only the issuing repository's live lease can remove its exact record")
+  func removalRequiresIssuerBoundLiveLease() async throws {
     let fileManager = FileManager.default
     let rootURL = makeRootURL(fileManager: fileManager)
     defer { try? fileManager.removeItem(at: rootURL) }
     let repository = BaiduUploadReconciliationRepository(rootURL: rootURL)
     let owned = record()
-    #expect(try await repository.admit(owned) == .created)
+    let lease = try #require((try await repository.admit(owned)).createdLease)
 
-    let otherAttempt = record(
-      attemptID: UUID(uuidString: "A2000000-0000-0000-0000-000000000099")!
+    let foreignRootURL = makeRootURL(fileManager: fileManager)
+    defer { try? fileManager.removeItem(at: foreignRootURL) }
+    let foreignRepository = BaiduUploadReconciliationRepository(rootURL: foreignRootURL)
+    let foreignLease = try #require(
+      (try await foreignRepository.admit(owned)).createdLease
     )
-    await #expect(throws: BaiduUploadReconciliationRepositoryError.identityConflict) {
-      try await repository.removeOwned(otherAttempt)
-    }
-    await #expect(throws: BaiduUploadReconciliationRepositoryError.identityConflict) {
-      try await repository.removeOwned(
-        self.record(localMD5: String(repeating: "3", count: 32))
-      )
+    defer { foreignLease.release() }
+    await #expect(throws: BaiduUploadReconciliationRepositoryError.invalidLease) {
+      try await repository.removeOwned(foreignLease)
     }
     #expect(
       try await repository.load(accountScope: self.accountScope(), backupID: backupID) == owned)
 
-    #expect(try await repository.removeOwned(owned))
+    #expect(try await repository.removeOwned(lease))
     #expect(try await repository.load(accountScope: self.accountScope(), backupID: backupID) == nil)
-    #expect(try await repository.removeOwned(owned) == false)
+    #expect(try await repository.removeOwned(lease) == false)
+    lease.release()
   }
 
   @Test("Owned record deletion never delegates to recursive FileManager removal")
@@ -157,9 +170,10 @@ struct BaiduUploadReconciliationRepositoryTests {
       fileManager: fileManager
     )
     let owned = record()
-    #expect(try await repository.admit(owned) == .created)
+    let lease = try #require((try await repository.admit(owned)).createdLease)
 
-    #expect(try await repository.removeOwned(owned))
+    #expect(try await repository.removeOwned(lease))
+    lease.release()
     #expect(FileManager.default.fileExists(atPath: markerURL.path))
     #expect(!FileManager.default.fileExists(atPath: recordURL.path))
   }
@@ -171,7 +185,7 @@ struct BaiduUploadReconciliationRepositoryTests {
     defer { try? fileManager.removeItem(at: rootURL) }
     let repository = BaiduUploadReconciliationRepository(rootURL: rootURL)
     let owned = record()
-    #expect(try await repository.admit(owned) == .created)
+    let lease = try #require((try await repository.admit(owned)).createdLease)
 
     let directoryURL = recordURL(rootURL: rootURL, backupID: backupID)
       .deletingLastPathComponent()
@@ -181,7 +195,8 @@ struct BaiduUploadReconciliationRepositoryTests {
     let temporaryBytes = Data("pending writer".utf8)
     try writeRestricted(temporaryBytes, to: temporaryURL, fileManager: fileManager)
 
-    #expect(try await repository.removeOwned(owned))
+    #expect(try await repository.removeOwned(lease))
+    lease.release()
     #expect(try Data(contentsOf: temporaryURL) == temporaryBytes)
   }
 
@@ -217,7 +232,8 @@ struct BaiduUploadReconciliationRepositoryTests {
       fileManager: fileManager
     )
 
-    #expect(try await repository.admit(record()) == .created)
+    let lease = try #require((try await repository.admit(record())).createdLease)
+    lease.release()
     #expect(FileManager.default.fileExists(atPath: markerURL.path))
     #expect(!FileManager.default.fileExists(atPath: temporaryURL.path))
   }
@@ -236,11 +252,187 @@ struct BaiduUploadReconciliationRepositoryTests {
     async let secondAdmission = secondRepository.admit(secondRecord)
     let admissions = try await [firstAdmission, secondAdmission]
 
-    #expect(admissions.filter { $0 == .created }.count == 1)
+    #expect(admissions.filter { $0.isCreated }.count == 1)
     #expect(admissions.filter { $0 == .identityConflict }.count == 1)
     let persisted = try await firstRepository.load(
       accountScope: self.accountScope(), backupID: backupID)
     #expect(persisted == firstRecord || persisted == secondRecord)
+  }
+
+  @Test("A live record lease blocks another repository until explicit release")
+  func liveLeaseBlocksSameProcessRepositories() async throws {
+    let fileManager = FileManager.default
+    let rootURL = makeRootURL(fileManager: fileManager)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let firstRepository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    let secondRepository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    let expected = record()
+
+    let lease = try #require(
+      (try await firstRepository.admit(expected)).createdLease
+    )
+    #expect(
+      try await secondRepository.admit(expected)
+        == .inProgress(ownerAttemptID: expected.attemptID)
+    )
+    #expect(
+      try await secondRepository.admit(
+        record(archiveSHA256: String(repeating: "c", count: 64))
+      ) == .identityConflict
+    )
+
+    lease.release()
+    lease.release()
+    #expect(try await secondRepository.admit(expected) == .existing)
+  }
+
+  @Test("Lease deinitialization releases the cross-repository record lock")
+  func leaseDeinitReleasesRecordLock() async throws {
+    let fileManager = FileManager.default
+    let rootURL = makeRootURL(fileManager: fileManager)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let firstRepository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    let secondRepository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    let expected = record()
+
+    var lease: BaiduUploadReconciliationLease?
+    do {
+      let admission = try await firstRepository.admit(expected)
+      guard case .created(let createdLease) = admission else {
+        Issue.record("Expected the first repository to create a live lease")
+        return
+      }
+      lease = createdLease
+    }
+    weak let weakLease = lease
+    #expect(
+      try await secondRepository.admit(expected)
+        == .inProgress(ownerAttemptID: expected.attemptID)
+    )
+
+    lease = nil
+    #expect(weakLease == nil)
+    #expect(try await secondRepository.admit(expected) == .existing)
+  }
+
+  @Test("A released lease cannot delete its persistent record")
+  func releasedLeaseCannotDeleteRecord() async throws {
+    let fileManager = FileManager.default
+    let rootURL = makeRootURL(fileManager: fileManager)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let repository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    let expected = record()
+    let lease = try #require((try await repository.admit(expected)).createdLease)
+
+    lease.release()
+    await #expect(throws: BaiduUploadReconciliationRepositoryError.invalidLease) {
+      try await repository.removeOwned(lease)
+    }
+    #expect(
+      try await repository.load(accountScope: expected.accountScope, backupID: expected.backupID)
+        == expected
+    )
+  }
+
+  @Test("An inode replacement cannot be deleted through the original live lease")
+  func replacedRecordPathInvalidatesLiveLeaseDeletion() async throws {
+    let fileManager = FileManager.default
+    let rootURL = makeRootURL(fileManager: fileManager)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let repository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    let expected = record()
+    let lease = try #require((try await repository.admit(expected)).createdLease)
+    defer { lease.release() }
+    let url = recordURL(rootURL: rootURL, backupID: backupID)
+    let originalBytes = try Data(contentsOf: url)
+    let originalIdentity = try fileIdentity(at: url)
+    try writeRestricted(originalBytes, to: url, fileManager: fileManager)
+    let replacementIdentity = try fileIdentity(at: url)
+    #expect(originalIdentity != replacementIdentity)
+    let restartedRepository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    #expect(try await restartedRepository.admit(expected) == .existing)
+
+    await #expect(throws: BaiduUploadReconciliationRepositoryError.invalidStoreLayout) {
+      try await repository.removeOwned(lease)
+    }
+    #expect(try Data(contentsOf: url) == originalBytes)
+  }
+
+  @Test("A child process crash releases its inherited record lock but preserves the WAL")
+  func childProcessCrashReleasesRecordLock() async throws {
+    let fileManager = FileManager.default
+    let rootURL = makeRootURL(fileManager: fileManager)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let firstRepository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    let secondRepository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    let expected = record()
+    let lease = try #require(
+      (try await firstRepository.admit(expected)).createdLease
+    )
+    lease.release()
+
+    let url = recordURL(rootURL: rootURL, backupID: backupID)
+    var descriptor = url.path.withCString { path in
+      Darwin.open(path, O_RDONLY | O_NOFOLLOW)
+    }
+    #expect(descriptor >= 0)
+    guard descriptor >= 0 else { return }
+    defer {
+      if descriptor >= 0 {
+        Darwin.close(descriptor)
+      }
+    }
+    #expect(reconciliationTestFlock(descriptor, LOCK_EX | LOCK_NB) == 0)
+
+    var processID = pid_t()
+    var arguments: [UnsafeMutablePointer<CChar>?] = [
+      strdup("/bin/sleep"), strdup("30"), nil,
+    ]
+    var environment: [UnsafeMutablePointer<CChar>?] = [nil]
+    defer {
+      for argument in arguments {
+        free(argument)
+      }
+    }
+    let spawnResult = arguments.withUnsafeMutableBufferPointer { argumentBuffer in
+      environment.withUnsafeMutableBufferPointer { environmentBuffer in
+        posix_spawn(
+          &processID,
+          "/bin/sleep",
+          nil,
+          nil,
+          argumentBuffer.baseAddress,
+          environmentBuffer.baseAddress
+        )
+      }
+    }
+    #expect(spawnResult == 0)
+    guard spawnResult == 0 else { return }
+    var childWasReaped = false
+    defer {
+      if !childWasReaped {
+        _ = Darwin.kill(processID, SIGKILL)
+        var status = Int32()
+        while Darwin.waitpid(processID, &status, 0) == -1, errno == EINTR {}
+      }
+    }
+
+    Darwin.close(descriptor)
+    descriptor = -1
+    #expect(
+      try await secondRepository.admit(expected)
+        == .inProgress(ownerAttemptID: expected.attemptID)
+    )
+
+    #expect(Darwin.kill(processID, SIGKILL) == 0)
+    var status = Int32()
+    var waitResult: pid_t
+    repeat {
+      waitResult = Darwin.waitpid(processID, &status, 0)
+    } while waitResult == -1 && errno == EINTR
+    #expect(waitResult == processID)
+    childWasReaped = true
+    #expect(try await secondRepository.admit(expected) == .existing)
   }
 
   @Test("Different account scopes isolate the same backup ID")
@@ -256,8 +448,16 @@ struct BaiduUploadReconciliationRepositoryTests {
     let firstRecord = record(accountScope: firstScope)
     let secondRecord = record(accountScope: secondScope)
 
-    #expect(try await repository.admit(firstRecord) == .created)
-    #expect(try await repository.admit(secondRecord) == .created)
+    let firstLease = try #require(
+      (try await repository.admit(firstRecord)).createdLease
+    )
+    let secondLease = try #require(
+      (try await repository.admit(secondRecord)).createdLease
+    )
+    defer {
+      firstLease.release()
+      secondLease.release()
+    }
     #expect(
       recordURL(rootURL: rootURL, accountScope: firstScope, backupID: backupID)
         != recordURL(rootURL: rootURL, accountScope: secondScope, backupID: backupID)
@@ -282,11 +482,17 @@ struct BaiduUploadReconciliationRepositoryTests {
     )
     let wrongAccountRecord = record(accountScope: otherScope)
 
-    #expect(try await repository.admit(owner) == .created)
-    #expect(try await repository.removeOwned(wrongAccountRecord) == false)
+    let ownerLease = try #require((try await repository.admit(owner)).createdLease)
+    let otherLease = try #require(
+      (try await repository.admit(wrongAccountRecord)).createdLease
+    )
+    #expect(try await repository.removeOwned(otherLease))
+    otherLease.release()
     #expect(
       try await repository.load(accountScope: accountScope(), backupID: backupID) == owner
     )
+    #expect(try await repository.removeOwned(ownerLease))
+    ownerLease.release()
   }
 
   @Test("Concurrent admissions for different account scopes both succeed")
@@ -307,7 +513,7 @@ struct BaiduUploadReconciliationRepositoryTests {
     async let secondAdmission = secondRepository.admit(secondRecord)
     let admissions = try await [firstAdmission, secondAdmission]
 
-    #expect(admissions.allSatisfy { $0 == .created })
+    #expect(admissions.allSatisfy { $0.isCreated })
   }
 
   @Test("Any valid unscoped v1 record globally blocks v2 without changing bytes")
@@ -353,11 +559,6 @@ struct BaiduUploadReconciliationRepositoryTests {
         backupID: otherBackupID
       )
     }
-    await #expect(
-      throws: BaiduUploadReconciliationRepositoryError.legacyUnscopedRecordsPresent
-    ) {
-      try await repository.removeOwned(requested)
-    }
     #expect(try Data(contentsOf: legacyURL) == legacyBytes)
     #expect(
       !fileManager.fileExists(
@@ -368,6 +569,34 @@ struct BaiduUploadReconciliationRepositoryTests {
         ).path
       )
     )
+  }
+
+  @Test("A legacy record appearing during a live v2 lease blocks owned removal")
+  func legacyRecordBlocksLiveLeaseRemoval() async throws {
+    let fileManager = FileManager.default
+    let rootURL = makeRootURL(fileManager: fileManager)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let repository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    let owned = record()
+    let lease = try #require((try await repository.admit(owned)).createdLease)
+    defer { lease.release() }
+
+    let directoryURL = recordURL(rootURL: rootURL, backupID: backupID)
+      .deletingLastPathComponent()
+    let legacyBackupID = UUID(uuidString: "B2000000-0000-0000-0000-000000000099")!
+    let legacyURL = directoryURL.appendingPathComponent(
+      "\(legacyBackupID.uuidString.lowercased()).json"
+    )
+    let legacyBytes = try legacyRecordData(backupID: legacyBackupID)
+    try writeRestricted(legacyBytes, to: legacyURL, fileManager: fileManager)
+
+    await #expect(
+      throws: BaiduUploadReconciliationRepositoryError.legacyUnscopedRecordsPresent
+    ) {
+      try await repository.removeOwned(lease)
+    }
+    #expect(try Data(contentsOf: legacyURL) == legacyBytes)
+    #expect(fileManager.fileExists(atPath: recordURL(rootURL: rootURL, backupID: backupID).path))
   }
 
   @Test("Record schema and filename layout cannot be cross-labeled")
@@ -438,7 +667,7 @@ struct BaiduUploadReconciliationRepositoryTests {
     )
 
     let repository = BaiduUploadReconciliationRepository(rootURL: rootURL)
-    #expect(try await repository.admit(record()) == .created)
+    #expect((try await repository.admit(record())).isCreated)
     #expect(!fileManager.fileExists(atPath: temporaryURL.path))
     #expect(
       try await repository.load(accountScope: self.accountScope(), backupID: backupID) == record())
@@ -592,7 +821,7 @@ struct BaiduUploadReconciliationRepositoryTests {
     defer { try? fileManager.removeItem(at: rootURL) }
     let repository = BaiduUploadReconciliationRepository(rootURL: rootURL)
     let expected = record()
-    #expect(try await repository.admit(expected) == .created)
+    #expect((try await repository.admit(expected)).isCreated)
     let url = recordURL(rootURL: rootURL, backupID: backupID)
     let canonicalBytes = try Data(contentsOf: url)
 
@@ -636,7 +865,7 @@ struct BaiduUploadReconciliationRepositoryTests {
     let rootURL = makeRootURL(fileManager: fileManager)
     defer { try? fileManager.removeItem(at: rootURL) }
     let repository = BaiduUploadReconciliationRepository(rootURL: rootURL)
-    #expect(try await repository.admit(record()) == .created)
+    #expect((try await repository.admit(record())).isCreated)
     let url = recordURL(rootURL: rootURL, backupID: backupID)
     let oversizedBytes = Data(
       repeating: 0x20,
@@ -757,6 +986,14 @@ struct BaiduUploadReconciliationRepositoryTests {
       requestedPath: requestedPath
         ?? (try! canonicalPath(folderName: "测试应用", backupID: effectiveBackupID))
     )
+  }
+
+  private func fileIdentity(at url: URL) throws -> (device: dev_t, inode: ino_t) {
+    var status = stat()
+    guard url.path.withCString({ Darwin.lstat($0, &status) }) == 0 else {
+      throw CocoaError(.fileReadUnknown)
+    }
+    return (status.st_dev, status.st_ino)
   }
 
   private func accountScope(

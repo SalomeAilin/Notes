@@ -83,6 +83,133 @@ struct BaiduBackupUploadCoordinatorTests {
     #expect(await uploader.invocationCount() == 2)
   }
 
+  @Test("A live repository lease prevents another coordinator from sending the same backup")
+  func repositoryLeasePreventsCrossCoordinatorDoubleSend() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString,
+      isDirectory: true
+    )
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let backupID = UUID()
+    let archive = try makeArchive(backupID: backupID)
+    let directory = try applicationDirectory()
+    let credential = try credential()
+    let receipt = makeReceipt(archive: archive, backupID: backupID, directory: directory)
+    let remote = makeRemote(receipt: receipt)
+    let firstUploader = ScriptedCoordinatorUploader(handlers: [
+      suspendingBeforePrecreateHandler()
+    ])
+    let secondUploader = ScriptedCoordinatorUploader(handlers: [
+      verifiedHandler(remote: remote)
+    ])
+    let firstCoordinator = BaiduBackupUploadCoordinator(
+      uploader: firstUploader,
+      reconciliationStore: BaiduUploadReconciliationRepository(rootURL: rootURL)
+    )
+    let secondCoordinator = BaiduBackupUploadCoordinator(
+      uploader: secondUploader,
+      reconciliationStore: BaiduUploadReconciliationRepository(rootURL: rootURL)
+    )
+
+    let firstTask = Task {
+      await firstCoordinator.upload(
+        archive: archive,
+        credential: credential,
+        applicationDirectory: directory
+      )
+    }
+    try await waitForInvocationCount(1, uploader: firstUploader)
+    let firstOperationID = try #require(await firstCoordinator.snapshot().operationID)
+
+    #expect(
+      await secondCoordinator.upload(
+        archive: archive,
+        credential: credential,
+        applicationDirectory: directory
+      ) == .rejected(.alreadyRunning(operationID: firstOperationID))
+    )
+    #expect(await secondUploader.invocationCount() == 0)
+
+    _ = await firstCoordinator.cancelActiveUpload()
+    #expect(await firstTask.value == .cancelled(.explicit))
+    #expect(
+      await secondCoordinator.upload(
+        archive: archive,
+        credential: credential,
+        applicationDirectory: directory
+      ) == .verifiedRemote(remote)
+    )
+    #expect(await secondUploader.invocationCount() == 1)
+  }
+
+  @Test("A dispatched upload keeps its lease until terminal classification")
+  func dispatchedUploadKeepsLeaseUntilTerminal() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString,
+      isDirectory: true
+    )
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let backupID = UUID()
+    let archive = try makeArchive(backupID: backupID)
+    let changedArchive = try makeArchive(backupID: backupID, sourceBuild: "changed")
+    let directory = try applicationDirectory()
+    let credential = try credential()
+    let receipt = makeReceipt(archive: archive, backupID: backupID, directory: directory)
+    let remote = makeRemote(receipt: receipt)
+    let gate = CoordinatorTestGate()
+    let firstUploader = ScriptedCoordinatorUploader(handlers: [
+      validatedSuccessAfterGateHandler(remote: remote, gate: gate)
+    ])
+    let secondUploader = ScriptedCoordinatorUploader(handlers: [])
+    let firstCoordinator = BaiduBackupUploadCoordinator(
+      uploader: firstUploader,
+      reconciliationStore: BaiduUploadReconciliationRepository(rootURL: rootURL)
+    )
+    let secondCoordinator = BaiduBackupUploadCoordinator(
+      uploader: secondUploader,
+      reconciliationStore: BaiduUploadReconciliationRepository(rootURL: rootURL)
+    )
+
+    let firstTask = Task {
+      await firstCoordinator.upload(
+        archive: archive,
+        credential: credential,
+        applicationDirectory: directory
+      )
+    }
+    try await waitForPhase(.createDispatchPermitted, coordinator: firstCoordinator)
+    let firstOperationID = try #require(await firstCoordinator.snapshot().operationID)
+
+    #expect(
+      await secondCoordinator.upload(
+        archive: archive,
+        credential: credential,
+        applicationDirectory: directory
+      ) == .rejected(.alreadyRunning(operationID: firstOperationID))
+    )
+    #expect(
+      await secondCoordinator.upload(
+        archive: changedArchive,
+        credential: credential,
+        applicationDirectory: directory
+      ) == .rejected(.reconciliationIdentityConflict(backupID: backupID))
+    )
+    #expect(await secondUploader.invocationCount() == 0)
+
+    await gate.open()
+    #expect(await firstTask.value == .verifiedRemote(remote))
+    #expect(
+      await secondCoordinator.upload(
+        archive: archive,
+        credential: credential,
+        applicationDirectory: directory
+      ) == .rejected(.remoteVerificationRequired(backupID: backupID))
+    )
+    #expect(await secondUploader.invocationCount() == 0)
+  }
+
   @Test("The admission reservation is single-flight and cancellation removes an unsent record")
   func admissionReservationIsSingleFlightAndCancellationCleansRecord() async throws {
     let backupID = UUID()
@@ -1430,12 +1557,13 @@ private actor CoordinatorInMemoryReconciliationStore: BaiduUploadReconciliationS
     let key = CoordinatorReconciliationKey(record)
     guard let existing = records[key] else {
       records[key] = record
-      return .created
+      return .created(.testingOnly(record: record))
     }
     return hasSameUploadIdentity(existing, record) ? .existing : .identityConflict
   }
 
-  func removeOwned(_ record: BaiduUploadReconciliationRecord) throws -> Bool {
+  func removeOwned(_ lease: BaiduUploadReconciliationLease) throws -> Bool {
+    let record = lease.record
     let key = CoordinatorReconciliationKey(record)
     guard let existing = records[key] else { return false }
     guard existing == record else {
@@ -1477,12 +1605,13 @@ private actor CoordinatorGatedReconciliationStore: BaiduUploadReconciliationStor
     let key = CoordinatorReconciliationKey(record)
     guard let existing = records[key] else {
       records[key] = record
-      return .created
+      return .created(.testingOnly(record: record))
     }
     return existing == record ? .existing : .identityConflict
   }
 
-  func removeOwned(_ record: BaiduUploadReconciliationRecord) throws -> Bool {
+  func removeOwned(_ lease: BaiduUploadReconciliationLease) throws -> Bool {
+    let record = lease.record
     let key = CoordinatorReconciliationKey(record)
     guard let existing = records[key] else { return false }
     guard existing == record else {
@@ -1506,7 +1635,7 @@ private struct CoordinatorFailingReconciliationStore: BaiduUploadReconciliationS
     throw error
   }
 
-  func removeOwned(_ record: BaiduUploadReconciliationRecord) async throws -> Bool {
+  func removeOwned(_ lease: BaiduUploadReconciliationLease) async throws -> Bool {
     throw error
   }
 }
@@ -1521,7 +1650,7 @@ private actor CoordinatorCleanupFailingReconciliationStore:
   ) -> BaiduUploadReconciliationAdmission {
     guard let existing = record else {
       record = requested
-      return .created
+      return .created(.testingOnly(record: requested))
     }
     let hasSameIdentity =
       existing.accountScope == requested.accountScope
@@ -1533,7 +1662,7 @@ private actor CoordinatorCleanupFailingReconciliationStore:
     return hasSameIdentity ? .existing : .identityConflict
   }
 
-  func removeOwned(_ record: BaiduUploadReconciliationRecord) throws -> Bool {
+  func removeOwned(_ lease: BaiduUploadReconciliationLease) throws -> Bool {
     throw BaiduUploadReconciliationRepositoryError.persistenceFailure
   }
 }

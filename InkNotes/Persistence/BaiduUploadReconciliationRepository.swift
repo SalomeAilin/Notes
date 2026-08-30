@@ -1,6 +1,9 @@
 import Darwin
 import Foundation
 
+@_silgen_name("flock")
+private func inkNotesFlock(_ descriptor: Int32, _ operation: Int32) -> Int32
+
 struct BaiduUploadReconciliationRecord: Codable, Equatable, Sendable {
   static let currentSchemaVersion = 2
 
@@ -132,10 +135,97 @@ private struct BaiduUploadReconciliationLegacyRecordV1: Codable, Sendable {
   }
 }
 
+final class BaiduUploadReconciliationLease: @unchecked Sendable {
+  let record: BaiduUploadReconciliationRecord
+
+  fileprivate let issuerID: UUID
+  private let stateLock = NSLock()
+  private var descriptor: Int32?
+  private var released = false
+
+  fileprivate init(
+    record: BaiduUploadReconciliationRecord,
+    issuerID: UUID,
+    descriptor: Int32
+  ) {
+    self.record = record
+    self.issuerID = issuerID
+    self.descriptor = descriptor
+  }
+
+  #if SWIFT_PACKAGE
+    static func testingOnly(
+      record: BaiduUploadReconciliationRecord
+    ) -> BaiduUploadReconciliationLease {
+      BaiduUploadReconciliationLease(
+        record: record,
+        issuerID: UUID(),
+        descriptor: -1
+      )
+    }
+  #endif
+
+  fileprivate func withLiveDescriptor<T>(
+    _ body: (Int32) throws -> T
+  ) throws -> T {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    guard !released, let descriptor, descriptor >= 0 else {
+      throw BaiduUploadReconciliationRepositoryError.invalidLease
+    }
+    return try body(descriptor)
+  }
+
+  func release() {
+    stateLock.lock()
+    guard !released else {
+      stateLock.unlock()
+      return
+    }
+    released = true
+    let descriptor = self.descriptor
+    self.descriptor = nil
+    stateLock.unlock()
+
+    guard let descriptor, descriptor >= 0 else { return }
+    _ = inkNotesFlock(descriptor, LOCK_UN)
+    Darwin.close(descriptor)
+  }
+
+  deinit {
+    release()
+  }
+}
+
 enum BaiduUploadReconciliationAdmission: Equatable, Sendable {
-  case created
+  case created(BaiduUploadReconciliationLease)
+  case inProgress(ownerAttemptID: UUID)
   case existing
   case identityConflict
+
+  static func == (
+    lhs: BaiduUploadReconciliationAdmission,
+    rhs: BaiduUploadReconciliationAdmission
+  ) -> Bool {
+    switch (lhs, rhs) {
+    case (.created, .created), (.existing, .existing), (.identityConflict, .identityConflict):
+      true
+    case (.inProgress(let lhsOwner), .inProgress(let rhsOwner)):
+      lhsOwner == rhsOwner
+    default:
+      false
+    }
+  }
+
+  var isCreated: Bool {
+    if case .created = self { return true }
+    return false
+  }
+
+  var createdLease: BaiduUploadReconciliationLease? {
+    if case .created(let lease) = self { return lease }
+    return nil
+  }
 }
 
 protocol BaiduUploadReconciliationStoring: Sendable {
@@ -144,7 +234,7 @@ protocol BaiduUploadReconciliationStoring: Sendable {
   ) async throws -> BaiduUploadReconciliationAdmission
 
   @discardableResult
-  func removeOwned(_ record: BaiduUploadReconciliationRecord) async throws -> Bool
+  func removeOwned(_ lease: BaiduUploadReconciliationLease) async throws -> Bool
 }
 
 enum BaiduUploadReconciliationRepositoryError: LocalizedError, Equatable, Sendable {
@@ -156,6 +246,7 @@ enum BaiduUploadReconciliationRepositoryError: LocalizedError, Equatable, Sendab
   case recordTooLarge(actual: Int, maximum: Int)
   case tooManyRecords(maximum: Int)
   case identityConflict
+  case invalidLease
   case persistenceFailure
 
   var errorDescription: String? {
@@ -176,6 +267,8 @@ enum BaiduUploadReconciliationRepositoryError: LocalizedError, Equatable, Sendab
       "百度网盘上传对账记录已达到 \(maximum) 份的安全上限。"
     case .identityConflict:
       "同一备份已有不同的上传对账身份，未覆盖或删除原记录。"
+    case .invalidLease:
+      "百度网盘上传对账租约无效或已释放，未删除记录。"
     case .persistenceFailure:
       "无法安全读写百度网盘上传对账记录，已停止上传。"
     }
@@ -198,6 +291,7 @@ actor BaiduUploadReconciliationRepository {
 
   private let fileManager: FileManager
   private let rootURL: URL?
+  private let leaseIssuerID = UUID()
 
   init(rootURL: URL, fileManager: FileManager = .default) {
     self.rootURL = rootURL
@@ -284,7 +378,16 @@ actor BaiduUploadReconciliationRepository {
       else {
         throw BaiduUploadReconciliationRepositoryError.invalidRecord
       }
-      return .created
+      guard let descriptor = try acquireRecordDescriptor(for: record, at: recordURL) else {
+        return .inProgress(ownerAttemptID: record.attemptID)
+      }
+      return .created(
+        BaiduUploadReconciliationLease(
+          record: record,
+          issuerID: leaseIssuerID,
+          descriptor: descriptor
+        )
+      )
     }
   }
 
@@ -305,27 +408,38 @@ actor BaiduUploadReconciliationRepository {
   }
 
   @discardableResult
-  func removeOwned(_ record: BaiduUploadReconciliationRecord) throws -> Bool {
+  func removeOwned(_ lease: BaiduUploadReconciliationLease) throws -> Bool {
+    guard lease.issuerID == leaseIssuerID else {
+      throw BaiduUploadReconciliationRepositoryError.invalidLease
+    }
+    let record = lease.record
     try Self.validate(record)
     let recordURL = try self.recordURL(
       accountScope: record.accountScope,
       backupID: record.backupID
     )
-    guard try validateRootDirectoryIfPresent() else { return false }
-    return try withExclusiveStoreLock {
-      guard
-        try inspectExistingReconciliationDirectory(
-          removeTemporaryFiles: false
-        ) != nil
-      else {
-        return false
+    return try lease.withLiveDescriptor { recordDescriptor in
+      guard try validateRootDirectoryIfPresent() else { return false }
+      return try withExclusiveStoreLock {
+        guard
+          try inspectExistingReconciliationDirectory(
+            removeTemporaryFiles: false
+          ) != nil
+        else {
+          return false
+        }
+        return try unlinkOwnedRecord(
+          record,
+          recordDescriptor: recordDescriptor,
+          at: recordURL
+        )
       }
-      return try unlinkOwnedRecord(record, at: recordURL)
     }
   }
 
   private func unlinkOwnedRecord(
     _ record: BaiduUploadReconciliationRecord,
+    recordDescriptor: Int32,
     at recordURL: URL
   ) throws -> Bool {
     let directoryURL = recordURL.deletingLastPathComponent()
@@ -353,19 +467,6 @@ actor BaiduUploadReconciliationRepository {
     }
 
     let filename = recordURL.lastPathComponent
-    let recordDescriptor = filename.withCString { name in
-      Darwin.openat(directoryDescriptor, name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
-    }
-    guard recordDescriptor >= 0 else {
-      let openError = errno
-      if openError == ENOENT { return false }
-      if openError == ELOOP || openError == ENOTDIR {
-        throw BaiduUploadReconciliationRepositoryError.invalidStoreLayout
-      }
-      throw BaiduUploadReconciliationRepositoryError.persistenceFailure
-    }
-    defer { Darwin.close(recordDescriptor) }
-
     var descriptorStatus = stat()
     guard Darwin.fstat(recordDescriptor, &descriptorStatus) == 0 else {
       throw BaiduUploadReconciliationRepositoryError.persistenceFailure
@@ -679,7 +780,61 @@ actor BaiduUploadReconciliationRepository {
       return .identityConflict
     }
     try synchronizeExistingRecord(at: recordURL)
+    guard let descriptor = try acquireRecordDescriptor(for: existing, at: recordURL) else {
+      return .inProgress(ownerAttemptID: existing.attemptID)
+    }
+    _ = inkNotesFlock(descriptor, LOCK_UN)
+    Darwin.close(descriptor)
     return .existing
+  }
+
+  private func acquireRecordDescriptor(
+    for expected: BaiduUploadReconciliationRecord,
+    at recordURL: URL
+  ) throws -> Int32? {
+    let descriptor = recordURL.path.withCString { path in
+      Darwin.open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+    }
+    guard descriptor >= 0 else {
+      if errno == ELOOP {
+        throw BaiduUploadReconciliationRepositoryError.invalidStoreLayout
+      }
+      throw BaiduUploadReconciliationRepositoryError.persistenceFailure
+    }
+    var shouldClose = true
+    defer {
+      if shouldClose {
+        Darwin.close(descriptor)
+      }
+    }
+
+    var status = stat()
+    guard Darwin.fstat(descriptor, &status) == 0 else {
+      throw BaiduUploadReconciliationRepositoryError.persistenceFailure
+    }
+    let data = try readRecordData(from: descriptor, status: status)
+    let persisted = try decode(data)
+    try Self.validate(persisted)
+    guard persisted == expected,
+      recordURL.lastPathComponent
+        == Self.recordFilename(
+          accountScope: persisted.accountScope,
+          backupID: persisted.backupID
+        )
+    else {
+      throw BaiduUploadReconciliationRepositoryError.invalidRecord
+    }
+
+    while inkNotesFlock(descriptor, LOCK_EX | LOCK_NB) == -1 {
+      let lockError = errno
+      if lockError == EINTR { continue }
+      if lockError == EWOULDBLOCK || lockError == EAGAIN {
+        return nil
+      }
+      throw BaiduUploadReconciliationRepositoryError.persistenceFailure
+    }
+    shouldClose = false
+    return descriptor
   }
 
   private func synchronizeExistingRecord(at recordURL: URL) throws {
@@ -1029,7 +1184,12 @@ actor BaiduUploadReconciliationRepository {
       let remainingByteCount = Self.maximumRecordByteCount - data.count
       let requestedByteCount = min(4 * 1024, remainingByteCount + 1)
       let readByteCount = buffer.withUnsafeMutableBytes { rawBuffer in
-        Darwin.read(descriptor, rawBuffer.baseAddress, requestedByteCount)
+        Darwin.pread(
+          descriptor,
+          rawBuffer.baseAddress,
+          requestedByteCount,
+          off_t(data.count)
+        )
       }
       if readByteCount == -1, errno == EINTR { continue }
       guard readByteCount >= 0 else {

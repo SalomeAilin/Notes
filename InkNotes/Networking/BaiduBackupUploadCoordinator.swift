@@ -89,7 +89,7 @@ actor BaiduBackupUploadCoordinator {
     var phase: BaiduBackupUploadCoordinatorPhase
     var cancellationSource: BaiduBackupUploadCancellationSource?
     var dispatchedPartIndices: Set<Int>
-    var ownsRecord: Bool
+    var lease: BaiduUploadReconciliationLease?
     var worker: Task<WorkerResult, Never>?
   }
 
@@ -182,7 +182,7 @@ actor BaiduBackupUploadCoordinator {
       phase: .preparing,
       cancellationSource: nil,
       dispatchedPartIndices: [],
-      ownsRecord: false,
+      lease: nil,
       worker: nil
     )
     publishCurrentSnapshot()
@@ -240,9 +240,17 @@ actor BaiduBackupUploadCoordinator {
     }
 
     guard var admitted = active, admitted.operationID == operationID else {
+      if case .created(let lease) = admission {
+        lease.release()
+      }
       return .failed(.unexpected)
     }
     switch admission {
+    case .inProgress(let ownerAttemptID):
+      return finishReservation(
+        operationID: operationID,
+        terminal: .rejected(.alreadyRunning(operationID: ownerAttemptID))
+      )
     case .existing:
       backupsAwaitingRemoteVerification[admitted.key] = admitted.receipt
       return finishReservation(
@@ -258,8 +266,8 @@ actor BaiduBackupUploadCoordinator {
           .reconciliationIdentityConflict(backupID: admitted.key.backupID)
         )
       )
-    case .created:
-      admitted.ownsRecord = true
+    case .created(let lease):
+      admitted.lease = lease
       active = admitted
     }
 
@@ -267,6 +275,7 @@ actor BaiduBackupUploadCoordinator {
       _ = requestCancellation(operationID: operationID, source: .caller)
     }
     guard let ready = active, ready.operationID == operationID else {
+      admitted.lease?.release()
       return .failed(.unexpected)
     }
     if let cancellationSource = ready.cancellationSource {
@@ -300,6 +309,7 @@ actor BaiduBackupUploadCoordinator {
 
     guard var started = active, started.operationID == operationID else {
       worker.cancel()
+      ready.lease?.release()
       return .failed(.unexpected)
     }
     started.worker = worker
@@ -471,6 +481,7 @@ actor BaiduBackupUploadCoordinator {
       return .failed(.unexpected)
     }
     self.active = nil
+    active.lease?.release()
     publishCurrentSnapshot()
     return terminal
   }
@@ -482,12 +493,12 @@ actor BaiduBackupUploadCoordinator {
     guard let active, active.operationID == operationID else {
       return .failed(.unexpected)
     }
-    guard active.phase == .preparing, active.ownsRecord else {
+    guard active.phase == .preparing, let lease = active.lease else {
       return finishReservation(operationID: operationID, terminal: .failed(.unexpected))
     }
 
     do {
-      guard try await reconciliationStore.removeOwned(active.record) else {
+      guard try await reconciliationStore.removeOwned(lease) else {
         return finishReservation(
           operationID: operationID,
           terminal: .failed(.reconciliation(.persistenceFailure))
