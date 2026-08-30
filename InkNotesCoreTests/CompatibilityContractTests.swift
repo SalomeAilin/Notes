@@ -112,9 +112,10 @@ struct CompatibilityContractTests {
         as? [String: Any]
     )
     let displayName = try #require(plist["CFBundleDisplayName"] as? String)
+    let retiredDisplayNames = ["墨记", "墨記", "墨计", "墨計"]
 
     #expect(displayName == expectedInternalDisplayName)
-    #expect(displayName != "墨记")
+    #expect(!retiredDisplayNames.contains(displayName))
   }
 
   @Test("Device signing stays local and the current build number is unambiguous")
