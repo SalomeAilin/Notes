@@ -30,6 +30,7 @@
 		D40000000000000000000002 /* BaiduNetdiskAccountResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C40000000000000000000002 /* BaiduNetdiskAccountResolver.swift */; };
 		D50000000000000000000001 /* BackupImportRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = C50000000000000000000001 /* BackupImportRequest.swift */; };
 		D50000000000000000000002 /* BackupFileReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = C50000000000000000000002 /* BackupFileReader.swift */; };
+		D50000000000000000000003 /* BackupImportPresentationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = C50000000000000000000003 /* BackupImportPresentationState.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -58,6 +59,7 @@
 		C40000000000000000000002 /* BaiduNetdiskAccountResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaiduNetdiskAccountResolver.swift; sourceTree = "<group>"; };
 		C50000000000000000000001 /* BackupImportRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupImportRequest.swift; sourceTree = "<group>"; };
 		C50000000000000000000002 /* BackupFileReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupFileReader.swift; sourceTree = "<group>"; };
+		C50000000000000000000003 /* BackupImportPresentationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupImportPresentationState.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -114,6 +116,7 @@
 			isa = PBXGroup;
 			children = (
 				C0000000000000000000000C /* BackupArchive.swift */,
+				C50000000000000000000003 /* BackupImportPresentationState.swift */,
 				C50000000000000000000001 /* BackupImportRequest.swift */,
 				C40000000000000000000001 /* BaiduNetdiskAccount.swift */,
 				C10000000000000000000001 /* BaiduNetdiskBackup.swift */,
@@ -246,6 +249,7 @@
 			files = (
 				D00000000000000000000001 /* InkNotesApp.swift in Sources */,
 				D0000000000000000000000A /* BackupArchive.swift in Sources */,
+				D50000000000000000000003 /* BackupImportPresentationState.swift in Sources */,
 				D50000000000000000000001 /* BackupImportRequest.swift in Sources */,
 				D40000000000000000000001 /* BaiduNetdiskAccount.swift in Sources */,
 				D10000000000000000000001 /* BaiduNetdiskBackup.swift in Sources */,

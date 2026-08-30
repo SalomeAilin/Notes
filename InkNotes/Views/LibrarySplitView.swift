@@ -8,6 +8,8 @@ struct LibrarySplitView: View {
   @State private var draftTitle = ""
   @State private var deletionTarget: DeletionTarget?
   @State private var showingBackupTransfer = false
+  @State private var backupImportPresentationCoordinator =
+    BackupImportPresentationCoordinator()
 
   var body: some View {
     NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -67,18 +69,24 @@ struct LibrarySplitView: View {
       Text(store.persistenceError ?? "")
     }
     .onAppear {
-      presentPendingBackupImportIfPossible()
+      handleBackupImportPresentationEvent(.appeared)
     }
     .onChange(of: pendingBackupImports.current?.id) {
-      presentPendingBackupImportIfPossible()
+      handleBackupImportPresentationEvent(.queueChanged)
     }
-    .onChange(of: canPresentQueuedBackupImport) {
-      presentPendingBackupImportIfPossible()
+    .onChange(of: backupImportPresentationState) {
+      handleBackupImportPresentationEvent(.presentationStateChanged)
     }
-    .sheet(isPresented: $showingBackupTransfer) {
-      BackupTransferView(importQueue: $pendingBackupImports)
-        .environmentObject(store)
-    }
+    .sheet(
+      isPresented: $showingBackupTransfer,
+      onDismiss: {
+        handleBackupImportPresentationEvent(.transferDismissed)
+      },
+      content: {
+        BackupTransferView(importQueue: $pendingBackupImports)
+          .environmentObject(store)
+      }
+    )
   }
 
   private var notebookSidebar: some View {
@@ -186,14 +194,25 @@ struct LibrarySplitView: View {
     isSelected ? Color.accentColor.opacity(0.14) : .clear
   }
 
-  private func presentPendingBackupImportIfPossible() {
-    guard !pendingBackupImports.isEmpty, canPresentQueuedBackupImport else { return }
-    showingBackupTransfer = true
+  private func handleBackupImportPresentationEvent(_ event: BackupImportPresentationEvent) {
+    let command = backupImportPresentationCoordinator.handle(
+      event,
+      state: backupImportPresentationState
+    )
+    if command == .presentBackupTransfer {
+      showingBackupTransfer = true
+    }
   }
 
-  private var canPresentQueuedBackupImport: Bool {
-    !store.isLoading && !store.isDrawingLoading && namingAction == nil
-      && deletionTarget == nil && store.persistenceError == nil
+  private var backupImportPresentationState: BackupImportPresentationState {
+    BackupImportPresentationState(
+      hasQueuedImport: !pendingBackupImports.isEmpty,
+      isLibraryLoading: store.isLoading,
+      isDrawingLoading: store.isDrawingLoading,
+      hasNamingAlert: namingAction != nil,
+      hasDeletionDialog: deletionTarget != nil,
+      hasPersistenceAlert: store.persistenceError != nil
+    )
   }
 
   private var namingAlertIsPresented: Binding<Bool> {

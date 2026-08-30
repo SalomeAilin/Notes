@@ -14,6 +14,7 @@ let package = Package(
       exclude: ["App", "Assets.xcassets", "Info.plist", "Views"],
       sources: [
         "Models/BackupArchive.swift",
+        "Models/BackupImportPresentationState.swift",
         "Models/BackupImportRequest.swift",
         "Models/BaiduNetdiskAccount.swift",
         "Models/BaiduNetdiskBackup.swift",
