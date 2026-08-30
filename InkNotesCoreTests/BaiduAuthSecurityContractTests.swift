@@ -40,9 +40,11 @@ struct BaiduAuthSecurityContractTests {
   func uploadCoreRemainsQuarantined() throws {
     let rootURL = try repositoryRootURL()
     let allowedBaiduSwiftFiles = Set([
+      "InkNotes/Models/BaiduNetdiskAccount.swift",
       "InkNotes/Models/BaiduNetdiskBackup.swift",
       "InkNotes/Networking/BaiduBackupUploadCoordinator.swift",
       "InkNotes/Networking/BaiduHTTPTransport.swift",
+      "InkNotes/Networking/BaiduNetdiskAccountResolver.swift",
       "InkNotes/Networking/BaiduNetdiskBackupUploader.swift",
       "InkNotes/Persistence/BaiduUploadReconciliationRepository.swift",
     ])
@@ -53,6 +55,33 @@ struct BaiduAuthSecurityContractTests {
       if containsBaiduIntegrationMarker(in: contents), !allowedBaiduSwiftFiles.contains(path) {
         Issue.record("Baidu integration escaped its quarantine into \(path)")
       }
+    }
+  }
+
+  @Test("Account identity probe remains minimal, redacted, and storage-free")
+  func accountIdentityProbeRemainsIsolated() throws {
+    let rootURL = try repositoryRootURL()
+    let model = try String(
+      contentsOf: rootURL.appendingPathComponent("InkNotes/Models/BaiduNetdiskAccount.swift"),
+      encoding: .utf8
+    )
+    let resolver = try String(
+      contentsOf: rootURL.appendingPathComponent(
+        "InkNotes/Networking/BaiduNetdiskAccountResolver.swift"
+      ),
+      encoding: .utf8
+    )
+
+    #expect(!model.contains("Codable"))
+    #expect(model.contains("CustomReflectable"))
+    #expect(resolver.contains("/rest/2.0/xpan/nas"))
+    #expect(resolver.contains("URLQueryItem(name: \"method\", value: \"uinfo\")"))
+    #expect(resolver.contains("URLQueryItem(name: \"vip_version\", value: \"v2\")"))
+    for forbidden in [
+      "baidu_name", "netdisk_name", "avatar_url", "UserDefaults", "Keychain", "FileManager",
+    ] {
+      #expect(!model.contains(forbidden))
+      #expect(!resolver.contains(forbidden))
     }
   }
 
