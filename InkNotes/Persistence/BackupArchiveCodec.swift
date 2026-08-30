@@ -234,10 +234,20 @@ enum BackupArchiveCodec {
     guard library.schemaVersion == LibraryDocument.currentSchemaVersion else {
       throw BackupArchiveError.unsupportedLibrarySchema(found: library.schemaVersion)
     }
-    guard !library.notebooks.isEmpty,
-      library.notebooks.allSatisfy({ !$0.pages.isEmpty })
-    else {
-      throw BackupArchiveError.invalidLibraryStructure
+    let pageIDs: Set<UUID>
+    do {
+      pageIDs = try library.validatedPageIDs()
+    } catch let error as LibraryDocumentStructureError {
+      switch error {
+      case .invalidStructure:
+        throw BackupArchiveError.invalidLibraryStructure
+      case .duplicateNotebookID(let id):
+        throw BackupArchiveError.duplicateNotebookID(id)
+      case .duplicatePageID(let id):
+        throw BackupArchiveError.duplicatePageID(id)
+      case .invalidDate:
+        throw BackupArchiveError.invalidManifest
+      }
     }
     guard library.notebooks.count <= BackupArchiveLimits.maximumNotebookCount else {
       throw BackupArchiveError.tooManyNotebooks(
@@ -246,16 +256,9 @@ enum BackupArchiveCodec {
       )
     }
 
-    var notebookIDs = Set<UUID>()
-    var pageIDs = Set<UUID>()
     var pageCount = 0
     for notebook in library.notebooks {
-      guard notebookIDs.insert(notebook.id).inserted else {
-        throw BackupArchiveError.duplicateNotebookID(notebook.id)
-      }
       try validateTitle(notebook.title)
-      try validateDate(notebook.createdAt)
-      try validateDate(notebook.updatedAt)
 
       let (nextPageCount, overflow) = pageCount.addingReportingOverflow(notebook.pages.count)
       guard !overflow, nextPageCount <= BackupArchiveLimits.maximumPageCount else {
@@ -267,12 +270,7 @@ enum BackupArchiveCodec {
       pageCount = nextPageCount
 
       for page in notebook.pages {
-        guard pageIDs.insert(page.id).inserted else {
-          throw BackupArchiveError.duplicatePageID(page.id)
-        }
         try validateTitle(page.title)
-        try validateDate(page.createdAt)
-        try validateDate(page.updatedAt)
       }
     }
     return pageIDs

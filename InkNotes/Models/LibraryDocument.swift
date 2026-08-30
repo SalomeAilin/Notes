@@ -88,3 +88,57 @@ struct LibraryDocument: Codable, Equatable, Sendable {
     return LibraryDocument(notebooks: [notebook])
   }
 }
+
+enum LibraryDocumentStructureError: LocalizedError, Equatable, Sendable {
+  case invalidStructure
+  case duplicateNotebookID(UUID)
+  case duplicatePageID(UUID)
+  case invalidDate
+
+  var errorDescription: String? {
+    switch self {
+    case .invalidStructure:
+      "笔记目录缺少笔记本或页面，原文件未被改写。"
+    case .duplicateNotebookID:
+      "笔记目录包含重复的笔记本标识，原文件未被改写。"
+    case .duplicatePageID:
+      "笔记目录包含重复的页面标识，原文件未被改写。"
+    case .invalidDate:
+      "笔记目录包含无效时间，原文件未被改写。"
+    }
+  }
+}
+
+extension LibraryDocument {
+  @discardableResult
+  func validatedPageIDs() throws -> Set<UUID> {
+    guard !notebooks.isEmpty, notebooks.allSatisfy({ !$0.pages.isEmpty }) else {
+      throw LibraryDocumentStructureError.invalidStructure
+    }
+
+    var notebookIDs = Set<UUID>()
+    var pageIDs = Set<UUID>()
+    for notebook in notebooks {
+      guard notebookIDs.insert(notebook.id).inserted else {
+        throw LibraryDocumentStructureError.duplicateNotebookID(notebook.id)
+      }
+      try Self.validatePersistedDate(notebook.createdAt)
+      try Self.validatePersistedDate(notebook.updatedAt)
+
+      for page in notebook.pages {
+        guard pageIDs.insert(page.id).inserted else {
+          throw LibraryDocumentStructureError.duplicatePageID(page.id)
+        }
+        try Self.validatePersistedDate(page.createdAt)
+        try Self.validatePersistedDate(page.updatedAt)
+      }
+    }
+    return pageIDs
+  }
+
+  private static func validatePersistedDate(_ date: Date) throws {
+    guard date.timeIntervalSince1970.isFinite else {
+      throw LibraryDocumentStructureError.invalidDate
+    }
+  }
+}

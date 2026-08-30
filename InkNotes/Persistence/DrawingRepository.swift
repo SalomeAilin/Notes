@@ -88,11 +88,16 @@ actor DrawingRepository {
     guard document.schemaVersion == LibraryDocument.currentSchemaVersion else {
       throw DrawingRepositoryError.unsupportedSchema(found: document.schemaVersion)
     }
+    try document.validatedPageIDs()
     return document
   }
 
   func saveLibrary(_ document: LibraryDocument) throws {
     try Task.checkCancellation()
+    guard document.schemaVersion == LibraryDocument.currentSchemaVersion else {
+      throw DrawingRepositoryError.unsupportedSchema(found: document.schemaVersion)
+    }
+    try document.validatedPageIDs()
     try prepareDirectories()
     let data = try Self.makeEncoder().encode(document)
     try durableFileWriter.write(data, to: libraryURL(), mode: .replace)

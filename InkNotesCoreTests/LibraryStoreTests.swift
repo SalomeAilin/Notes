@@ -53,6 +53,45 @@ struct LibraryStoreTests {
     #expect(try await repository.loadDrawing(pageID: pageID) == invalidDrawing)
   }
 
+  @Test("A decodable duplicate page identifier enters read-only mode without rewriting bytes")
+  @MainActor
+  func duplicatePageIDIsProtected() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let duplicatePageID = UUID()
+    let library = LibraryDocument(notebooks: [
+      Notebook(
+        title: "重复页面目录",
+        pages: [
+          NotePage(id: duplicatePageID, title: "第一页"),
+          NotePage(id: duplicatePageID, title: "第二页"),
+        ]
+      )
+    ])
+    let drawing = try serializedStrokeDrawing()
+    let repository = DrawingRepository(rootURL: rootURL)
+    try await repository.saveDrawing(drawing, pageID: duplicatePageID)
+    let persistedLibrary = try writePersistedLibrary(library, rootURL: rootURL)
+    let drawingURL =
+      rootURL
+      .appendingPathComponent(DrawingRepository.drawingsDirectoryName, isDirectory: true)
+      .appendingPathComponent(
+        "\(duplicatePageID.uuidString).\(DrawingRepository.drawingFileExtension)"
+      )
+    let persistedDrawing = try Data(contentsOf: drawingURL)
+
+    let store = LibraryStore(repository: repository)
+    try await waitUntil { !store.isLoading }
+    await store.flush()
+
+    #expect(store.isReadOnly)
+    #expect(store.persistenceError?.contains("重复的页面标识") == true)
+    #expect(try Data(contentsOf: persistedLibrary.url) == persistedLibrary.data)
+    #expect(try Data(contentsOf: drawingURL) == persistedDrawing)
+  }
+
   @Test("An immediate backup contains the latest unsaved canvas state")
   @MainActor
   func immediateBackupContainsLatestDrawing() async throws {
@@ -241,6 +280,20 @@ struct LibraryStoreTests {
       )
     )
     return try Data(contentsOf: url)
+  }
+
+  private func writePersistedLibrary(
+    _ library: LibraryDocument,
+    rootURL: URL
+  ) throws -> (url: URL, data: Data) {
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .secondsSince1970
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    let data = try encoder.encode(library)
+    try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+    let url = rootURL.appendingPathComponent(DrawingRepository.libraryFilename)
+    try data.write(to: url)
+    return (url, data)
   }
 }
 

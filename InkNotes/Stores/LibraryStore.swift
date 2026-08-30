@@ -3,13 +3,10 @@ import Foundation
 import PencilKit
 
 private enum LibraryStoreError: LocalizedError {
-  case invalidStructure
   case backupUnavailable
 
   var errorDescription: String? {
     switch self {
-    case .invalidStructure:
-      "笔记目录缺少笔记本或页面，原文件未被改写。"
     case .backupUnavailable:
       "当前正在读取、保存或保护笔记，请稍后再试。"
     }
@@ -356,11 +353,6 @@ final class LibraryStore: ObservableObject {
     isLoading = true
     do {
       if let existing = try await repository.loadLibrary() {
-        guard !existing.notebooks.isEmpty,
-          existing.notebooks.allSatisfy({ !$0.pages.isEmpty })
-        else {
-          throw LibraryStoreError.invalidStructure
-        }
         library = existing
       } else {
         library = .starter()

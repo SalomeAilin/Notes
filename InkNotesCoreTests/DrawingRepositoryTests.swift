@@ -106,6 +106,105 @@ struct DrawingRepositoryTests {
     #expect(try await repository.loadDrawing(pageID: pageID) == drawing)
   }
 
+  @Test("Duplicate notebook identifiers are rejected without rewriting the library")
+  func duplicateNotebookIDsAreRejected() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let duplicateNotebookID = UUID()
+    let library = LibraryDocument(notebooks: [
+      Notebook(
+        id: duplicateNotebookID,
+        title: "第一本",
+        pages: [NotePage(title: "第一页")]
+      ),
+      Notebook(
+        id: duplicateNotebookID,
+        title: "第二本",
+        pages: [NotePage(title: "第二页")]
+      ),
+    ])
+    let persisted = try writePersistedLibrary(library, rootURL: rootURL)
+    let repository = DrawingRepository(rootURL: rootURL)
+
+    await #expect(
+      throws: LibraryDocumentStructureError.duplicateNotebookID(duplicateNotebookID)
+    ) {
+      _ = try await repository.loadLibrary()
+    }
+    #expect(try Data(contentsOf: persisted.url) == persisted.data)
+  }
+
+  @Test("Duplicate page identifiers are rejected without rewriting the library")
+  func duplicatePageIDsAreRejected() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let duplicatePageID = UUID()
+    let library = LibraryDocument(notebooks: [
+      Notebook(
+        title: "重复页面目录",
+        pages: [
+          NotePage(id: duplicatePageID, title: "第一页"),
+          NotePage(id: duplicatePageID, title: "第二页"),
+        ]
+      )
+    ])
+    let persisted = try writePersistedLibrary(library, rootURL: rootURL)
+    let repository = DrawingRepository(rootURL: rootURL)
+
+    await #expect(throws: LibraryDocumentStructureError.duplicatePageID(duplicatePageID)) {
+      _ = try await repository.loadLibrary()
+    }
+    #expect(try Data(contentsOf: persisted.url) == persisted.data)
+  }
+
+  @Test("An invalid library save cannot replace valid persisted bytes")
+  func invalidSaveDoesNotReplaceValidLibrary() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let repository = DrawingRepository(rootURL: rootURL)
+    let validLibrary = LibraryDocument.starter()
+    try await repository.saveLibrary(validLibrary)
+    let libraryURL = rootURL.appendingPathComponent(DrawingRepository.libraryFilename)
+    let persistedBytes = try Data(contentsOf: libraryURL)
+    let persistedLibrary = try #require(try await repository.loadLibrary())
+
+    let duplicatePageID = UUID()
+    let invalidLibrary = LibraryDocument(notebooks: [
+      Notebook(
+        title: "第一本",
+        pages: [NotePage(id: duplicatePageID, title: "第一页")]
+      ),
+      Notebook(
+        title: "第二本",
+        pages: [NotePage(id: duplicatePageID, title: "第二页")]
+      ),
+    ])
+
+    await #expect(throws: LibraryDocumentStructureError.duplicatePageID(duplicatePageID)) {
+      try await repository.saveLibrary(invalidLibrary)
+    }
+    #expect(try Data(contentsOf: libraryURL) == persistedBytes)
+    #expect(try await repository.loadLibrary() == persistedLibrary)
+
+    let unsupportedLibrary = LibraryDocument(
+      schemaVersion: LibraryDocument.currentSchemaVersion + 1,
+      notebooks: validLibrary.notebooks
+    )
+    await #expect(
+      throws: DrawingRepositoryError.unsupportedSchema(found: unsupportedLibrary.schemaVersion)
+    ) {
+      try await repository.saveLibrary(unsupportedLibrary)
+    }
+    #expect(try Data(contentsOf: libraryURL) == persistedBytes)
+    #expect(try await repository.loadLibrary() == persistedLibrary)
+  }
+
   @Test("Restore transactions are immutable sidecars and corrupt data fails closed")
   func restoreTransactionRoundTrip() async throws {
     let rootURL = FileManager.default.temporaryDirectory
@@ -209,6 +308,20 @@ struct DrawingRepositoryTests {
     } catch {
       #expect(try Data(contentsOf: libraryURL) == original)
     }
+  }
+
+  private func writePersistedLibrary(
+    _ library: LibraryDocument,
+    rootURL: URL
+  ) throws -> (url: URL, data: Data) {
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .secondsSince1970
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    let data = try encoder.encode(library)
+    try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+    let url = rootURL.appendingPathComponent(DrawingRepository.libraryFilename)
+    try data.write(to: url)
+    return (url, data)
   }
 }
 

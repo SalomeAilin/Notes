@@ -162,6 +162,45 @@ struct BackupArchiveCodecTests {
       )
     }
 
+    let duplicatePageID = original.pages[0].id
+    let duplicatePageLibrary = LibraryDocument(notebooks: [
+      original,
+      Notebook(
+        title: "另一笔记本",
+        pages: [NotePage(id: duplicatePageID, title: "重复页面标识")]
+      ),
+    ])
+    #expect(throws: BackupArchiveError.duplicatePageID(duplicatePageID)) {
+      try BackupArchiveCodec.encode(
+        library: duplicatePageLibrary,
+        drawings: [duplicatePageID: Data()],
+        createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+      )
+    }
+
+    #expect(throws: BackupArchiveError.invalidLibraryStructure) {
+      try BackupArchiveCodec.encode(
+        library: LibraryDocument(notebooks: []),
+        drawings: [:],
+        createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+      )
+    }
+
+    let invalidDateLibrary = LibraryDocument(notebooks: [
+      Notebook(
+        title: "无效时间",
+        pages: [NotePage(title: "页面")],
+        createdAt: Date(timeIntervalSince1970: .infinity)
+      )
+    ])
+    #expect(throws: BackupArchiveError.invalidManifest) {
+      try BackupArchiveCodec.encode(
+        library: invalidDateLibrary,
+        drawings: [:],
+        createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+      )
+    }
+
     let oversizedPage = NotePage(
       id: fixture.firstPageID,
       title: String(repeating: "a", count: BackupArchiveLimits.maximumTitleUTF8ByteCount + 1)
