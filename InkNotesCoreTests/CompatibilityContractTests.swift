@@ -175,6 +175,21 @@ struct CompatibilityContractTests {
     #expect(transferSource.contains(".task(id: importQueue.current?.id)"))
     #expect(transferSource.contains("await handleQueuedImportRequest(request)"))
     #expect(transferSource.contains("BackupImportRequest(url: url, source: .fileImporter)"))
+    #expect(
+      transferSource.contains(
+        "presentFilePickerFailure(error, action: \"导出备份失败\")"
+      )
+    )
+    #expect(
+      transferSource.contains(
+        "presentFilePickerFailure(error, action: \"读取备份失败\")"
+      )
+    )
+    #expect(
+      transferSource.contains(
+        "BackupFilePickerFailurePolicy.disposition(for: error) == .report"
+      )
+    )
     #expect(transferSource.contains("while !canInspectNewBackup"))
     #expect(transferSource.contains("canStartOperation && pendingImport == nil && notice == nil"))
     #expect(transferSource.contains("guard outcome == .consumed else { continue }"))

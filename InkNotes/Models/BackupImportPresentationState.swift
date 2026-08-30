@@ -1,3 +1,27 @@
+import Foundation
+
+enum BackupFilePickerFailureDisposition: Equatable, Sendable {
+  case cancelled
+  case report
+}
+
+enum BackupFilePickerFailurePolicy {
+  static func disposition(for error: Error) -> BackupFilePickerFailureDisposition {
+    if error is CancellationError {
+      return .cancelled
+    }
+
+    let cocoaError = error as NSError
+    guard
+      cocoaError.domain == NSCocoaErrorDomain,
+      cocoaError.code == NSUserCancelledError
+    else {
+      return .report
+    }
+    return .cancelled
+  }
+}
+
 struct BackupImportPresentationState: Equatable, Sendable {
   var hasQueuedImport = false
   var isLibraryLoading = false

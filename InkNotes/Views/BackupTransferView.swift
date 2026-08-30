@@ -283,7 +283,7 @@ struct BackupTransferView: View {
         message: "未加密备份已保存到你选择的位置；该位置或第三方服务现在可以访问文件内容。"
       )
     case .failure(let error):
-      presentError(error, action: "导出备份失败")
+      presentFilePickerFailure(error, action: "导出备份失败")
     }
   }
 
@@ -296,7 +296,7 @@ struct BackupTransferView: View {
       }
       importQueue.enqueue(request)
     case .failure(let error):
-      presentError(error, action: "读取备份失败")
+      presentFilePickerFailure(error, action: "读取备份失败")
     }
   }
 
@@ -469,6 +469,11 @@ struct BackupTransferView: View {
   ) -> String {
     guard let warning = pendingImport.inboxCleanupWarning else { return message }
     return "\(message)\n\n\(warning)"
+  }
+
+  private func presentFilePickerFailure(_ error: Error, action: String) {
+    guard BackupFilePickerFailurePolicy.disposition(for: error) == .report else { return }
+    presentError(error, action: action)
   }
 
   private func presentError(

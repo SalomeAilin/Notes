@@ -5,6 +5,30 @@ import Testing
 
 @Suite("Backup import presentation state")
 struct BackupImportPresentationStateTests {
+  @Test("File picker cancellation errors stay quiet without hiding other failures")
+  func filePickerCancellationPolicyIsExact() {
+    #expect(
+      BackupFilePickerFailurePolicy.disposition(for: CancellationError()) == .cancelled
+    )
+    #expect(
+      BackupFilePickerFailurePolicy.disposition(for: CocoaError(.userCancelled)) == .cancelled
+    )
+    #expect(
+      BackupFilePickerFailurePolicy.disposition(
+        for: NSError(domain: NSCocoaErrorDomain, code: NSUserCancelledError)
+      ) == .cancelled
+    )
+    #expect(
+      BackupFilePickerFailurePolicy.disposition(for: CocoaError(.fileReadUnknown)) == .report
+    )
+    #expect(
+      BackupFilePickerFailurePolicy.disposition(
+        for: NSError(domain: NSURLErrorDomain, code: NSUserCancelledError)
+      ) == .report
+    )
+    #expect(BackupFilePickerFailurePolicy.disposition(for: URLError(.cancelled)) == .report)
+  }
+
   @Test("A queued import is required before the transfer sheet can be presented")
   func queuedImportIsRequired() {
     var state = BackupImportPresentationState()
