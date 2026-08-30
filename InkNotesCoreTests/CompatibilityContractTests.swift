@@ -117,6 +117,41 @@ struct CompatibilityContractTests {
     #expect(displayName != "墨记")
   }
 
+  @Test("Device signing stays local and the current build number is unambiguous")
+  func deviceSigningConfigurationRemainsLocal() throws {
+    let repositoryRoot = repositoryRootURL()
+    let projectURL = repositoryRoot.appendingPathComponent("InkNotes.xcodeproj/project.pbxproj")
+    let projectData = try Data(contentsOf: projectURL)
+    let project = try #require(
+      try PropertyListSerialization.propertyList(from: projectData, options: [], format: nil)
+        as? [String: Any]
+    )
+    let configurations = try validateMainAppBundleIdentifiers(in: project)
+
+    #expect(configurations.map(\.name) == ["Debug", "Release"])
+    #expect(configurations.allSatisfy { $0.currentProjectVersion == "3" })
+    #expect(configurations.allSatisfy { $0.marketingVersion == "0.2.0" })
+    #expect(configurations.allSatisfy { $0.developmentTeam == "" })
+    #expect(configurations.allSatisfy { $0.codeSignStyle == "Automatic" })
+
+    let buildScript = try String(
+      contentsOf: repositoryRoot.appendingPathComponent("scripts/build-signed-ipad-app.sh"),
+      encoding: .utf8
+    )
+    let readinessScript = try String(
+      contentsOf: repositoryRoot.appendingPathComponent("scripts/verify-ipad-readiness.sh"),
+      encoding: .utf8
+    )
+    for script in [buildScript, readinessScript] {
+      #expect(!script.contains("-allowProvisioningUpdates"))
+      #expect(!script.contains("-allowProvisioningDeviceRegistration"))
+    }
+    #expect(buildScript.contains("TeamIdentifier.0"))
+    #expect(buildScript.contains("git status --porcelain=v1"))
+    #expect(readinessScript.contains("codesign --verify --deep --strict"))
+    #expect(readinessScript.contains("ProvisionedDevices"))
+  }
+
   @Test("An orphan app target cannot hide a mounted main-app identifier drift")
   func orphanAppTargetCannotMaskMountedAppDrift() {
     let project = makeSyntheticProject(
@@ -325,6 +360,10 @@ struct CompatibilityContractTests {
   private struct AppBuildConfiguration: Equatable {
     let name: String
     let bundleIdentifier: String?
+    let currentProjectVersion: String?
+    let marketingVersion: String?
+    let developmentTeam: String?
+    let codeSignStyle: String?
   }
 
   private enum PBXProjectContractError: Error, Equatable {
@@ -387,7 +426,11 @@ struct CompatibilityContractTests {
       configurations.append(
         AppBuildConfiguration(
           name: name,
-          bundleIdentifier: buildSettings["PRODUCT_BUNDLE_IDENTIFIER"] as? String
+          bundleIdentifier: buildSettings["PRODUCT_BUNDLE_IDENTIFIER"] as? String,
+          currentProjectVersion: scalarString(buildSettings["CURRENT_PROJECT_VERSION"]),
+          marketingVersion: scalarString(buildSettings["MARKETING_VERSION"]),
+          developmentTeam: buildSettings["DEVELOPMENT_TEAM"] as? String,
+          codeSignStyle: buildSettings["CODE_SIGN_STYLE"] as? String
         )
       )
     }
@@ -403,6 +446,12 @@ struct CompatibilityContractTests {
       )
     }
     return configurations
+  }
+
+  private func scalarString(_ value: Any?) -> String? {
+    if let value = value as? String { return value }
+    if let value = value as? NSNumber { return value.stringValue }
+    return nil
   }
 
   private func makeSyntheticProject(

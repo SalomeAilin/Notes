@@ -156,6 +156,10 @@ assert_oauth_release_marker_scanner_detects_chinese_encodings() {
 
 print "[1/5] Checking Swift format"
 xcrun swift-format lint --strict --recursive InkNotes InkNotesCoreTests Package.swift
+zsh -n scripts/build-signed-ipad-app.sh
+zsh -n scripts/verify-ipad-readiness.sh
+scripts/build-signed-ipad-app.sh --help >/dev/null
+scripts/verify-ipad-readiness.sh --help >/dev/null
 
 print "[2/5] Running Swift compatibility tests"
 xcrun swift test
