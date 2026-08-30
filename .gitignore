@@ -3,6 +3,10 @@
 # Xcode local state and build products
 DerivedData/
 build/
+*.app/
+*.ipa
+*.xcarchive/
+*.xcresult/
 *.xcuserstate
 xcuserdata/
 *.xccheckout
