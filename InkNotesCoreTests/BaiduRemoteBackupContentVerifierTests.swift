@@ -355,6 +355,35 @@ struct BaiduRemoteBackupContentVerifierTests {
     }
   }
 
+  @Test("Cancelling production byte streaming stops URLSession work")
+  func productionStreamerCancellationStopsURLSessionWork() async throws {
+    let path = "/proof-hanging-\(UUID().uuidString)"
+    ControlledBaiduURLProtocol.register(.hanging(statusCode: 200), path: path)
+    let streamer = productionStreamer()
+    let request = try downloadRequest(path: path)
+    let task = Task {
+      try await streamer.streamSHA256(request, maximumByteCount: 128)
+    }
+
+    for _ in 0..<100 where ControlledBaiduURLProtocol.requestCount(path: path) == 0 {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(ControlledBaiduURLProtocol.requestCount(path: path) == 1)
+    task.cancel()
+
+    do {
+      _ = try await task.value
+      Issue.record("Expected CancellationError")
+    } catch is CancellationError {
+      // Expected: URLSession cancellation remains task cancellation.
+    }
+
+    for _ in 0..<100 where ControlledBaiduURLProtocol.stopCount(path: path) == 0 {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(ControlledBaiduURLProtocol.stopCount(path: path) > 0)
+  }
+
   @Test("Production byte streaming rejects encoded or partial response bodies")
   func productionStreamerRejectsTransformedOrPartialBodies() async throws {
     let encodedPath = "/proof-encoded-\(UUID().uuidString)"
