@@ -25,6 +25,7 @@
 		D10000000000000000000003 /* BaiduNetdiskBackupUploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10000000000000000000003 /* BaiduNetdiskBackupUploader.swift */; };
 		D10000000000000000000004 /* BaiduBackupUploadCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10000000000000000000004 /* BaiduBackupUploadCoordinator.swift */; };
 		D20000000000000000000001 /* BaiduUploadReconciliationRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000001 /* BaiduUploadReconciliationRepository.swift */; };
+		D30000000000000000000001 /* DurableFileWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C30000000000000000000001 /* DurableFileWriter.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -48,6 +49,7 @@
 		C10000000000000000000003 /* BaiduNetdiskBackupUploader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaiduNetdiskBackupUploader.swift; sourceTree = "<group>"; };
 		C10000000000000000000004 /* BaiduBackupUploadCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaiduBackupUploadCoordinator.swift; sourceTree = "<group>"; };
 		C20000000000000000000001 /* BaiduUploadReconciliationRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaiduUploadReconciliationRepository.swift; sourceTree = "<group>"; };
+		C30000000000000000000001 /* DurableFileWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DurableFileWriter.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -117,6 +119,7 @@
 				C0000000000000000000000E /* BackupSnapshotRepository.swift */,
 				C20000000000000000000001 /* BaiduUploadReconciliationRepository.swift */,
 				C00000000000000000000003 /* DrawingRepository.swift */,
+				C30000000000000000000001 /* DurableFileWriter.swift */,
 			);
 			path = Persistence;
 			sourceTree = "<group>";
@@ -240,6 +243,7 @@
 				D0000000000000000000000C /* BackupSnapshotRepository.swift in Sources */,
 				D20000000000000000000001 /* BaiduUploadReconciliationRepository.swift in Sources */,
 				D00000000000000000000003 /* DrawingRepository.swift in Sources */,
+				D30000000000000000000001 /* DurableFileWriter.swift in Sources */,
 				D00000000000000000000004 /* LibraryStore.swift in Sources */,
 				D0000000000000000000000D /* BackupTransferView.swift in Sources */,
 				D00000000000000000000005 /* LibrarySplitView.swift in Sources */,

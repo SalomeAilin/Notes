@@ -23,6 +23,7 @@ let package = Package(
         "Persistence/BackupSnapshotRepository.swift",
         "Persistence/BaiduUploadReconciliationRepository.swift",
         "Persistence/DrawingRepository.swift",
+        "Persistence/DurableFileWriter.swift",
         "Stores/LibraryStore.swift",
       ]
     ),

@@ -177,6 +177,7 @@ extension DrawingRepository {
         guard existingDrawing == expectedDrawing else {
           throw BackupSnapshotError.orphanDrawingConflict
         }
+        try synchronizeDrawingPersistence(pageID: copiedPageID)
       } else {
         drawingsToWrite.append((copiedPageID, expectedDrawing))
       }
@@ -196,6 +197,7 @@ extension DrawingRepository {
       if let persistedLibrary = try? loadLibrary(),
         restorePresence(transaction, in: persistedLibrary) == .all
       {
+        try synchronizeLibraryPersistence()
         return try makeRestoreResult(
           library: persistedLibrary,
           transaction: transaction,
@@ -382,6 +384,8 @@ extension DrawingRepository {
       }
       if try !drawingExists(pageID: pageID) {
         missingDrawings.append((pageID, expectedDrawing))
+      } else {
+        try synchronizeDrawingPersistence(pageID: pageID)
       }
     }
 

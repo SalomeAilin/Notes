@@ -40,32 +40,43 @@ actor DrawingRepository {
   static let maximumRestoreTransactionCount = 1_000
 
   private let fileManager: FileManager
+  private let applicationSupportURL: URL?
   private let rootURL: URL?
+  private let durableFileWriter: any DurableFileWriting
+  private var preparedDirectoryURLs: Set<URL> = []
 
   init(
     rootURL: URL,
-    fileManager: FileManager = .default
+    fileManager: FileManager = .default,
+    durableFileWriter: any DurableFileWriting = POSIXDurableFileWriter()
   ) {
+    self.applicationSupportURL = nil
     self.rootURL = rootURL
     self.fileManager = fileManager
+    self.durableFileWriter = durableFileWriter
   }
 
-  init(fileManager: FileManager = .default) {
-    self.rootURL = DrawingRepository.defaultRootURL(fileManager: fileManager)
+  init(
+    fileManager: FileManager = .default,
+    durableFileWriter: any DurableFileWriting = POSIXDurableFileWriter()
+  ) {
+    let applicationSupportURL = DrawingRepository.defaultApplicationSupportURL(
+      fileManager: fileManager
+    )
+    self.applicationSupportURL = applicationSupportURL
+    self.rootURL = applicationSupportURL?.appendingPathComponent(
+      DrawingRepository.persistedDirectoryName,
+      isDirectory: true
+    )
     self.fileManager = fileManager
+    self.durableFileWriter = durableFileWriter
   }
 
   static func defaultRootURL(fileManager: FileManager = .default) -> URL? {
-    guard
-      let applicationSupport = fileManager.urls(
-        for: .applicationSupportDirectory,
-        in: .userDomainMask
-      ).first
-    else {
-      return nil
-    }
-
-    return applicationSupport.appendingPathComponent(persistedDirectoryName, isDirectory: true)
+    defaultApplicationSupportURL(fileManager: fileManager)?.appendingPathComponent(
+      persistedDirectoryName,
+      isDirectory: true
+    )
   }
 
   func loadLibrary() throws -> LibraryDocument? {
@@ -81,9 +92,10 @@ actor DrawingRepository {
   }
 
   func saveLibrary(_ document: LibraryDocument) throws {
+    try Task.checkCancellation()
     try prepareDirectories()
     let data = try Self.makeEncoder().encode(document)
-    try data.write(to: libraryURL(), options: .atomic)
+    try durableFileWriter.write(data, to: libraryURL(), mode: .replace)
   }
 
   func loadDrawing(pageID: UUID) throws -> Data? {
@@ -132,8 +144,9 @@ actor DrawingRepository {
   }
 
   func saveDrawing(_ data: Data, pageID: UUID) throws {
+    try Task.checkCancellation()
     try prepareDirectories()
-    try data.write(to: drawingURL(for: pageID), options: .atomic)
+    try durableFileWriter.write(data, to: drawingURL(for: pageID), mode: .replace)
   }
 
   func removeDrawingIfPresent(pageID: UUID) throws {
@@ -149,6 +162,7 @@ actor DrawingRepository {
   func loadRestoreTransaction(backupID: UUID) throws -> BackupRestoreTransaction? {
     let url = try restoreTransactionURL(backupID: backupID)
     guard fileManager.fileExists(atPath: url.path) else { return nil }
+    try durableFileWriter.synchronizeFileAndParentDirectory(at: url)
 
     let attributes = try fileManager.attributesOfItem(atPath: url.path)
     if let size = (attributes[.size] as? NSNumber)?.uint64Value,
@@ -188,22 +202,32 @@ actor DrawingRepository {
       )
     }
 
+    try prepareRootDirectory()
     let directoryURL = try restoreTransactionsURL()
     let transactionURL = try restoreTransactionURL(backupID: transaction.backupID)
-    try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-    guard !fileManager.fileExists(atPath: transactionURL.path) else {
+    try prepareDirectory(at: directoryURL)
+    do {
+      try durableFileWriter.write(
+        data,
+        to: transactionURL,
+        mode: .createExclusive,
+        maximumExistingSiblingCount: Self.maximumRestoreTransactionCount
+      )
+    } catch DurableFileWriterError.destinationAlreadyExists {
       throw DrawingRepositoryError.restoreTransactionAlreadyExists
-    }
-    let entries = try fileManager.contentsOfDirectory(
-      at: directoryURL,
-      includingPropertiesForKeys: nil
-    )
-    guard entries.count < Self.maximumRestoreTransactionCount else {
+    } catch DurableFileWriterError.siblingFileLimitReached {
       throw DrawingRepositoryError.tooManyRestoreTransactions(
         maximum: Self.maximumRestoreTransactionCount
       )
     }
-    try data.write(to: transactionURL, options: .atomic)
+  }
+
+  func synchronizeLibraryPersistence() throws {
+    try durableFileWriter.synchronizeFileAndParentDirectory(at: libraryURL())
+  }
+
+  func synchronizeDrawingPersistence(pageID: UUID) throws {
+    try durableFileWriter.synchronizeFileAndParentDirectory(at: drawingURL(for: pageID))
   }
 
   private func requiredRootURL() throws -> URL {
@@ -243,9 +267,40 @@ actor DrawingRepository {
   }
 
   private func prepareDirectories() throws {
-    try fileManager.createDirectory(
-      at: drawingsURL(),
-      withIntermediateDirectories: true
+    try prepareRootDirectory()
+    try prepareDirectory(at: drawingsURL())
+  }
+
+  private func prepareRootDirectory() throws {
+    if let applicationSupportURL {
+      try prepareDirectory(
+        at: applicationSupportURL,
+        prepareForFileWrites: false
+      )
+    }
+    try prepareDirectory(at: requiredRootURL())
+  }
+
+  private func prepareDirectory(
+    at url: URL,
+    prepareForFileWrites: Bool = true
+  ) throws {
+    let standardizedURL = url.standardizedFileURL
+    guard !preparedDirectoryURLs.contains(standardizedURL) else { return }
+    try durableFileWriter.createDirectoryIfNeeded(
+      at: url,
+      fileManager: fileManager,
+      prepareForFileWrites: prepareForFileWrites
+    )
+    preparedDirectoryURLs.insert(standardizedURL)
+  }
+
+  private static func defaultApplicationSupportURL(fileManager: FileManager) -> URL? {
+    try? fileManager.url(
+      for: .applicationSupportDirectory,
+      in: .userDomainMask,
+      appropriateFor: nil,
+      create: true
     )
   }
 
