@@ -17,14 +17,36 @@ enum CanvasInputPolicy: String, CaseIterable {
 @MainActor
 final class PencilCanvasController: ObservableObject {
   private weak var canvasView: PKCanvasView?
+  private let toolPicker: PKToolPicker
+
+  init() {
+    let toolPicker = PKToolPicker()
+    toolPicker.maximumSupportedContentVersion = .version2
+    toolPicker.showsDrawingPolicyControls = false
+    self.toolPicker = toolPicker
+  }
 
   func attach(_ canvasView: PKCanvasView) {
     self.canvasView = canvasView
+    toolPicker.addObserver(canvasView)
   }
 
   func detach(_ canvasView: PKCanvasView) {
+    toolPicker.setVisible(false, forFirstResponder: canvasView)
+    canvasView.resignFirstResponder()
+    toolPicker.removeObserver(canvasView)
     guard self.canvasView === canvasView else { return }
     self.canvasView = nil
+  }
+
+  func setToolPickerVisible(_ isVisible: Bool, for canvasView: PKCanvasView) {
+    guard self.canvasView === canvasView else { return }
+    toolPicker.setVisible(isVisible, forFirstResponder: canvasView)
+    if isVisible {
+      canvasView.becomeFirstResponder()
+    } else {
+      canvasView.resignFirstResponder()
+    }
   }
 
   func undo() {
@@ -59,17 +81,14 @@ struct PencilCanvas: UIViewRepresentable {
     canvasView.alwaysBounceVertical = false
     canvasView.contentInsetAdjustmentBehavior = .never
 
-    context.coordinator.toolPicker.maximumSupportedContentVersion = .version2
-    context.coordinator.toolPicker.showsDrawingPolicyControls = false
-    context.coordinator.toolPicker.addObserver(canvasView)
     controller.attach(canvasView)
 
     DispatchQueue.main.async {
       let shouldShowTools = context.coordinator.parent.isEditable
-      context.coordinator.toolPicker.setVisible(shouldShowTools, forFirstResponder: canvasView)
-      if shouldShowTools {
-        canvasView.becomeFirstResponder()
-      }
+      context.coordinator.parent.controller.setToolPickerVisible(
+        shouldShowTools,
+        for: canvasView
+      )
     }
     return canvasView
   }
@@ -79,12 +98,7 @@ struct PencilCanvas: UIViewRepresentable {
     canvasView.drawingPolicy = inputPolicy.drawingPolicy
     if canvasView.isUserInteractionEnabled != isEditable {
       canvasView.isUserInteractionEnabled = isEditable
-      context.coordinator.toolPicker.setVisible(isEditable, forFirstResponder: canvasView)
-      if isEditable {
-        canvasView.becomeFirstResponder()
-      } else {
-        canvasView.resignFirstResponder()
-      }
+      controller.setToolPickerVisible(isEditable, for: canvasView)
     }
 
     let currentData = canvasView.drawing.dataRepresentation()
@@ -98,7 +112,6 @@ struct PencilCanvas: UIViewRepresentable {
   }
 
   static func dismantleUIView(_ canvasView: PKCanvasView, coordinator: Coordinator) {
-    coordinator.toolPicker.removeObserver(canvasView)
     coordinator.parent.controller.detach(canvasView)
   }
 
@@ -112,7 +125,6 @@ struct PencilCanvas: UIViewRepresentable {
   @MainActor
   final class Coordinator: NSObject, PKCanvasViewDelegate {
     var parent: PencilCanvas
-    let toolPicker = PKToolPicker()
     var isApplyingExternalDrawing = false
 
     init(parent: PencilCanvas) {

@@ -210,6 +210,67 @@ struct CompatibilityContractTests {
     #expect(!retiredDisplayNames.contains(displayName))
   }
 
+  @Test("The PencilKit tool picker belongs to the cross-page editor controller")
+  func pencilToolPickerLifetimeRemainsCrossPage() throws {
+    let repositoryRoot = repositoryRootURL()
+    let canvasSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent(
+        "InkNotes/Views/Canvas/PencilCanvas.swift"
+      ),
+      encoding: .utf8
+    )
+    let editorSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent(
+        "InkNotes/Views/PageEditorView.swift"
+      ),
+      encoding: .utf8
+    )
+    let controllerStart = try #require(
+      canvasSource.range(of: "final class PencilCanvasController")
+    )
+    let representableStart = try #require(
+      canvasSource.range(of: "struct PencilCanvas: UIViewRepresentable")
+    )
+    let coordinatorStart = try #require(
+      canvasSource.range(of: "final class Coordinator: NSObject, PKCanvasViewDelegate")
+    )
+    let controllerSource = String(
+      canvasSource[controllerStart.lowerBound..<representableStart.lowerBound]
+    )
+    let coordinatorSource = String(canvasSource[coordinatorStart.lowerBound...])
+    let detachStart = try #require(controllerSource.range(of: "func detach"))
+    let visibilityStart = try #require(
+      controllerSource.range(of: "func setToolPickerVisible")
+    )
+    let detachSource = String(
+      controllerSource[detachStart.lowerBound..<visibilityStart.lowerBound]
+    )
+    let identityGuard = try #require(
+      detachSource.range(of: "guard self.canvasView === canvasView")
+    )
+    let requiredPreGuardCleanup = [
+      "toolPicker.setVisible(false, forFirstResponder: canvasView)",
+      "canvasView.resignFirstResponder()",
+      "toolPicker.removeObserver(canvasView)",
+    ]
+
+    #expect(canvasSource.components(separatedBy: "PKToolPicker()").count - 1 == 1)
+    #expect(controllerSource.contains("private let toolPicker: PKToolPicker"))
+    #expect(controllerSource.contains("toolPicker.addObserver(canvasView)"))
+    #expect(controllerSource.contains("toolPicker.setVisible(isVisible"))
+    for statement in requiredPreGuardCleanup {
+      let cleanup = try #require(detachSource.range(of: statement))
+      #expect(cleanup.upperBound <= identityGuard.lowerBound)
+    }
+    #expect(canvasSource.contains("controller.attach(canvasView)"))
+    #expect(canvasSource.contains("controller.setToolPickerVisible(isEditable, for: canvasView)"))
+    #expect(canvasSource.contains("coordinator.parent.controller.detach(canvasView)"))
+    #expect(!canvasSource.contains("context.coordinator.toolPicker"))
+    #expect(!coordinatorSource.contains("PKToolPicker"))
+    #expect(editorSource.contains("@StateObject private var canvasController"))
+    #expect(editorSource.contains(".id(page.id)"))
+  }
+
   @Test("Device signing stays local and the current build number is unambiguous")
   func deviceSigningConfigurationRemainsLocal() throws {
     let repositoryRoot = repositoryRootURL()
