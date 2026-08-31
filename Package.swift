@@ -37,6 +37,7 @@ let package = Package(
         "Persistence/BaiduUploadReconciliationRepository.swift",
         "Persistence/DrawingRepository.swift",
         "Persistence/DurableFileWriter.swift",
+        "Persistence/SegmentedDrawingCodec.swift",
         "Stores/LibraryStore.swift",
       ]
     ),

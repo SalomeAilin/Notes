@@ -697,7 +697,15 @@ scripts/install-ipad-app.sh --help >/dev/null
 scripts/materialize-exact-git-source.zsh --help >/dev/null
 
 print "[2/5] Running Swift compatibility tests"
-xcrun swift test
+xcrun swift test list >/dev/null
+notes_test_products_path="$(xcrun swift build --show-bin-path)"
+notes_test_bundle="$notes_test_products_path/InkNotesCoreTests.xctest"
+notes_xctest_runner="$notes_developer_dir/Platforms/MacOSX.platform/Developer/Library/Xcode/Agents/xctest"
+if [[ ! -x "$notes_xctest_runner" || ! -d "$notes_test_bundle" ]]; then
+  print -u2 "Swift test host or compiled test bundle is unavailable"
+  exit 1
+fi
+"$notes_xctest_runner" "$notes_test_bundle"
 scripts/test-install-ipad-app.zsh
 assert_oauth_release_marker_scanner_detects_chinese_encodings
 assert_retired_brand_scanner_detects_chinese_encodings

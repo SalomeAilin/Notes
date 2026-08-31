@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "buildInputs": {
-    "InkNotes.xcodeproj/project.pbxproj": "c3891b50bf49dd3e452b3913c0d7e9970e050cd1492d8e5c29dc9c7bce0a2c44",
+    "InkNotes.xcodeproj/project.pbxproj": "7cf2071c3eb1a91b87c9dbcc77c4aaf59dd1fd0af2a90f826df68c4e95fec31c",
     "InkNotes/Info.plist": "ad170a9abbacacd971f456d18c832304565f058af81a02b7888348d4bd4830fd",
-    "Package.swift": "13a204caa5d5aafebd06a648ebe88a8a8e9474efd04bbd77f91f04b19bdf2e04"
+    "Package.swift": "de23e03a27cf334e11ac9ab78b9a28ad015b5c38b96ae67459b7a74cb93e6696"
   },
   "sources": {
     "InkNotes/App/InkNotesApp.swift": "1828e34b181bc011487e8ce272c76b09684de26fba01afd631597124385bad73",
@@ -29,8 +29,9 @@
     "InkNotes/Persistence/BackupFileReader.swift": "f0f1d37bb763d962a06d6387ee52b64b2d1e624ba704bb6979dc7becbbbdaa98",
     "InkNotes/Persistence/BackupSnapshotRepository.swift": "e24843e195c3e9c69dfdca3fc9dfb2f5ff8a32f5e0f5aeaed5a53ff2972f7e98",
     "InkNotes/Persistence/BaiduUploadReconciliationRepository.swift": "6b8aa3a9272565b1a55356fa942a25410a64cf0ecc064cc26c5a7cc279fc8c37",
-    "InkNotes/Persistence/DrawingRepository.swift": "45264e9d118c7a17b80bcb2124e71b571a44daec21b0a0a459970ebe90a8e76f",
+    "InkNotes/Persistence/DrawingRepository.swift": "003ba741be019dcdfdfa43c920d4b1e8fa0f7cf6db59c66c304d7a58767e46fb",
     "InkNotes/Persistence/DurableFileWriter.swift": "9897949c6dcd7f58c5d8443cecda14883e61d88be66ed2ab45fb839d71b86b83",
+    "InkNotes/Persistence/SegmentedDrawingCodec.swift": "9f953008cabc2aeb31bd4ddbb74b3dbf3754f0eb562b2b6267a6f5c5a832cffa",
     "InkNotes/Stores/LibraryStore.swift": "9d324c7c9412254046ad7e3ce1791557ef39f686c4981ea4a857700b4cf1d524",
     "InkNotes/Views/BackupTransferView.swift": "3c8745ce7a165381c7b83b0c9878df5fd442b12da093dbe1261b15ee5ab57c72",
     "InkNotes/Views/Canvas/PageBackgroundView.swift": "47c92fee4f6c2b6dedfbe489695605458a0346b3aeb3287d5532d8bce11cfc85",

@@ -27,6 +27,23 @@ struct LibraryStoreTests {
     await store.flush()
 
     #expect(try await repository.loadDrawing(pageID: firstPageID) == drawing)
+    let persistedDrawingURL =
+      rootURL
+      .appendingPathComponent(DrawingRepository.drawingsDirectoryName, isDirectory: true)
+      .appendingPathComponent(
+        "\(firstPageID.uuidString).\(DrawingRepository.drawingFileExtension)"
+      )
+    let persistedDrawing = try Data(contentsOf: persistedDrawingURL)
+    #expect(persistedDrawing == drawing)
+    #expect(!SegmentedDrawingCodec.isSegmentedAuthority(persistedDrawing))
+    #expect(
+      !FileManager.default.fileExists(
+        atPath: rootURL.appendingPathComponent(
+          DrawingRepository.segmentedDrawingsDirectoryName,
+          isDirectory: true
+        ).path
+      )
+    )
     let savedLibrary = try #require(try await repository.loadLibrary())
     #expect(savedLibrary.notebooks[0].pages.count == 2)
   }

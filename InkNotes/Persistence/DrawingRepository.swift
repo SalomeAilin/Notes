@@ -15,10 +15,10 @@ enum DrawingRepositoryError: LocalizedError, Equatable {
       "无法访问应用的永久存储目录。为避免笔记被写入可能清理的临时目录，当前已停止保存。"
     case .unsupportedSchema(let found):
       "笔记数据版本 \(found) 暂不受支持，原文件未被改写。"
-    case .drawingTooLarge(_, let maximum):
-      "单页笔迹超过 \(maximum) 字节的安全读取上限。"
-    case .restoreTransactionTooLarge(_, let maximum):
-      "备份恢复记录超过 \(maximum) 字节的安全读取上限。"
+    case .drawingTooLarge:
+      "这页内容较多，当前版本无法一次完整打开，原笔记没有改动。"
+    case .restoreTransactionTooLarge:
+      "备份恢复记录异常增大，已停止导入以保护现有笔记。"
     case .tooManyRestoreTransactions(let maximum):
       "本地备份恢复记录已达到 \(maximum) 份的安全上限。"
     case .restoreTransactionAlreadyExists:
@@ -34,6 +34,8 @@ actor DrawingRepository {
   static let libraryFilename = "library.json"
   static let drawingsDirectoryName = "Drawings"
   static let drawingFileExtension = "drawing"
+  static let segmentedDrawingsDirectoryName = "DrawingSegments"
+  static let segmentBlobFileExtension = "drawing"
   static let restoreTransactionsDirectoryName = "RestoreTransactions"
   static let restoreTransactionFileExtension = "json"
   static let maximumRestoreTransactionByteCount = BackupArchiveLimits.maximumManifestByteCount
@@ -106,52 +108,139 @@ actor DrawingRepository {
   func loadDrawing(pageID: UUID) throws -> Data? {
     let url = try drawingURL(for: pageID)
     guard fileManager.fileExists(atPath: url.path) else { return nil }
-    return try Data(contentsOf: url)
+    let storedData = try Data(contentsOf: url)
+    guard SegmentedDrawingCodec.isSegmentedAuthority(storedData) else {
+      return storedData
+    }
+    return try reconstructSegmentedDrawing(
+      authorityData: storedData,
+      pageID: pageID,
+      maximumByteCount: SegmentedDrawingLimits.maximumReconstructedDrawingByteCount
+    )
   }
 
   func loadDrawing(pageID: UUID, maximumByteCount: Int) throws -> Data? {
     let url = try drawingURL(for: pageID)
     guard fileManager.fileExists(atPath: url.path) else { return nil }
 
-    let attributes = try fileManager.attributesOfItem(atPath: url.path)
-    if let size = (attributes[.size] as? NSNumber)?.uint64Value,
-      size > UInt64(maximumByteCount)
-    {
+    let authorityReadLimit = max(
+      maximumByteCount,
+      SegmentedDrawingLimits.maximumAuthorityByteCount
+    )
+    let storedData = try readBoundedData(at: url, maximumByteCount: authorityReadLimit) {
+      DrawingRepositoryError.drawingTooLarge(actual: $0, maximum: maximumByteCount)
+    }
+    if SegmentedDrawingCodec.isSegmentedAuthority(storedData) {
+      return try reconstructSegmentedDrawing(
+        authorityData: storedData,
+        pageID: pageID,
+        maximumByteCount: maximumByteCount
+      )
+    }
+    guard storedData.count <= maximumByteCount else {
       throw DrawingRepositoryError.drawingTooLarge(
-        actual: size > UInt64(Int.max) ? Int.max : Int(size),
+        actual: storedData.count,
         maximum: maximumByteCount
       )
     }
+    return storedData
+  }
 
-    let handle = try FileHandle(forReadingFrom: url)
-    defer { try? handle.close() }
-    var data = Data()
-    data.reserveCapacity(min((attributes[.size] as? NSNumber)?.intValue ?? 0, maximumByteCount))
-
-    let chunkByteCount = 1024 * 1024
-    while true {
-      try Task.checkCancellation()
-      let remainingByteCount = maximumByteCount - data.count
-      let requestedByteCount = min(chunkByteCount, remainingByteCount + 1)
-      let chunk = try handle.read(upToCount: requestedByteCount) ?? Data()
-      guard !chunk.isEmpty else { break }
-
-      let (nextByteCount, overflow) = data.count.addingReportingOverflow(chunk.count)
-      guard !overflow, nextByteCount <= maximumByteCount else {
-        throw DrawingRepositoryError.drawingTooLarge(
-          actual: overflow ? Int.max : nextByteCount,
-          maximum: maximumByteCount
-        )
-      }
-      data.append(chunk)
+  func loadDrawingRegion(
+    pageID: UUID,
+    verticalRange: ClosedRange<Double>,
+    maximumByteCount: Int = SegmentedDrawingLimits.maximumReconstructedDrawingByteCount
+  ) throws -> Data? {
+    guard verticalRange.lowerBound.isFinite, verticalRange.upperBound.isFinite else {
+      throw SegmentedDrawingError.invalidAuthority
     }
-    return data
+    let url = try drawingURL(for: pageID)
+    guard fileManager.fileExists(atPath: url.path) else { return nil }
+    let storedData = try Data(contentsOf: url)
+    guard SegmentedDrawingCodec.isSegmentedAuthority(storedData) else {
+      return try loadDrawing(pageID: pageID, maximumByteCount: maximumByteCount)
+    }
+
+    let authority = try SegmentedDrawingCodec.decodeAuthority(
+      storedData,
+      expectedPageID: pageID
+    )
+    let visibleEntries = authority.entries.filter {
+      $0.maximumY >= verticalRange.lowerBound
+        && $0.minimumY <= verticalRange.upperBound
+    }
+    do {
+      return try SegmentedDrawingCodec.reconstructDrawingData(
+        entries: visibleEntries,
+        maximumByteCount: maximumByteCount
+      ) { entry in
+        let blobURL = try segmentBlobURL(pageID: pageID, digest: entry.sha256)
+        guard fileManager.fileExists(atPath: blobURL.path) else {
+          throw SegmentedDrawingError.missingSegment(entry.sha256)
+        }
+        return try readBoundedData(
+          at: blobURL,
+          maximumByteCount: SegmentedDrawingLimits.maximumSegmentByteCount
+        ) { _ in SegmentedDrawingError.segmentByteCountMismatch }
+      }
+    } catch SegmentedDrawingError.reconstructedDrawingTooLarge(let actual, _) {
+      throw DrawingRepositoryError.drawingTooLarge(
+        actual: actual,
+        maximum: maximumByteCount
+      )
+    }
   }
 
   func saveDrawing(_ data: Data, pageID: UUID) throws {
     try Task.checkCancellation()
     try prepareDirectories()
+    let authorityURL = try drawingURL(for: pageID)
+    if fileManager.fileExists(atPath: authorityURL.path),
+      SegmentedDrawingCodec.isSegmentedAuthority(try Data(contentsOf: authorityURL))
+    {
+      try saveSegmentedDrawing(data, pageID: pageID)
+      return
+    }
     try durableFileWriter.write(data, to: drawingURL(for: pageID), mode: .replace)
+  }
+
+  func saveSegmentedDrawing(_ data: Data, pageID: UUID) throws {
+    try Task.checkCancellation()
+    let existingAuthorityURL = try drawingURL(for: pageID)
+    if fileManager.fileExists(atPath: existingAuthorityURL.path) {
+      let existingAuthorityData = try Data(contentsOf: existingAuthorityURL)
+      if SegmentedDrawingCodec.isSegmentedAuthority(existingAuthorityData) {
+        let existingData = try reconstructSegmentedDrawing(
+          authorityData: existingAuthorityData,
+          pageID: pageID,
+          maximumByteCount: SegmentedDrawingLimits.maximumReconstructedDrawingByteCount
+        )
+        if existingData == data {
+          try synchronizeDrawingPersistence(pageID: pageID)
+          return
+        }
+      }
+    }
+    let snapshot = try SegmentedDrawingCodec.makeSnapshot(
+      pageID: pageID,
+      drawingData: data
+    )
+    try prepareSegmentDirectories(pageID: pageID)
+
+    for digest in snapshot.blobsBySHA256.keys.sorted() {
+      try Task.checkCancellation()
+      guard let blob = snapshot.blobsBySHA256[digest] else {
+        throw SegmentedDrawingError.invalidAuthority
+      }
+      try persistSegmentBlob(blob, digest: digest, pageID: pageID)
+    }
+
+    try Task.checkCancellation()
+    try durableFileWriter.write(
+      snapshot.authorityData,
+      to: drawingURL(for: pageID),
+      mode: .replace
+    )
   }
 
   func removeDrawingIfPresent(pageID: UUID) throws {
@@ -232,7 +321,21 @@ actor DrawingRepository {
   }
 
   func synchronizeDrawingPersistence(pageID: UUID) throws {
-    try durableFileWriter.synchronizeFileAndParentDirectory(at: drawingURL(for: pageID))
+    let authorityURL = try drawingURL(for: pageID)
+    let authorityData = try Data(contentsOf: authorityURL)
+    if SegmentedDrawingCodec.isSegmentedAuthority(authorityData) {
+      let authority = try SegmentedDrawingCodec.decodeAuthority(
+        authorityData,
+        expectedPageID: pageID
+      )
+      let digests = Set(authority.entries.map(\.sha256) + authority.sourceChunks.map(\.sha256))
+      for digest in digests.sorted() {
+        try durableFileWriter.synchronizeFileAndParentDirectory(
+          at: try segmentBlobURL(pageID: pageID, digest: digest)
+        )
+      }
+    }
+    try durableFileWriter.synchronizeFileAndParentDirectory(at: authorityURL)
   }
 
   private func requiredRootURL() throws -> URL {
@@ -248,6 +351,30 @@ actor DrawingRepository {
 
   private func drawingsURL() throws -> URL {
     try requiredRootURL().appendingPathComponent(Self.drawingsDirectoryName, isDirectory: true)
+  }
+
+  private func segmentedDrawingsURL() throws -> URL {
+    try requiredRootURL().appendingPathComponent(
+      Self.segmentedDrawingsDirectoryName,
+      isDirectory: true
+    )
+  }
+
+  private func pageSegmentsURL(pageID: UUID) throws -> URL {
+    try segmentedDrawingsURL().appendingPathComponent(
+      pageID.uuidString.lowercased(),
+      isDirectory: true
+    )
+  }
+
+  private func segmentBlobURL(pageID: UUID, digest: String) throws -> URL {
+    guard SegmentedDrawingCodec.isValidSHA256Hex(digest) else {
+      throw SegmentedDrawingError.invalidSegmentDigest
+    }
+    return try pageSegmentsURL(pageID: pageID).appendingPathComponent(
+      "\(digest).\(Self.segmentBlobFileExtension)",
+      isDirectory: false
+    )
   }
 
   private func restoreTransactionsURL() throws -> URL {
@@ -274,6 +401,105 @@ actor DrawingRepository {
   private func prepareDirectories() throws {
     try prepareRootDirectory()
     try prepareDirectory(at: drawingsURL())
+  }
+
+  private func prepareSegmentDirectories(pageID: UUID) throws {
+    try prepareDirectories()
+    try prepareDirectory(at: segmentedDrawingsURL())
+    try prepareDirectory(at: pageSegmentsURL(pageID: pageID))
+  }
+
+  private func persistSegmentBlob(_ data: Data, digest: String, pageID: UUID) throws {
+    let url = try segmentBlobURL(pageID: pageID, digest: digest)
+    if fileManager.fileExists(atPath: url.path) {
+      try verifyExistingSegment(data, at: url)
+      return
+    }
+
+    do {
+      try durableFileWriter.write(data, to: url, mode: .createExclusive)
+    } catch DurableFileWriterError.destinationAlreadyExists {
+      try verifyExistingSegment(data, at: url)
+    }
+  }
+
+  private func verifyExistingSegment(_ expectedData: Data, at url: URL) throws {
+    let existingData = try readBoundedData(
+      at: url,
+      maximumByteCount: SegmentedDrawingLimits.maximumSegmentByteCount
+    ) { _ in SegmentedDrawingError.segmentByteCountMismatch }
+    guard existingData == expectedData else {
+      throw SegmentedDrawingError.segmentChecksumMismatch
+    }
+    try durableFileWriter.synchronizeFileAndParentDirectory(at: url)
+  }
+
+  private func reconstructSegmentedDrawing(
+    authorityData: Data,
+    pageID: UUID,
+    maximumByteCount: Int
+  ) throws -> Data {
+    let authority = try SegmentedDrawingCodec.decodeAuthority(
+      authorityData,
+      expectedPageID: pageID
+    )
+    do {
+      return try SegmentedDrawingCodec.reconstructSourceDrawingData(
+        authority: authority,
+        maximumByteCount: maximumByteCount
+      ) { chunk in
+        let url = try segmentBlobURL(pageID: pageID, digest: chunk.sha256)
+        guard fileManager.fileExists(atPath: url.path) else {
+          throw SegmentedDrawingError.missingSegment(chunk.sha256)
+        }
+        return try readBoundedData(
+          at: url,
+          maximumByteCount: SegmentedDrawingLimits.maximumSegmentByteCount
+        ) { _ in SegmentedDrawingError.segmentByteCountMismatch }
+      }
+    } catch SegmentedDrawingError.reconstructedDrawingTooLarge(let actual, _) {
+      throw DrawingRepositoryError.drawingTooLarge(
+        actual: actual,
+        maximum: maximumByteCount
+      )
+    }
+  }
+
+  private func readBoundedData(
+    at url: URL,
+    maximumByteCount: Int,
+    tooLargeError: (Int) -> any Error
+  ) throws -> Data {
+    guard maximumByteCount >= 0 else {
+      throw tooLargeError(0)
+    }
+    let attributes = try fileManager.attributesOfItem(atPath: url.path)
+    if let size = (attributes[.size] as? NSNumber)?.uint64Value,
+      size > UInt64(maximumByteCount)
+    {
+      throw tooLargeError(size > UInt64(Int.max) ? Int.max : Int(size))
+    }
+
+    let handle = try FileHandle(forReadingFrom: url)
+    defer { try? handle.close() }
+    var data = Data()
+    data.reserveCapacity(min((attributes[.size] as? NSNumber)?.intValue ?? 0, maximumByteCount))
+
+    let chunkByteCount = 1024 * 1024
+    while true {
+      try Task.checkCancellation()
+      let remainingByteCount = maximumByteCount - data.count
+      let requestedByteCount = min(chunkByteCount, remainingByteCount + 1)
+      let chunk = try handle.read(upToCount: requestedByteCount) ?? Data()
+      guard !chunk.isEmpty else { break }
+
+      let (nextByteCount, overflow) = data.count.addingReportingOverflow(chunk.count)
+      guard !overflow, nextByteCount <= maximumByteCount else {
+        throw tooLargeError(overflow ? Int.max : nextByteCount)
+      }
+      data.append(chunk)
+    }
+    return data
   }
 
   private func prepareRootDirectory() throws {
