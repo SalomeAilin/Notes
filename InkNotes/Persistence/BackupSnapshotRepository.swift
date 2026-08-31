@@ -130,6 +130,10 @@ extension DrawingRepository {
       try validateRestoreTransaction(existingTransaction, backup: backup)
       transaction = existingTransaction
     } else {
+      try Self.validateNewRestoreCapacity(
+        currentLibrary: currentLibrary,
+        backupLibrary: backup.library
+      )
       transaction = try makeRestoreTransaction(
         backup: backup,
         currentLibrary: currentLibrary,
@@ -214,6 +218,40 @@ extension DrawingRepository {
       drawings: copiedDrawings,
       disposition: .imported
     )
+  }
+
+  static func validateNewRestoreCapacity(
+    currentLibrary: LibraryDocument,
+    backupLibrary: LibraryDocument
+  ) throws {
+    let (notebookCount, notebookOverflow) = currentLibrary.notebooks.count
+      .addingReportingOverflow(backupLibrary.notebooks.count)
+    guard !notebookOverflow, notebookCount <= BackupArchiveLimits.maximumNotebookCount else {
+      throw BackupArchiveError.tooManyNotebooks(
+        actual: notebookOverflow ? Int.max : notebookCount,
+        maximum: BackupArchiveLimits.maximumNotebookCount
+      )
+    }
+
+    let currentPageCount = restorePageCount(in: currentLibrary)
+    let backupPageCount = restorePageCount(in: backupLibrary)
+    let (pageCount, pageOverflow) = currentPageCount.addingReportingOverflow(backupPageCount)
+    guard !pageOverflow, pageCount <= BackupArchiveLimits.maximumPageCount else {
+      throw BackupArchiveError.tooManyPages(
+        actual: pageOverflow ? Int.max : pageCount,
+        maximum: BackupArchiveLimits.maximumPageCount
+      )
+    }
+  }
+
+  private static func restorePageCount(in library: LibraryDocument) -> Int {
+    var pageCount = 0
+    for notebook in library.notebooks {
+      let (nextPageCount, overflow) = pageCount.addingReportingOverflow(notebook.pages.count)
+      if overflow { return Int.max }
+      pageCount = nextPageCount
+    }
+    return pageCount
   }
 
   private func makeRestoreTransaction(

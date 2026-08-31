@@ -76,6 +76,170 @@ struct BackupSnapshotRepositoryTests {
     expectSameLibraryContent(persistedLibrary, result.library)
   }
 
+  @Test("A new restore accepts the exact combined notebook and page limits")
+  func newRestoreCapacityAcceptsExactLimits() throws {
+    try DrawingRepository.validateNewRestoreCapacity(
+      currentLibrary: makeNotebookLibrary(
+        notebookCount: BackupArchiveLimits.maximumNotebookCount - 1
+      ),
+      backupLibrary: makeNotebookLibrary(notebookCount: 1)
+    )
+    try DrawingRepository.validateNewRestoreCapacity(
+      currentLibrary: makePageLibrary(
+        pageCount: BackupArchiveLimits.maximumPageCount - 1
+      ),
+      backupLibrary: makePageLibrary(pageCount: 1)
+    )
+  }
+
+  @Test("Notebook overflow is rejected before any restore WAL is created")
+  func notebookOverflowDoesNotConsumeRestoreTransactions() async throws {
+    let fixture = makeRepository()
+    defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+    let currentLibrary = makeNotebookLibrary(
+      notebookCount: BackupArchiveLimits.maximumNotebookCount
+    )
+    try await fixture.repository.saveLibrary(currentLibrary)
+    let libraryURL = fixture.rootURL.appendingPathComponent("library.json")
+    let drawingsURL = fixture.rootURL.appendingPathComponent("Drawings", isDirectory: true)
+    let transactionsURL = fixture.rootURL.appendingPathComponent(
+      DrawingRepository.restoreTransactionsDirectoryName,
+      isDirectory: true
+    )
+    let libraryBefore = try Data(contentsOf: libraryURL)
+    let drawingsBefore = try Set(FileManager.default.contentsOfDirectory(atPath: drawingsURL.path))
+    #expect(!FileManager.default.fileExists(atPath: transactionsURL.path))
+
+    let sourceLibrary = makeNotebookLibrary(notebookCount: 1)
+    let sourcePageID = try #require(sourceLibrary.notebooks.first?.pages.first?.id)
+    for _ in 0..<3 {
+      let backupID = UUID()
+      let archive = try BackupArchiveCodec.encode(
+        library: sourceLibrary,
+        drawings: [sourcePageID: Data()],
+        createdAt: Date(timeIntervalSince1970: 1_700_010_000),
+        backupID: backupID
+      )
+
+      await #expect(
+        throws: BackupArchiveError.tooManyNotebooks(
+          actual: BackupArchiveLimits.maximumNotebookCount + 1,
+          maximum: BackupArchiveLimits.maximumNotebookCount
+        )
+      ) {
+        try await fixture.repository.restoreBackupAsCopy(
+          archive,
+          currentLibrary: currentLibrary,
+          currentDrawingOverrides: [:]
+        )
+      }
+      #expect(try await fixture.repository.loadRestoreTransaction(backupID: backupID) == nil)
+    }
+
+    #expect(!FileManager.default.fileExists(atPath: transactionsURL.path))
+    #expect(try Data(contentsOf: libraryURL) == libraryBefore)
+    #expect(
+      try Set(FileManager.default.contentsOfDirectory(atPath: drawingsURL.path))
+        == drawingsBefore
+    )
+  }
+
+  @Test("Page overflow creates no restore WAL or imported files")
+  func pageOverflowDoesNotCreateRestoreWrites() async throws {
+    let fixture = makeRepository()
+    defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+    let currentLibrary = makePageLibrary(
+      pageCount: BackupArchiveLimits.maximumPageCount - 1
+    )
+    try await fixture.repository.saveLibrary(currentLibrary)
+    let libraryURL = fixture.rootURL.appendingPathComponent("library.json")
+    let drawingsURL = fixture.rootURL.appendingPathComponent("Drawings", isDirectory: true)
+    let transactionsURL = fixture.rootURL.appendingPathComponent(
+      DrawingRepository.restoreTransactionsDirectoryName,
+      isDirectory: true
+    )
+    let libraryBefore = try Data(contentsOf: libraryURL)
+    let drawingsBefore = try Set(FileManager.default.contentsOfDirectory(atPath: drawingsURL.path))
+
+    let sourceLibrary = makePageLibrary(pageCount: 2)
+    let sourcePageIDs = sourceLibrary.notebooks.flatMap(\.pages).map(\.id)
+    let archive = try BackupArchiveCodec.encode(
+      library: sourceLibrary,
+      drawings: Dictionary(uniqueKeysWithValues: sourcePageIDs.map { ($0, Data()) }),
+      createdAt: Date(timeIntervalSince1970: 1_700_020_000),
+      backupID: UUID(uuidString: "E5000000-0000-0000-0000-000000000010")!
+    )
+
+    await #expect(
+      throws: BackupArchiveError.tooManyPages(
+        actual: BackupArchiveLimits.maximumPageCount + 1,
+        maximum: BackupArchiveLimits.maximumPageCount
+      )
+    ) {
+      try await fixture.repository.restoreBackupAsCopy(
+        archive,
+        currentLibrary: currentLibrary,
+        currentDrawingOverrides: [:]
+      )
+    }
+
+    #expect(
+      try await fixture.repository.loadRestoreTransaction(
+        backupID: UUID(uuidString: "E5000000-0000-0000-0000-000000000010")!
+      ) == nil
+    )
+    #expect(!FileManager.default.fileExists(atPath: transactionsURL.path))
+    #expect(try Data(contentsOf: libraryURL) == libraryBefore)
+    #expect(
+      try Set(FileManager.default.contentsOfDirectory(atPath: drawingsURL.path))
+        == drawingsBefore
+    )
+  }
+
+  @Test("A completed restore at the page limit still retries from its existing WAL")
+  func pageLimitRestoreRetryUsesExistingTransaction() async throws {
+    let fixture = makeRepository()
+    defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+    let currentLibrary = makePageLibrary(
+      pageCount: BackupArchiveLimits.maximumPageCount - 1
+    )
+    try await fixture.repository.saveLibrary(currentLibrary)
+    let sourceLibrary = makePageLibrary(pageCount: 1)
+    let sourcePageID = try #require(sourceLibrary.notebooks.first?.pages.first?.id)
+    let backupID = UUID(uuidString: "E5000000-0000-0000-0000-000000000011")!
+    let archive = try BackupArchiveCodec.encode(
+      library: sourceLibrary,
+      drawings: [sourcePageID: Data()],
+      createdAt: Date(timeIntervalSince1970: 1_700_030_000),
+      backupID: backupID
+    )
+
+    let first = try await fixture.repository.restoreBackupAsCopy(
+      archive,
+      currentLibrary: currentLibrary,
+      currentDrawingOverrides: [:]
+    )
+    let committedLibrary = try #require(try await fixture.repository.loadLibrary())
+    let retry = try await fixture.repository.restoreBackupAsCopy(
+      archive,
+      currentLibrary: committedLibrary,
+      currentDrawingOverrides: [:]
+    )
+
+    #expect(first.disposition == .imported)
+    #expect(retry.disposition == .alreadyImported)
+    #expect(
+      retry.library.notebooks.flatMap(\.pages).count
+        == BackupArchiveLimits.maximumPageCount
+    )
+    #expect(retry.selectedNotebookID == first.selectedNotebookID)
+    #expect(retry.selectedPageID == first.selectedPageID)
+    #expect(try await fixture.repository.loadRestoreTransaction(backupID: backupID) != nil)
+  }
+
   @Test("Retrying a committed restore does not append another copy")
   func committedRestoreRetryIsIdempotent() async throws {
     let fixture = makeRepository()
@@ -639,6 +803,25 @@ struct BackupSnapshotRepositoryTests {
       )
     )
     return try Data(contentsOf: url)
+  }
+
+  private func makeNotebookLibrary(notebookCount: Int) -> LibraryDocument {
+    LibraryDocument(
+      notebooks: (0..<notebookCount).map { index in
+        Notebook(title: "Notebook \(index)", pages: [NotePage(title: "Page \(index)")])
+      }
+    )
+  }
+
+  private func makePageLibrary(pageCount: Int) -> LibraryDocument {
+    LibraryDocument(
+      notebooks: [
+        Notebook(
+          title: "Notebook",
+          pages: (0..<pageCount).map { NotePage(title: "Page \($0)") }
+        )
+      ]
+    )
   }
 
   private func expectSameLibraryContent(

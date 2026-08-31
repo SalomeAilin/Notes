@@ -23,7 +23,7 @@
     "InkNotes/Networking/BaiduRemoteBackupMetadataObserver.swift": "b4b5fbd09b988aad429ac1efad6764b4c470d4b07ffd218d0b95685c4b6c4f65",
     "InkNotes/Persistence/BackupArchiveCodec.swift": "4209922e709e7d67ae6e0535e1ba5dc288f4a76cbb50c91b03a28db745c430b8",
     "InkNotes/Persistence/BackupFileReader.swift": "f0f1d37bb763d962a06d6387ee52b64b2d1e624ba704bb6979dc7becbbbdaa98",
-    "InkNotes/Persistence/BackupSnapshotRepository.swift": "e1f430a592a99410cb522a1530b9bb6d33f483f4ab4f6cb3d7ff947ea64321af",
+    "InkNotes/Persistence/BackupSnapshotRepository.swift": "16716f56b2b60b329aed340c23747fccad29c33b9d93026f1ed4e94224a51bd9",
     "InkNotes/Persistence/BaiduUploadReconciliationRepository.swift": "18ceb1eabeea8f25b179437fe2ab3e52478a95742c1474d02ab6acca38c8a9b2",
     "InkNotes/Persistence/DrawingRepository.swift": "45264e9d118c7a17b80bcb2124e71b571a44daec21b0a0a459970ebe90a8e76f",
     "InkNotes/Persistence/DurableFileWriter.swift": "9897949c6dcd7f58c5d8443cecda14883e61d88be66ed2ab45fb839d71b86b83",
