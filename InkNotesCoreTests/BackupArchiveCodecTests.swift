@@ -382,6 +382,76 @@ struct BackupArchiveCodecTests {
     }
   }
 
+  @Test("The manifest projection bounds adversarial legal metadata")
+  func projectedManifestBoundsEncodedManifest() throws {
+    let title =
+      "x"
+      + String(
+        repeating: "\0",
+        count: BackupArchiveLimits.maximumTitleUTF8ByteCount - 1
+      )
+    let pageID = UUID(uuidString: "30000000-0000-0000-0000-000000000010")!
+    let date = Date(timeIntervalSince1970: Double.greatestFiniteMagnitude)
+    let library = LibraryDocument(notebooks: [
+      Notebook(
+        id: UUID(uuidString: "20000000-0000-0000-0000-000000000010")!,
+        title: title,
+        pages: [
+          NotePage(
+            id: pageID,
+            title: title,
+            background: .grid,
+            createdAt: date,
+            updatedAt: date
+          )
+        ],
+        createdAt: date,
+        updatedAt: date
+      )
+    ])
+    let archive = try BackupArchiveCodec.encode(
+      library: library,
+      drawings: [pageID: Data([0x01, 0x02, 0x03])],
+      createdAt: date,
+      backupID: UUID(uuidString: "10000000-0000-0000-0000-000000000010")!,
+      sourceAppVersion: String(
+        repeating: "\0",
+        count: BackupArchiveLimits.maximumSourceMetadataUTF8ByteCount
+      ),
+      sourceBuild: String(
+        repeating: "\0",
+        count: BackupArchiveLimits.maximumSourceMetadataUTF8ByteCount
+      )
+    )
+    let actualManifestByteCount = Int(readUInt32(archive, at: 12))
+    let projectedByteCount = try BackupArchiveCodec.projectedManifestByteCount(for: library)
+
+    #expect(projectedByteCount >= actualManifestByteCount)
+    try BackupArchiveCodec.validateProjectedManifestBudget(library)
+  }
+
+  @Test("The projected v1 manifest budget has an enforced production boundary")
+  func projectedManifestBudgetBoundaryIsEnforced() throws {
+    let fixture = try makeManifestBudgetTestFixture()
+    let exactByteCount = try BackupArchiveCodec.projectedManifestByteCount(for: fixture.exact)
+    let overflowingByteCount = try BackupArchiveCodec.projectedManifestByteCount(
+      for: fixture.oneByteOver
+    )
+
+    #expect(exactByteCount == 2_097_152)
+    #expect(exactByteCount == BackupArchiveLimits.maximumManifestByteCount)
+    #expect(overflowingByteCount == 2_097_153)
+    try BackupArchiveCodec.validateProjectedManifestBudget(fixture.exact)
+    #expect(
+      throws: BackupArchiveError.manifestTooLarge(
+        actual: overflowingByteCount,
+        maximum: BackupArchiveLimits.maximumManifestByteCount
+      )
+    ) {
+      try BackupArchiveCodec.validateProjectedManifestBudget(fixture.oneByteOver)
+    }
+  }
+
   private func makeFixture() -> (
     library: LibraryDocument,
     drawings: [UUID: Data],
@@ -520,5 +590,13 @@ struct BackupArchiveCodecTests {
     for (index, shift) in stride(from: 24, through: 0, by: -8).enumerated() {
       data[offset + index] = UInt8((value >> UInt32(shift)) & 0xFF)
     }
+  }
+
+  private func readUInt32(_ data: Data, at offset: Int) -> UInt32 {
+    var value: UInt32 = 0
+    for index in offset..<(offset + 4) {
+      value = (value << 8) | UInt32(data[index])
+    }
+    return value
   }
 }

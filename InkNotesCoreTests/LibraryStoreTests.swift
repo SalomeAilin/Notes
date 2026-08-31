@@ -260,6 +260,140 @@ struct LibraryStoreTests {
     #expect(store.persistenceError?.contains("名称过长") == true)
   }
 
+  @Test("A page that would exceed the v1 manifest budget leaves store state unchanged")
+  @MainActor
+  func manifestOverflowPageIsRejectedAtomically() async throws {
+    let rootURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+
+    let repository = DrawingRepository(rootURL: rootURL)
+    let library = try makeManifestBudgetTestFixture().exact
+    try await repository.saveLibrary(library)
+    let libraryURL = rootURL.appendingPathComponent(DrawingRepository.libraryFilename)
+    let persistedBefore = try Data(contentsOf: libraryURL)
+
+    let store = LibraryStore(repository: repository)
+    try await waitUntil { !store.isLoading }
+    let libraryBefore = store.library
+    let selectedNotebookID = store.selectedNotebookID
+    let selectedPageID = store.selectedPageID
+    let drawingBefore = store.currentDrawingData
+
+    store.addPage(title: "x")
+
+    #expect(store.library == libraryBefore)
+    #expect(store.selectedNotebookID == selectedNotebookID)
+    #expect(store.selectedPageID == selectedPageID)
+    #expect(store.currentDrawingData == drawingBefore)
+    #expect(store.persistenceError?.contains("备份目录") == true)
+    await store.flush()
+    #expect(try Data(contentsOf: libraryURL) == persistedBefore)
+  }
+
+  @Test("Replacing an exact-limit notebook's last page cannot grow the manifest")
+  @MainActor
+  func exactLimitStarterReplacementIsRejectedAtomically() async throws {
+    let rootURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+
+    let fixture = try makeManifestBudgetTestFixture(includingSingletonNotebook: true)
+    let singletonPageID = try #require(fixture.singletonPageID)
+    #expect(
+      try BackupArchiveCodec.projectedManifestByteCount(for: fixture.exact)
+        == BackupArchiveLimits.maximumManifestByteCount
+    )
+    let repository = DrawingRepository(rootURL: rootURL)
+    try await repository.saveLibrary(fixture.exact)
+    let libraryURL = rootURL.appendingPathComponent(DrawingRepository.libraryFilename)
+    let persistedBefore = try Data(contentsOf: libraryURL)
+    let store = LibraryStore(repository: repository)
+    try await waitUntil { !store.isLoading }
+    let libraryBefore = store.library
+    let selectedPageID = store.selectedPageID
+
+    store.deletePage(id: singletonPageID)
+
+    #expect(store.library == libraryBefore)
+    #expect(store.selectedPageID == selectedPageID)
+    #expect(store.persistenceError?.contains("备份目录") == true)
+    await store.flush()
+    #expect(try Data(contentsOf: libraryURL) == persistedBefore)
+  }
+
+  @Test("A legacy oversized manifest permits only non-growing repairs")
+  @MainActor
+  func legacyManifestRepairsAreMonotonic() async throws {
+    let rootURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+
+    let fixture = try makeManifestBudgetTestFixture()
+    var legacyLibrary = fixture.exact
+    let bulkNotebookIndex = try #require(
+      legacyLibrary.notebooks.firstIndex(where: { $0.id == fixture.bulkNotebookID })
+    )
+    let repairPageIndex = try #require(
+      legacyLibrary.notebooks[bulkNotebookIndex].pages.firstIndex(
+        where: { $0.title.utf8.count == BackupArchiveLimits.maximumTitleUTF8ByteCount }
+      )
+    )
+    let repairPage = legacyLibrary.notebooks[bulkNotebookIndex].pages[repairPageIndex]
+    let repairTitle = repairPage.title
+    let timestamp = Date(timeIntervalSince1970: 1_700_000_000)
+    legacyLibrary.notebooks[bulkNotebookIndex].pages.append(
+      NotePage(
+        id: UUID(uuidString: "74000000-0000-0000-0000-000000000001")!,
+        title: String(
+          repeating: "a",
+          count: BackupArchiveLimits.maximumTitleUTF8ByteCount
+        ),
+        createdAt: timestamp,
+        updatedAt: timestamp
+      )
+    )
+    let initialByteCount = try BackupArchiveCodec.projectedManifestByteCount(for: legacyLibrary)
+    #expect(initialByteCount > BackupArchiveLimits.maximumManifestByteCount)
+
+    var repairedCandidate = legacyLibrary
+    repairedCandidate.notebooks[bulkNotebookIndex].pages[repairPageIndex].title = "x"
+    let expectedRepairedByteCount = try BackupArchiveCodec.projectedManifestByteCount(
+      for: repairedCandidate
+    )
+    #expect(expectedRepairedByteCount < initialByteCount)
+    #expect(expectedRepairedByteCount > BackupArchiveLimits.maximumManifestByteCount)
+
+    let repository = DrawingRepository(rootURL: rootURL)
+    try await repository.saveLibrary(legacyLibrary)
+    let store = LibraryStore(repository: repository)
+    try await waitUntil { !store.isLoading }
+
+    store.renamePage(id: repairPage.id, title: "x")
+    let repairedByteCount = try BackupArchiveCodec.projectedManifestByteCount(for: store.library)
+
+    #expect(store.library.notebooks[bulkNotebookIndex].pages[repairPageIndex].title == "x")
+    #expect(repairedByteCount < initialByteCount)
+    #expect(repairedByteCount > BackupArchiveLimits.maximumManifestByteCount)
+
+    store.renamePage(id: repairPage.id, title: repairTitle)
+
+    #expect(store.library.notebooks[bulkNotebookIndex].pages[repairPageIndex].title == "x")
+    #expect(store.persistenceError?.contains("备份目录") == true)
+    await store.flush()
+    let persisted = try #require(try await repository.loadLibrary())
+    #expect(persisted.notebooks.map(\.id) == store.library.notebooks.map(\.id))
+    #expect(persisted.notebooks.map(\.title) == store.library.notebooks.map(\.title))
+    #expect(
+      persisted.notebooks.flatMap(\.pages).map(\.id)
+        == store.library.notebooks.flatMap(\.pages).map(\.id)
+    )
+    #expect(
+      persisted.notebooks.flatMap(\.pages).map(\.title)
+        == store.library.notebooks.flatMap(\.pages).map(\.title)
+    )
+  }
+
   @MainActor
   private func waitUntil(
     _ condition: @escaping @MainActor () -> Bool

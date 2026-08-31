@@ -112,8 +112,10 @@ final class LibraryStore: ObservableObject {
     let notebook = Notebook(title: notebookTitle, pages: [page])
     let previousPageID = selectedPageID
     let previousDrawing = currentDrawingData
+    var candidate = library
+    candidate.notebooks.append(notebook)
 
-    library.notebooks.append(notebook)
+    guard acceptManifestCandidate(candidate) else { return }
     selectedNotebookID = notebook.id
     selectedPageID = page.id
     scheduleLibrarySave()
@@ -142,9 +144,11 @@ final class LibraryStore: ObservableObject {
     let page = NotePage(title: pageTitle)
     let previousPageID = selectedPageID
     let previousDrawing = currentDrawingData
+    var candidate = library
+    candidate.notebooks[notebookIndex].pages.append(page)
+    candidate.notebooks[notebookIndex].updatedAt = Date()
 
-    library.notebooks[notebookIndex].pages.append(page)
-    library.notebooks[notebookIndex].updatedAt = Date()
+    guard acceptManifestCandidate(candidate) else { return }
     selectedPageID = page.id
     scheduleLibrarySave()
     transitionDrawing(
@@ -158,8 +162,10 @@ final class LibraryStore: ObservableObject {
     guard canEdit, let title = cleaned(title),
       let index = library.notebooks.firstIndex(where: { $0.id == id })
     else { return }
-    library.notebooks[index].title = title
-    library.notebooks[index].updatedAt = Date()
+    var candidate = library
+    candidate.notebooks[index].title = title
+    candidate.notebooks[index].updatedAt = Date()
+    guard acceptManifestCandidate(candidate, allowNonGrowingOverLimit: true) else { return }
     scheduleLibrarySave()
   }
 
@@ -167,8 +173,14 @@ final class LibraryStore: ObservableObject {
     guard canEdit, let title = cleaned(title),
       let location = pageLocation(id: id)
     else { return }
-    library.notebooks[location.notebook].pages[location.page].title = title
-    touch(notebookAt: location.notebook, pageAt: location.page)
+    var candidate = library
+    candidate.notebooks[location.notebook].pages[location.page].title = title
+    Self.touch(
+      library: &candidate,
+      notebookAt: location.notebook,
+      pageAt: location.page
+    )
+    guard acceptManifestCandidate(candidate, allowNonGrowingOverLimit: true) else { return }
     scheduleLibrarySave()
   }
 
@@ -180,11 +192,13 @@ final class LibraryStore: ObservableObject {
     let deletingSelection = selectedNotebookID == id
     let previousPageID = deletingSelection ? selectedPageID : nil
     let previousDrawing = deletingSelection ? currentDrawingData : Data()
-    library.notebooks.remove(at: index)
+    var candidate = library
+    candidate.notebooks.remove(at: index)
 
-    if library.notebooks.isEmpty {
-      library = .starter()
+    if candidate.notebooks.isEmpty {
+      candidate = .starter()
     }
+    guard acceptManifestCandidate(candidate, allowNonGrowingOverLimit: true) else { return }
 
     if deletingSelection,
       let notebook = library.notebooks.first,
@@ -206,12 +220,14 @@ final class LibraryStore: ObservableObject {
 
     let deletingSelection = selectedPageID == id
     let previousDrawing = deletingSelection ? currentDrawingData : Data()
-    library.notebooks[location.notebook].pages.remove(at: location.page)
+    var candidate = library
+    candidate.notebooks[location.notebook].pages.remove(at: location.page)
 
-    if library.notebooks[location.notebook].pages.isEmpty {
-      library.notebooks[location.notebook].pages = [NotePage(title: "第 1 页")]
+    if candidate.notebooks[location.notebook].pages.isEmpty {
+      candidate.notebooks[location.notebook].pages = [NotePage(title: "第 1 页")]
     }
-    library.notebooks[location.notebook].updatedAt = Date()
+    candidate.notebooks[location.notebook].updatedAt = Date()
+    guard acceptManifestCandidate(candidate, allowNonGrowingOverLimit: true) else { return }
 
     if deletingSelection,
       let page = library.notebooks[location.notebook].pages.first
@@ -247,8 +263,14 @@ final class LibraryStore: ObservableObject {
     guard canEdit, let pageID = selectedPageID,
       let location = pageLocation(id: pageID)
     else { return }
-    library.notebooks[location.notebook].pages[location.page].background = background
-    touch(notebookAt: location.notebook, pageAt: location.page)
+    var candidate = library
+    candidate.notebooks[location.notebook].pages[location.page].background = background
+    Self.touch(
+      library: &candidate,
+      notebookAt: location.notebook,
+      pageAt: location.page
+    )
+    guard acceptManifestCandidate(candidate, allowNonGrowingOverLimit: true) else { return }
     scheduleLibrarySave()
   }
 
@@ -521,9 +543,46 @@ final class LibraryStore: ObservableObject {
   }
 
   private func touch(notebookAt notebookIndex: Int, pageAt pageIndex: Int) {
+    Self.touch(library: &library, notebookAt: notebookIndex, pageAt: pageIndex)
+  }
+
+  private static func touch(
+    library: inout LibraryDocument,
+    notebookAt notebookIndex: Int,
+    pageAt pageIndex: Int
+  ) {
     let now = Date()
     library.notebooks[notebookIndex].pages[pageIndex].updatedAt = now
     library.notebooks[notebookIndex].updatedAt = now
+  }
+
+  private func acceptManifestCandidate(
+    _ candidate: LibraryDocument,
+    allowNonGrowingOverLimit: Bool = false
+  ) -> Bool {
+    do {
+      let candidateByteCount = try BackupArchiveCodec.projectedManifestByteCount(for: candidate)
+      if candidateByteCount <= BackupArchiveLimits.maximumManifestByteCount {
+        library = candidate
+        return true
+      }
+
+      if allowNonGrowingOverLimit {
+        let currentByteCount = try BackupArchiveCodec.projectedManifestByteCount(for: library)
+        if candidateByteCount <= currentByteCount {
+          library = candidate
+          return true
+        }
+      }
+
+      throw BackupArchiveError.manifestTooLarge(
+        actual: candidateByteCount,
+        maximum: BackupArchiveLimits.maximumManifestByteCount
+      )
+    } catch {
+      report(error, prefix: "无法完成操作")
+      return false
+    }
   }
 
   private func pageLocation(id: UUID) -> (notebook: Int, page: Int)? {

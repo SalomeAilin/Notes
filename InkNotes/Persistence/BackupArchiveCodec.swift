@@ -10,6 +10,17 @@ enum BackupArchiveCodec {
 
   static let magic = Data([0x49, 0x4E, 0x4B, 0x4E, 0x4F, 0x54, 0x45, 0x00])
   private static let supportedFlags: UInt16 = 0
+  private static let projectionBackupID = UUID(
+    uuidString: "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF"
+  )!
+  private static let projectionDate = Date(
+    timeIntervalSince1970: -Double.greatestFiniteMagnitude
+  )
+  private static let projectionSourceMetadata = String(
+    repeating: "\0",
+    count: BackupArchiveLimits.maximumSourceMetadataUTF8ByteCount
+  )
+  private static let projectionDigest = String(repeating: "f", count: 64)
 
   static func encode(
     library: LibraryDocument,
@@ -66,21 +77,15 @@ enum BackupArchiveCodec {
       payload.append(drawing)
     }
 
-    let manifest = BackupArchiveManifest(
+    let manifestData = try encodeManifest(
+      library: library,
+      entries: entries,
       backupID: backupID,
       createdAt: createdAt,
       sourceAppVersion: sourceAppVersion,
       sourceBuild: sourceBuild,
-      librarySchemaVersion: library.schemaVersion,
-      library: library,
-      drawings: entries
+      using: makeEncoder()
     )
-    let manifestData: Data
-    do {
-      manifestData = try makeEncoder().encode(manifest)
-    } catch {
-      throw BackupArchiveError.invalidManifest
-    }
 
     guard manifestData.count <= BackupArchiveLimits.maximumManifestByteCount else {
       throw BackupArchiveError.manifestTooLarge(
@@ -276,6 +281,42 @@ enum BackupArchiveCodec {
     return pageIDs
   }
 
+  /// Returns a conservative v1 manifest size for a library without allocating drawing payloads.
+  ///
+  /// The projection uses the real manifest model and encoder. Values whose encoded length can
+  /// change after a library edit are replaced with their longest v1 representation: finite dates,
+  /// source metadata, drawing offsets, drawing byte counts, and fixed-width SHA-256 digests.
+  static func projectedManifestByteCount(for library: LibraryDocument) throws -> Int {
+    let pageIDs = try validateLibrary(library)
+    let projectedEntries = pageIDs.sorted(by: { $0.uuidString < $1.uuidString }).map {
+      BackupDrawingEntry(
+        pageID: $0,
+        offset: UInt64(BackupArchiveLimits.maximumArchiveByteCount),
+        byteCount: UInt64(BackupArchiveLimits.maximumDrawingByteCount),
+        sha256: projectionDigest
+      )
+    }
+    return try encodeManifest(
+      library: library,
+      entries: projectedEntries,
+      backupID: projectionBackupID,
+      createdAt: projectionDate,
+      sourceAppVersion: projectionSourceMetadata,
+      sourceBuild: projectionSourceMetadata,
+      using: makeProjectionEncoder()
+    ).count
+  }
+
+  static func validateProjectedManifestBudget(_ library: LibraryDocument) throws {
+    let byteCount = try projectedManifestByteCount(for: library)
+    guard byteCount <= BackupArchiveLimits.maximumManifestByteCount else {
+      throw BackupArchiveError.manifestTooLarge(
+        actual: byteCount,
+        maximum: BackupArchiveLimits.maximumManifestByteCount
+      )
+    }
+  }
+
   private static func validateSourceMetadata(
     createdAt: Date,
     sourceAppVersion: String,
@@ -367,10 +408,44 @@ enum BackupArchiveCodec {
     return result
   }
 
+  private static func encodeManifest(
+    library: LibraryDocument,
+    entries: [BackupDrawingEntry],
+    backupID: UUID,
+    createdAt: Date,
+    sourceAppVersion: String,
+    sourceBuild: String,
+    using encoder: JSONEncoder
+  ) throws -> Data {
+    let manifest = BackupArchiveManifest(
+      backupID: backupID,
+      createdAt: createdAt,
+      sourceAppVersion: sourceAppVersion,
+      sourceBuild: sourceBuild,
+      librarySchemaVersion: library.schemaVersion,
+      library: library,
+      drawings: entries
+    )
+    do {
+      return try encoder.encode(manifest)
+    } catch {
+      throw BackupArchiveError.invalidManifest
+    }
+  }
+
   private static func makeEncoder() -> JSONEncoder {
     let encoder = JSONEncoder()
     encoder.dateEncodingStrategy = .secondsSince1970
     encoder.outputFormatting = [.sortedKeys]
+    return encoder
+  }
+
+  private static func makeProjectionEncoder() -> JSONEncoder {
+    let encoder = makeEncoder()
+    encoder.dateEncodingStrategy = .custom { _, encoder in
+      var container = encoder.singleValueContainer()
+      try container.encode(-Double.greatestFiniteMagnitude)
+    }
     return encoder
   }
 

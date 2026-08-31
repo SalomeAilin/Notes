@@ -198,6 +198,214 @@ struct BackupSnapshotRepositoryTests {
     )
   }
 
+  @Test("Manifest overflow creates no restore WAL or imported files")
+  func manifestOverflowDoesNotCreateRestoreWrites() async throws {
+    let fixture = makeRepository()
+    defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+    let currentLibrary = try makeManifestBudgetTestFixture().exact
+    try await fixture.repository.saveLibrary(currentLibrary)
+    let libraryURL = fixture.rootURL.appendingPathComponent(DrawingRepository.libraryFilename)
+    let drawingsURL = fixture.rootURL.appendingPathComponent(
+      DrawingRepository.drawingsDirectoryName,
+      isDirectory: true
+    )
+    let transactionsURL = fixture.rootURL.appendingPathComponent(
+      DrawingRepository.restoreTransactionsDirectoryName,
+      isDirectory: true
+    )
+    let libraryBefore = try Data(contentsOf: libraryURL)
+    let drawingsBefore = try Set(FileManager.default.contentsOfDirectory(atPath: drawingsURL.path))
+
+    let sourcePage = NotePage(
+      id: UUID(uuidString: "52000000-0000-0000-0000-000000000001")!,
+      title: "Source page"
+    )
+    let sourceLibrary = LibraryDocument(notebooks: [
+      Notebook(
+        id: UUID(uuidString: "42000000-0000-0000-0000-000000000001")!,
+        title: "Source notebook",
+        pages: [sourcePage]
+      )
+    ])
+    let backupID = UUID(uuidString: "E5000000-0000-0000-0000-000000000012")!
+    let archive = try BackupArchiveCodec.encode(
+      library: sourceLibrary,
+      drawings: [sourcePage.id: Data()],
+      createdAt: Date(timeIntervalSince1970: 1_700_040_000),
+      backupID: backupID
+    )
+
+    do {
+      _ = try await fixture.repository.restoreBackupAsCopy(
+        archive,
+        currentLibrary: currentLibrary,
+        currentDrawingOverrides: [:]
+      )
+      Issue.record("Expected the merged manifest projection to exceed the v1 limit")
+    } catch BackupArchiveError.manifestTooLarge(let actual, let maximum) {
+      #expect(actual > maximum)
+      #expect(maximum == BackupArchiveLimits.maximumManifestByteCount)
+    }
+
+    #expect(try await fixture.repository.loadRestoreTransaction(backupID: backupID) == nil)
+    #expect(!FileManager.default.fileExists(atPath: transactionsURL.path))
+    #expect(try Data(contentsOf: libraryURL) == libraryBefore)
+    #expect(
+      try Set(FileManager.default.contentsOfDirectory(atPath: drawingsURL.path))
+        == drawingsBefore
+    )
+  }
+
+  @Test("An existing WAL cannot replay an oversized merged manifest")
+  func existingRestoreTransactionCannotBypassManifestBudget() async throws {
+    let fixture = makeRepository()
+    defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+    let sourcePage = NotePage(
+      id: UUID(uuidString: "53000000-0000-0000-0000-000000000001")!,
+      title: "Source page"
+    )
+    let sourceLibrary = LibraryDocument(notebooks: [
+      Notebook(
+        id: UUID(uuidString: "43000000-0000-0000-0000-000000000001")!,
+        title: "Source notebook",
+        pages: [sourcePage]
+      )
+    ])
+    let backupID = UUID(uuidString: "E5000000-0000-0000-0000-000000000013")!
+    let archive = try BackupArchiveCodec.encode(
+      library: sourceLibrary,
+      drawings: [sourcePage.id: Data()],
+      createdAt: Date(timeIntervalSince1970: 1_700_050_000),
+      backupID: backupID
+    )
+    let starter = LibraryDocument.starter()
+    _ = try await fixture.repository.restoreBackupAsCopy(
+      archive,
+      currentLibrary: starter,
+      currentDrawingOverrides: [:]
+    )
+    let transactionBefore = try #require(
+      try await fixture.repository.loadRestoreTransaction(backupID: backupID)
+    )
+
+    let boundaryFixture = try makeManifestBudgetTestFixture()
+    let currentLibrary = boundaryFixture.exact
+    try await fixture.repository.saveLibrary(currentLibrary)
+    let libraryURL = fixture.rootURL.appendingPathComponent(DrawingRepository.libraryFilename)
+    let drawingsURL = fixture.rootURL.appendingPathComponent(
+      DrawingRepository.drawingsDirectoryName,
+      isDirectory: true
+    )
+    let libraryBefore = try Data(contentsOf: libraryURL)
+    let drawingsBefore = try Set(FileManager.default.contentsOfDirectory(atPath: drawingsURL.path))
+
+    do {
+      _ = try await fixture.repository.restoreBackupAsCopy(
+        archive,
+        currentLibrary: currentLibrary,
+        currentDrawingOverrides: [:]
+      )
+      Issue.record("Expected an existing restore transaction to remain manifest-budget gated")
+    } catch BackupArchiveError.manifestTooLarge(let actual, let maximum) {
+      #expect(actual > maximum)
+      #expect(maximum == BackupArchiveLimits.maximumManifestByteCount)
+    }
+
+    #expect(
+      try await fixture.repository.loadRestoreTransaction(backupID: backupID)
+        == transactionBefore
+    )
+    #expect(try Data(contentsOf: libraryURL) == libraryBefore)
+    #expect(
+      try Set(FileManager.default.contentsOfDirectory(atPath: drawingsURL.path))
+        == drawingsBefore
+    )
+
+    var repairedLibrary = currentLibrary
+    let bulkNotebookIndex = try #require(
+      repairedLibrary.notebooks.firstIndex(where: { $0.id == boundaryFixture.bulkNotebookID })
+    )
+    let longPageIndex = try #require(
+      repairedLibrary.notebooks[bulkNotebookIndex].pages.firstIndex(
+        where: { $0.title.utf8.count == BackupArchiveLimits.maximumTitleUTF8ByteCount }
+      )
+    )
+    repairedLibrary.notebooks[bulkNotebookIndex].pages[longPageIndex].title = "x"
+    try await fixture.repository.saveLibrary(repairedLibrary)
+
+    let resumed = try await fixture.repository.restoreBackupAsCopy(
+      archive,
+      currentLibrary: repairedLibrary,
+      currentDrawingOverrides: [:]
+    )
+
+    #expect(resumed.disposition == .imported)
+    #expect(
+      try await fixture.repository.loadRestoreTransaction(backupID: backupID)
+        == transactionBefore
+    )
+  }
+
+  @Test("A completed legacy oversized restore can still repair a missing drawing")
+  func completedLegacyRestoreCanRepairWithoutManifestGrowth() async throws {
+    let fixture = makeRepository()
+    defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+    let sourcePage = NotePage(
+      id: UUID(uuidString: "54000000-0000-0000-0000-000000000001")!,
+      title: "Source page"
+    )
+    let sourceLibrary = LibraryDocument(notebooks: [
+      Notebook(
+        id: UUID(uuidString: "44000000-0000-0000-0000-000000000001")!,
+        title: "Source notebook",
+        pages: [sourcePage]
+      )
+    ])
+    let sourceDrawing = try serializedStrokeDrawing()
+    let backupID = UUID(uuidString: "E5000000-0000-0000-0000-000000000014")!
+    let archive = try BackupArchiveCodec.encode(
+      library: sourceLibrary,
+      drawings: [sourcePage.id: sourceDrawing],
+      createdAt: Date(timeIntervalSince1970: 1_700_060_000),
+      backupID: backupID
+    )
+    let starter = LibraryDocument.starter()
+    _ = try await fixture.repository.restoreBackupAsCopy(
+      archive,
+      currentLibrary: starter,
+      currentDrawingOverrides: [:]
+    )
+    let transaction = try #require(
+      try await fixture.repository.loadRestoreTransaction(backupID: backupID)
+    )
+    let copiedPageID = try #require(transaction.copiedNotebooks.first?.pages.first?.id)
+
+    var legacyLibrary = try makeManifestBudgetTestFixture().oneByteOver
+    legacyLibrary.notebooks.append(contentsOf: transaction.copiedNotebooks)
+    #expect(
+      try BackupArchiveCodec.projectedManifestByteCount(for: legacyLibrary)
+        > BackupArchiveLimits.maximumManifestByteCount
+    )
+    try await fixture.repository.saveLibrary(legacyLibrary)
+    try await fixture.repository.removeDrawingIfPresent(pageID: copiedPageID)
+
+    let retry = try await fixture.repository.restoreBackupAsCopy(
+      archive,
+      currentLibrary: legacyLibrary,
+      currentDrawingOverrides: [:]
+    )
+
+    #expect(retry.disposition == .alreadyImported)
+    #expect(retry.repairedDrawingCount == 1)
+    #expect(retry.repairedPageIDs == [copiedPageID])
+    #expect(try await fixture.repository.loadDrawing(pageID: copiedPageID) == sourceDrawing)
+    let persistedLibrary = try #require(try await fixture.repository.loadLibrary())
+    expectSameLibraryContent(persistedLibrary, legacyLibrary)
+  }
+
   @Test("A completed restore at the page limit still retries from its existing WAL")
   func pageLimitRestoreRetryUsesExistingTransaction() async throws {
     let fixture = makeRepository()

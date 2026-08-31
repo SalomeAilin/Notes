@@ -126,9 +126,11 @@ extension DrawingRepository {
     // page file is written. The only preceding writes persist the current notes.
     let backup = try decodeAndValidateDrawings(data)
     let transaction: BackupRestoreTransaction
+    let isNewTransaction: Bool
     if let existingTransaction = try loadRestoreTransaction(backupID: backup.backupID) {
       try validateRestoreTransaction(existingTransaction, backup: backup)
       transaction = existingTransaction
+      isNewTransaction = false
     } else {
       try Self.validateNewRestoreCapacity(
         currentLibrary: currentLibrary,
@@ -140,9 +142,7 @@ extension DrawingRepository {
         currentPageIDs: currentPageIDs,
         importedAt: importedAt
       )
-      // The immutable plan is the write-ahead record and durable receipt. It is
-      // committed before any imported drawing or directory entry can be written.
-      try createRestoreTransaction(transaction)
+      isNewTransaction = true
     }
 
     let copiedDrawings = try drawingsForRestoreTransaction(transaction, backup: backup)
@@ -167,7 +167,13 @@ extension DrawingRepository {
 
     var mergedLibrary = currentLibrary
     mergedLibrary.notebooks.append(contentsOf: transaction.copiedNotebooks)
-    _ = try BackupArchiveCodec.validateLibrary(mergedLibrary)
+    try BackupArchiveCodec.validateProjectedManifestBudget(mergedLibrary)
+
+    if isNewTransaction {
+      // The immutable plan is the write-ahead record and durable receipt. The
+      // complete candidate is admitted before this first restore-specific write.
+      try createRestoreTransaction(transaction)
+    }
 
     var drawingsToWrite: [(pageID: UUID, data: Data)] = []
     for copiedPageID in copiedDrawings.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
