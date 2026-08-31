@@ -43,14 +43,13 @@ struct PageEditorView: View {
         .fill(Color(uiColor: .systemBackground))
         .shadow(color: .black.opacity(0.08), radius: 12, y: 4)
 
-      PageBackgroundView(background: page.background)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-
       PencilCanvas(
         drawingData: Binding(
           get: { store.currentDrawingData },
           set: { store.updateCurrentDrawing($0) }
         ),
+        pageID: page.id,
+        background: page.background,
         inputPolicy: pencilOnly ? .pencilOnly : .anyInput,
         isEditable: !store.isReadOnly && !store.isBackupTransferInProgress,
         controller: canvasController

@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "buildInputs": {
-    "InkNotes.xcodeproj/project.pbxproj": "6eb3590963d8ca480ea272fec9fd8ba078775fb4e94efa4ea1ba5726e9083910",
+    "InkNotes.xcodeproj/project.pbxproj": "c3891b50bf49dd3e452b3913c0d7e9970e050cd1492d8e5c29dc9c7bce0a2c44",
     "InkNotes/Info.plist": "ad170a9abbacacd971f456d18c832304565f058af81a02b7888348d4bd4830fd",
-    "Package.swift": "99f9fa89d50f92222a09cb154ab4e3972fc13a96a3967af4a2c33e2e1237c07e"
+    "Package.swift": "13a204caa5d5aafebd06a648ebe88a8a8e9474efd04bbd77f91f04b19bdf2e04"
   },
   "sources": {
     "InkNotes/App/InkNotesApp.swift": "1828e34b181bc011487e8ce272c76b09684de26fba01afd631597124385bad73",
@@ -16,6 +16,7 @@
     "InkNotes/Models/BaiduBrokerProtocolV1.swift": "558de36d0fdfc636c19bcbfe2be759291dfaf04a419483d8c2a10dc1a7abc631",
     "InkNotes/Models/BaiduNetdiskAccount.swift": "4bf01000654ba46a322b0514711e0dc3b15a9f1397fb8348f8a4b56afcc80092",
     "InkNotes/Models/BaiduNetdiskBackup.swift": "d4fb9e16a2053931533418f98910d666feb59f90be957d22688677a9b5be1f56",
+    "InkNotes/Models/ContinuousCanvasGeometry.swift": "09ca5d28348ff9177ee4303ec319e9bb98c85282d58694307b75f135496f2233",
     "InkNotes/Models/LibraryDocument.swift": "2d4ff2f3b90d73bc079f3a2912ef33c9fd67738f654f6ebb8a462d360cb6151b",
     "InkNotes/Networking/BaiduBackupUploadCoordinator.swift": "9d6ef1f04bfe7dd8e2efbf886656b667f6f87d7eec3c161073789d85ad3a1460",
     "InkNotes/Networking/BaiduHTTPTransport.swift": "61420d52edf7793289d8f6380df7832b319619be2dda9fd6d6df2d4c7f763b41",
@@ -33,8 +34,8 @@
     "InkNotes/Stores/LibraryStore.swift": "9d324c7c9412254046ad7e3ce1791557ef39f686c4981ea4a857700b4cf1d524",
     "InkNotes/Views/BackupTransferView.swift": "3c8745ce7a165381c7b83b0c9878df5fd442b12da093dbe1261b15ee5ab57c72",
     "InkNotes/Views/Canvas/PageBackgroundView.swift": "47c92fee4f6c2b6dedfbe489695605458a0346b3aeb3287d5532d8bce11cfc85",
-    "InkNotes/Views/Canvas/PencilCanvas.swift": "e0cb721f921ee183377fd50314e345eea8245cbc82604229308762b444378ce6",
+    "InkNotes/Views/Canvas/PencilCanvas.swift": "7649b9655cd04711cc10b27df882401c303b7ff9b1e8119a961e6faa7f8366e3",
     "InkNotes/Views/LibrarySplitView.swift": "f1d43a20d10b8d0d76160f9fdd36f3b4da3cb1319718015c90b1ef619a214f65",
-    "InkNotes/Views/PageEditorView.swift": "fceb3bccd4b138a6449a368912f0ea5f5015cd17218020ead05c049a2d629c7d"
+    "InkNotes/Views/PageEditorView.swift": "bad540a134b329dfaa051c54cab723bbd7797b4e4af4be6cf0edbcea876410c3"
   }
 }

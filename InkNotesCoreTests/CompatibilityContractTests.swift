@@ -943,7 +943,7 @@ struct CompatibilityContractTests {
       controllerSource[detachStart.lowerBound..<visibilityStart.lowerBound]
     )
     let identityGuard = try #require(
-      detachSource.range(of: "guard self.canvasView === canvasView")
+      detachSource.range(of: "guard self.canvasHost === canvasHost")
     )
     let requiredPreGuardCleanup = [
       "toolPicker.setVisible(false, forFirstResponder: canvasView)",
@@ -953,19 +953,49 @@ struct CompatibilityContractTests {
 
     #expect(canvasSource.components(separatedBy: "PKToolPicker()").count - 1 == 1)
     #expect(controllerSource.contains("private let toolPicker: PKToolPicker"))
-    #expect(controllerSource.contains("toolPicker.addObserver(canvasView)"))
+    #expect(controllerSource.contains("toolPicker.addObserver(canvasHost.canvasView)"))
     #expect(controllerSource.contains("toolPicker.setVisible(isVisible"))
     for statement in requiredPreGuardCleanup {
       let cleanup = try #require(detachSource.range(of: statement))
       #expect(cleanup.upperBound <= identityGuard.lowerBound)
     }
-    #expect(canvasSource.contains("controller.attach(canvasView)"))
-    #expect(canvasSource.contains("controller.setToolPickerVisible(isEditable, for: canvasView)"))
-    #expect(canvasSource.contains("coordinator.parent.controller.detach(canvasView)"))
+    #expect(canvasSource.contains("controller.attach(canvasHost, pageID: pageID)"))
+    #expect(canvasSource.contains("controller.setToolPickerVisible(isEditable, for: canvasHost)"))
+    #expect(canvasSource.contains("controller.detach(canvasHost, pageID:"))
     #expect(!canvasSource.contains("context.coordinator.toolPicker"))
     #expect(!coordinatorSource.contains("PKToolPicker"))
+    #expect(controllerSource.contains("viewports[pageID] = canvasHost.currentViewport"))
     #expect(editorSource.contains("@StateObject private var canvasController"))
     #expect(editorSource.contains(".id(page.id)"))
+  }
+
+  @Test("The writing surface grows as continuous paper without exposing storage details")
+  func writingSurfaceRemainsUserLed() throws {
+    let repositoryRoot = repositoryRootURL()
+    let canvasSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent(
+        "InkNotes/Views/Canvas/PencilCanvas.swift"
+      ),
+      encoding: .utf8
+    )
+    let editorSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent(
+        "InkNotes/Views/PageEditorView.swift"
+      ),
+      encoding: .utf8
+    )
+
+    #expect(canvasSource.contains("final class ExpandablePencilCanvasView"))
+    #expect(canvasSource.contains("ContinuousCanvasGeometry.requiredContentHeight"))
+    #expect(canvasSource.contains("drawingMaximumY: canvasView.drawing.bounds.maxY"))
+    #expect(canvasSource.contains("scrollView.minimumZoomScale = 0.65"))
+    #expect(canvasSource.contains("scrollView.maximumZoomScale = 3"))
+    #expect(canvasSource.contains("inputPolicy == .anyInput ? 2 : 1"))
+    #expect(canvasSource.contains("contentView.addSubview(paperView)"))
+    #expect(canvasSource.contains("contentView.addSubview(canvasView)"))
+    #expect(editorSource.contains("pageID: page.id"))
+    #expect(editorSource.contains("background: page.background"))
+    #expect(!editorSource.contains("PageBackgroundView(background:"))
   }
 
   @Test("Device signing stays local and the current build number is unambiguous")

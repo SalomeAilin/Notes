@@ -38,6 +38,7 @@
 		D80000000000000000000001 /* BaiduRemoteBackupContentVerifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = C80000000000000000000001 /* BaiduRemoteBackupContentVerifier.swift */; };
 		DB0000000000000000000001 /* BaiduRemoteBackupReconciliationAuthority.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB0000000000000000000001 /* BaiduRemoteBackupReconciliationAuthority.swift */; };
 		D90000000000000000000001 /* AppBuildIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = C90000000000000000000001 /* AppBuildIdentity.swift */; };
+		DF0000000000000000000001 /* ContinuousCanvasGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF0000000000000000000001 /* ContinuousCanvasGeometry.swift */; };
 		DA0000000000000000000001 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000001 /* PrivacyInfo.xcprivacy */; };
 /* End PBXBuildFile section */
 
@@ -75,6 +76,7 @@
 		C80000000000000000000001 /* BaiduRemoteBackupContentVerifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaiduRemoteBackupContentVerifier.swift; sourceTree = "<group>"; };
 		CB0000000000000000000001 /* BaiduRemoteBackupReconciliationAuthority.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaiduRemoteBackupReconciliationAuthority.swift; sourceTree = "<group>"; };
 		C90000000000000000000001 /* AppBuildIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppBuildIdentity.swift; sourceTree = "<group>"; };
+		CF0000000000000000000001 /* ContinuousCanvasGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContinuousCanvasGeometry.swift; sourceTree = "<group>"; };
 		CA0000000000000000000001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.app-privacy; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -133,6 +135,7 @@
 			isa = PBXGroup;
 			children = (
 				C90000000000000000000001 /* AppBuildIdentity.swift */,
+				CF0000000000000000000001 /* ContinuousCanvasGeometry.swift */,
 				C0000000000000000000000C /* BackupArchive.swift */,
 				CC0000000000000000000001 /* BackupExportArtifact.swift */,
 				C50000000000000000000003 /* BackupImportPresentationState.swift */,
@@ -274,6 +277,7 @@
 			files = (
 				D00000000000000000000001 /* InkNotesApp.swift in Sources */,
 				D90000000000000000000001 /* AppBuildIdentity.swift in Sources */,
+				DF0000000000000000000001 /* ContinuousCanvasGeometry.swift in Sources */,
 				D0000000000000000000000A /* BackupArchive.swift in Sources */,
 				DC0000000000000000000001 /* BackupExportArtifact.swift in Sources */,
 				D50000000000000000000003 /* BackupImportPresentationState.swift in Sources */,

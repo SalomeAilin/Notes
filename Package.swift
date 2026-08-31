@@ -22,6 +22,7 @@ let package = Package(
         "Models/BaiduBrokerProtocolV1.swift",
         "Models/BaiduNetdiskAccount.swift",
         "Models/BaiduNetdiskBackup.swift",
+        "Models/ContinuousCanvasGeometry.swift",
         "Models/LibraryDocument.swift",
         "Networking/BaiduBackupUploadCoordinator.swift",
         "Networking/BaiduHTTPTransport.swift",
