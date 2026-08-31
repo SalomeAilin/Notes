@@ -5,6 +5,7 @@ notes_repository_root="${0:A:h:h}"
 notes_script_path="${0:A}"
 notes_readiness_script="$notes_repository_root/scripts/verify-ipad-readiness.sh"
 notes_developer_dir="${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer}"
+notes_expected_bundle_id="com.salomeailin.InkNotes"
 notes_app_path=""
 notes_provenance_path=""
 notes_device_name=""
@@ -270,17 +271,18 @@ notes_app_version="$(
 notes_app_build="$(
   plutil -extract CFBundleVersion raw -o - "$notes_info_plist" 2>/dev/null
 )" || fail_readiness "Verified app metadata changed; install was not attempted"
-[[ "$notes_bundle_id" == "com.salomeailin.InkNotes" \
+[[ "$notes_bundle_id" == "$notes_expected_bundle_id" \
   && "$notes_app_version" == <->.<->.<-> \
   && "$notes_app_build" == <-> ]] \
   || fail_readiness "Verified app identity changed; install was not attempted"
-notes_read_internal_display_name \
+notes_read_internal_placeholder_display_name \
   "$notes_info_plist" \
   CFBundleDisplayName \
   "$notes_temp_dir" \
   notes_display_name \
   notes_display_name_raw \
   "Installed-app expected display name" \
+  "$notes_expected_bundle_id" \
   || fail_readiness "App display name is invalid; install was not attempted"
 
 notes_install_json="$notes_temp_dir/install-result.json"

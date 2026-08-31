@@ -784,8 +784,8 @@ struct CompatibilityContractTests {
     #expect(packageSource.contains("\"Models/AppBuildIdentity.swift\""))
   }
 
-  @Test("Buildable product uses one validated source display name")
-  func buildableProductUsesOneValidatedSourceDisplayName() throws {
+  @Test("Buildable product derives one audited internal placeholder from stable identity")
+  func buildableProductDerivesOneAuditedInternalPlaceholder() throws {
     let repositoryRoot = repositoryRootURL()
     let plistURL = repositoryRoot.appendingPathComponent("InkNotes/Info.plist")
     let plistData = try Data(contentsOf: plistURL)
@@ -819,9 +819,21 @@ struct CompatibilityContractTests {
         encoding: .utf8
       )
       if relativePath != "scripts/internal-display-name-contract.zsh" {
-        #expect(source.contains("notes_read_internal_display_name"))
+        #expect(source.contains("notes_read_internal_placeholder_display_name"))
       }
     }
+
+    let displayNameContractSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent(
+        "scripts/internal-display-name-contract.zsh"
+      ),
+      encoding: .utf8
+    )
+    #expect(displayNameContractSource.contains("notes_read_validated_display_name"))
+    #expect(
+      displayNameContractSource.contains("notes_read_internal_placeholder_display_name")
+    )
+    #expect(displayNameContractSource.contains("notes_expected_bundle_identifier##*."))
 
     let signedBuildSource = try String(
       contentsOf: repositoryRoot.appendingPathComponent("scripts/build-signed-ipad-app.sh"),

@@ -27,7 +27,7 @@ notes_validate_internal_display_name_file() {
   fi
 }
 
-notes_read_internal_display_name() {
+notes_read_validated_display_name() {
   local notes_plist_path="$1"
   local notes_plist_key="$2"
   local notes_temporary_directory="$3"
@@ -76,6 +76,29 @@ notes_read_internal_display_name() {
   notes_validate_internal_display_name_file "$notes_raw_path" "$notes_label" || return 1
   printf -v "$notes_result_variable" '%s' "$notes_value" || return 1
   printf -v "$notes_raw_path_variable" '%s' "$notes_raw_path" || return 1
+}
+
+notes_read_internal_placeholder_display_name() {
+  local notes_result_variable="$4"
+  local notes_label="${6:-Internal display name}"
+  local notes_expected_bundle_identifier="$7"
+  local notes_product_name
+  local notes_expected_internal_display_name
+
+  notes_product_name="${notes_expected_bundle_identifier##*.}"
+  if [[ "$notes_product_name" == "$notes_expected_bundle_identifier" \
+    || ! "$notes_product_name" =~ ^[A-Za-z][A-Za-z0-9_-]*$ ]]
+  then
+    print -u2 -- "$notes_label stable bundle identifier is invalid"
+    return 1
+  fi
+  notes_expected_internal_display_name="${notes_product_name} Dev"
+
+  notes_read_validated_display_name "${@:1:6}" || return 1
+  if [[ "${(P)notes_result_variable}" != "$notes_expected_internal_display_name" ]]; then
+    print -u2 -- "$notes_label is not the internal placeholder derived from stable identity"
+    return 1
+  fi
 }
 
 notes_assert_no_localized_display_name_override() {

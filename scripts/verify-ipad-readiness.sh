@@ -196,13 +196,14 @@ chmod 600 "$notes_committed_privacy_manifest"
 plutil -lint "$notes_committed_privacy_manifest" >/dev/null 2>&1 \
   || fail "Committed privacy manifest is invalid"
 
-notes_read_internal_display_name \
+notes_read_internal_placeholder_display_name \
   "$notes_committed_info_plist" \
   CFBundleDisplayName \
   "$notes_temp_dir" \
   notes_expected_display_name \
   notes_expected_display_name_raw \
   "Source internal display name" \
+  "$notes_expected_bundle_id" \
   || fail "Source internal display name is invalid"
 
 notes_project_file="$notes_committed_source_dir/project.pbxproj"
@@ -244,13 +245,14 @@ plutil -convert binary1 -o "$notes_built_privacy_normalized" \
 cmp -s "$notes_committed_privacy_normalized" "$notes_built_privacy_normalized" \
   || fail "Built privacy manifest does not match the provenance commit"
 notes_bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$notes_plist_path")"
-notes_read_internal_display_name \
+notes_read_internal_placeholder_display_name \
   "$notes_plist_path" \
   CFBundleDisplayName \
   "$notes_temp_dir" \
   notes_display_name \
   notes_display_name_raw \
   "Built internal display name" \
+  "$notes_expected_bundle_id" \
   || fail "Built internal display name is invalid"
 notes_app_version="$(plutil -extract CFBundleShortVersionString raw -o - "$notes_plist_path")"
 notes_app_build="$(plutil -extract CFBundleVersion raw -o - "$notes_plist_path")"
@@ -295,13 +297,14 @@ assert_provenance_equal() {
 }
 
 assert_provenance_equal bundleIdentifier "$notes_bundle_id"
-notes_read_internal_display_name \
+notes_read_internal_placeholder_display_name \
   "$notes_provenance_path" \
   displayName \
   "$notes_temp_dir" \
   notes_provenance_display_name \
   notes_provenance_display_name_raw \
   "Provenance display name" \
+  "$notes_expected_bundle_id" \
   || fail "Provenance display name is invalid"
 cmp -s "$notes_display_name_raw" "$notes_provenance_display_name_raw" \
   || fail "Provenance display name does not match the app"

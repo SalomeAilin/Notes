@@ -175,13 +175,14 @@ notes_display_name_contract="$notes_source_root/scripts/internal-display-name-co
 [[ -f "$notes_display_name_contract" && ! -L "$notes_display_name_contract" ]] \
   || fail "Internal display-name contract is missing from the source snapshot"
 source "$notes_display_name_contract"
-notes_read_internal_display_name \
+notes_read_internal_placeholder_display_name \
   "$notes_source_root/InkNotes/Info.plist" \
   CFBundleDisplayName \
   "$notes_temp_dir" \
   notes_expected_display_name \
   notes_expected_display_name_raw \
   "Source internal display name" \
+  "$notes_expected_bundle_id" \
   || fail "Source internal display name is invalid"
 
 notes_project_file="$notes_source_root/InkNotes.xcodeproj/project.pbxproj"
@@ -341,13 +342,14 @@ notes_assert_clean_worktree final
 
 codesign --verify --deep --strict "$notes_app_path"
 notes_built_bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$notes_app_path/Info.plist")"
-notes_read_internal_display_name \
+notes_read_internal_placeholder_display_name \
   "$notes_app_path/Info.plist" \
   CFBundleDisplayName \
   "$notes_temp_dir" \
   notes_built_display_name \
   notes_built_display_name_raw \
   "Built internal display name" \
+  "$notes_expected_bundle_id" \
   || fail "Built internal display name is invalid"
 notes_app_version="$(plutil -extract CFBundleShortVersionString raw -o - "$notes_app_path/Info.plist")"
 notes_app_build="$(plutil -extract CFBundleVersion raw -o - "$notes_app_path/Info.plist")"

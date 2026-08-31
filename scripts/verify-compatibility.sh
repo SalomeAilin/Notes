@@ -69,7 +69,7 @@ assert_internal_display_name_contract_rejects_invalid_values() {
   notes_fixture_plist="$notes_temp_dir/display-name-positive-control.plist"
   plutil -create xml1 "$notes_fixture_plist"
   plutil -insert CFBundleDisplayName -string "Valid Name" "$notes_fixture_plist"
-  notes_read_internal_display_name \
+  notes_read_validated_display_name \
     "$notes_fixture_plist" \
     CFBundleDisplayName \
     "$notes_temp_dir" \
@@ -79,7 +79,7 @@ assert_internal_display_name_contract_rejects_invalid_values() {
 
   notes_fixture_plist="$notes_temp_dir/display-name-missing-key.plist"
   plutil -create xml1 "$notes_fixture_plist"
-  if (notes_read_internal_display_name \
+  if (notes_read_validated_display_name \
     "$notes_fixture_plist" \
     CFBundleDisplayName \
     "$notes_temp_dir" \
@@ -94,7 +94,7 @@ assert_internal_display_name_contract_rejects_invalid_values() {
   notes_fixture_plist="$notes_temp_dir/display-name-non-string.plist"
   plutil -create xml1 "$notes_fixture_plist"
   plutil -insert CFBundleDisplayName -bool true "$notes_fixture_plist"
-  if (notes_read_internal_display_name \
+  if (notes_read_validated_display_name \
     "$notes_fixture_plist" \
     CFBundleDisplayName \
     "$notes_temp_dir" \
@@ -111,7 +111,7 @@ assert_internal_display_name_contract_rejects_invalid_values() {
     notes_fixture_plist="$notes_temp_dir/display-name-negative-control-$notes_invalid_index.plist"
     plutil -create xml1 "$notes_fixture_plist"
     plutil -insert CFBundleDisplayName -string "$notes_invalid_name" "$notes_fixture_plist"
-    if (notes_read_internal_display_name \
+    if (notes_read_validated_display_name \
       "$notes_fixture_plist" \
       CFBundleDisplayName \
       "$notes_temp_dir" \
@@ -123,6 +123,28 @@ assert_internal_display_name_contract_rejects_invalid_values() {
       exit 1
     fi
   done
+}
+
+assert_internal_placeholder_display_name_contract() {
+  local notes_fixture_plist="$notes_temp_dir/display-name-unapproved-alternate.plist"
+  local notes_fixture_value
+  local notes_fixture_raw_path
+
+  plutil -create xml1 "$notes_fixture_plist"
+  plutil -insert CFBundleDisplayName -string "Valid Name" "$notes_fixture_plist"
+
+  if (notes_read_internal_placeholder_display_name \
+    "$notes_fixture_plist" \
+    CFBundleDisplayName \
+    "$notes_temp_dir" \
+    notes_fixture_value \
+    notes_fixture_raw_path \
+    "Internal placeholder negative control" \
+    "$notes_expected_bundle_id") >/dev/null 2>&1
+  then
+    print -u2 "Internal placeholder contract accepted an unapproved alternate name"
+    exit 1
+  fi
 }
 
 assert_internal_display_name_reader_rejects_localized_overrides() {
@@ -681,6 +703,7 @@ assert_oauth_release_marker_scanner_detects_chinese_encodings
 assert_retired_brand_scanner_detects_chinese_encodings
 assert_tree_has_no_retired_brand_marker "InkNotes" "Shipping source"
 assert_internal_display_name_contract_rejects_invalid_values
+assert_internal_placeholder_display_name_contract
 assert_internal_display_name_reader_rejects_localized_overrides
 assert_exact_git_source_materializer_isolated
 
@@ -695,13 +718,14 @@ plutil -lint "$notes_source_privacy_manifest" >/dev/null \
     print -u2 "Source privacy manifest is invalid"
     exit 1
   }
-notes_read_internal_display_name \
+notes_read_internal_placeholder_display_name \
   "$notes_source_plist" \
   CFBundleDisplayName \
   "$notes_temp_dir" \
   notes_source_display_name \
   notes_source_display_name_raw \
-  "Source internal display name"
+  "Source internal display name" \
+  "$notes_expected_bundle_id"
 notes_source_uti="$(/usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations:0:UTTypeIdentifier' "$notes_source_plist")"
 notes_source_extension="$(/usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations:0:UTTypeTagSpecification:public.filename-extension:0' "$notes_source_plist")"
 notes_source_mime="$(/usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations:0:UTTypeTagSpecification:public.mime-type' "$notes_source_plist")"
@@ -834,13 +858,14 @@ for notes_configuration in Debug Release; do
     }
 
   notes_built_bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$notes_built_plist")"
-  notes_read_internal_display_name \
+  notes_read_internal_placeholder_display_name \
     "$notes_built_plist" \
     CFBundleDisplayName \
     "$notes_temp_dir" \
     notes_built_display_name \
     notes_built_display_name_raw \
-    "$notes_configuration built internal display name"
+    "$notes_configuration built internal display name" \
+    "$notes_expected_bundle_id"
   notes_minimum_os="$(plutil -extract MinimumOSVersion raw -o - "$notes_built_plist")"
   notes_device_family="$(plutil -extract UIDeviceFamily json -o - "$notes_built_plist")"
   notes_built_short_version="$(plutil -extract CFBundleShortVersionString raw -o - "$notes_built_plist")"
