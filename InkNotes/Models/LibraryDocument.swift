@@ -98,13 +98,13 @@ enum LibraryDocumentStructureError: LocalizedError, Equatable, Sendable {
   var errorDescription: String? {
     switch self {
     case .invalidStructure:
-      "笔记目录缺少笔记本或页面，原文件未被改写。"
+      "本地笔记内容不完整，原内容没有被改写。"
     case .duplicateNotebookID:
-      "笔记目录包含重复的笔记本标识，原文件未被改写。"
+      "本地笔记中出现重复的笔记本，原内容没有被改写。"
     case .duplicatePageID:
-      "笔记目录包含重复的页面标识，原文件未被改写。"
+      "本地笔记中出现重复的页面，原内容没有被改写。"
     case .invalidDate:
-      "笔记目录包含无效时间，原文件未被改写。"
+      "本地笔记的时间信息异常，原内容没有被改写。"
     }
   }
 }

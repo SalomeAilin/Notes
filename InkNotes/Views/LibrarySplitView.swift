@@ -59,7 +59,7 @@ struct LibrarySplitView: View {
         deletionTarget = nil
       }
     } message: {
-      Text("笔迹文件会保留在应用沙盒中，当前版本暂不提供恢复入口。")
+      Text("删除后暂时无法在应用内恢复。请确认不再需要这项内容。")
     }
     .alert("本地数据提示", isPresented: persistenceAlertIsPresented) {
       Button("知道了") {

@@ -104,7 +104,7 @@ struct LibraryStoreTests {
     await store.flush()
 
     #expect(store.isReadOnly)
-    #expect(store.persistenceError?.contains("重复的页面标识") == true)
+    #expect(store.persistenceError?.contains("重复的页面") == true)
     #expect(try Data(contentsOf: persistedLibrary.url) == persistedLibrary.data)
     #expect(try Data(contentsOf: drawingURL) == persistedDrawing)
   }
@@ -274,7 +274,7 @@ struct LibraryStoreTests {
     store.renameNotebook(id: notebookID, title: oversizedTitle)
 
     #expect(store.selectedNotebook?.title == originalTitle)
-    #expect(store.persistenceError?.contains("名称过长") == true)
+    #expect(store.persistenceError?.contains("名称太长") == true)
   }
 
   @Test("A page that would exceed the v1 manifest budget leaves store state unchanged")
@@ -303,7 +303,7 @@ struct LibraryStoreTests {
     #expect(store.selectedNotebookID == selectedNotebookID)
     #expect(store.selectedPageID == selectedPageID)
     #expect(store.currentDrawingData == drawingBefore)
-    #expect(store.persistenceError?.contains("备份目录") == true)
+    #expect(store.persistenceError?.contains("包含的笔记较多") == true)
     await store.flush()
     #expect(try Data(contentsOf: libraryURL) == persistedBefore)
   }
@@ -334,7 +334,7 @@ struct LibraryStoreTests {
 
     #expect(store.library == libraryBefore)
     #expect(store.selectedPageID == selectedPageID)
-    #expect(store.persistenceError?.contains("备份目录") == true)
+    #expect(store.persistenceError?.contains("包含的笔记较多") == true)
     await store.flush()
     #expect(try Data(contentsOf: libraryURL) == persistedBefore)
   }
@@ -396,7 +396,7 @@ struct LibraryStoreTests {
     store.renamePage(id: repairPage.id, title: repairTitle)
 
     #expect(store.library.notebooks[bulkNotebookIndex].pages[repairPageIndex].title == "x")
-    #expect(store.persistenceError?.contains("备份目录") == true)
+    #expect(store.persistenceError?.contains("包含的笔记较多") == true)
     await store.flush()
     let persisted = try #require(try await repository.loadLibrary())
     #expect(persisted.notebooks.map(\.id) == store.library.notebooks.map(\.id))

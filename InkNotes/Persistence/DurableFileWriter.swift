@@ -23,13 +23,13 @@ enum DurableFileWriterError: LocalizedError, Equatable {
   var errorDescription: String? {
     switch self {
     case .destinationAlreadyExists:
-      "目标文件已存在，未覆盖原文件。"
+      "这里已有内容，原内容没有被覆盖。"
     case .invalidStoreLayout:
-      "本地存储目录或文件类型无效，已停止写入。"
+      "本地笔记存储异常。为保护原内容，已停止保存。"
     case .persistenceFailure:
-      "无法可靠地持久化本地文件，已停止当前操作。"
+      "这次保存没有可靠完成，请稍后重试。原内容没有被主动覆盖。"
     case .siblingFileLimitReached:
-      "本地持久化文件数量已达到安全上限，已停止新增文件。"
+      "本地保存记录过多，暂时无法继续新增。请先导出备份。"
     }
   }
 }

@@ -91,58 +91,43 @@ enum BackupArchiveError: LocalizedError, Equatable {
 
   var errorDescription: String? {
     switch self {
-    case .archiveTooLarge(_, let maximum):
-      "备份文件超过 \(maximum) 字节的安全上限。"
+    case .archiveTooLarge:
+      "备份内容较多，当前版本暂时无法一次处理。原有笔记没有改动。"
     case .truncatedHeader:
-      "备份文件头不完整。"
+      "这份备份不完整，未导入任何内容。"
     case .invalidMagic:
       "这不是受支持的笔记备份文件。"
-    case .unsupportedVersion(let found):
-      "备份格式版本 \(found) 暂不受支持。"
-    case .unsupportedFlags(let found):
-      "备份文件包含暂不受支持的标记 \(found)。"
-    case .manifestTooLarge(_, let maximum):
-      "备份目录超过 \(maximum) 字节的安全上限。"
-    case .invalidArchiveLength:
-      "备份文件的长度字段无效。"
-    case .truncatedArchive:
-      "备份文件内容不完整。"
-    case .trailingData:
-      "备份文件末尾包含未声明的数据。"
-    case .archiveChecksumMismatch:
-      "备份文件完整性校验失败。"
-    case .invalidManifest:
-      "备份目录无法解析。"
-    case .invalidSourceMetadata:
-      "备份来源信息无效。"
-    case .unsupportedLibrarySchema(let found):
-      "笔记数据版本 \(found) 暂不受支持。"
+    case .unsupportedVersion, .unsupportedFlags, .unsupportedLibrarySchema:
+      "这份备份由其他版本创建，请更新应用后再试。"
+    case .manifestTooLarge:
+      "这份备份包含的笔记较多，当前版本暂时无法处理。原有笔记没有改动。"
+    case .invalidArchiveLength, .truncatedArchive, .trailingData,
+      .archiveChecksumMismatch, .invalidManifest, .invalidSourceMetadata:
+      "这份备份已损坏或不完整，未导入任何内容。"
     case .inconsistentLibrarySchema:
-      "备份目录中的笔记数据版本不一致。"
+      "这份备份的内容不一致，未导入任何内容。"
     case .invalidLibraryStructure:
-      "备份目录缺少笔记本或页面。"
-    case .tooManyNotebooks(_, let maximum):
-      "备份中的笔记本数量超过 \(maximum) 个。"
-    case .tooManyPages(_, let maximum):
-      "备份中的页面数量超过 \(maximum) 个。"
+      "这份备份缺少笔记本或页面，未导入任何内容。"
+    case .tooManyNotebooks:
+      "这份备份包含的笔记本太多，当前版本暂时无法处理。"
+    case .tooManyPages:
+      "这份备份包含的页面太多，当前版本暂时无法处理。"
     case .invalidTitle:
       "备份中包含空标题或过长标题。"
     case .duplicateNotebookID:
-      "备份中包含重复的笔记本标识。"
+      "备份中包含重复的笔记本，未导入任何内容。"
     case .duplicatePageID:
-      "备份中包含重复的页面标识。"
+      "备份中包含重复的页面，未导入任何内容。"
     case .drawingIndexMismatch:
-      "备份中的页面与笔迹索引不一致。"
+      "备份中的页面与笔迹不一致，未导入任何内容。"
     case .duplicateDrawingEntry:
-      "备份中包含重复的笔迹条目。"
+      "备份中包含重复的笔迹，未导入任何内容。"
     case .invalidDrawingLayout:
-      "备份中的笔迹数据布局无效。"
-    case .drawingTooLarge(_, _, let maximum):
-      "备份中的单页笔迹超过 \(maximum) 字节的安全上限。"
-    case .invalidDrawingDigest:
-      "备份中的笔迹校验值格式无效。"
-    case .drawingChecksumMismatch:
-      "备份中的笔迹完整性校验失败。"
+      "备份中的笔迹内容不完整，未导入任何内容。"
+    case .drawingTooLarge:
+      "备份中有一页内容较多，当前版本暂时无法处理。原有笔记没有改动。"
+    case .invalidDrawingDigest, .drawingChecksumMismatch:
+      "这份备份中的一页已损坏或不完整，未导入任何内容。"
     }
   }
 }

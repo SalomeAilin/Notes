@@ -12,16 +12,12 @@ enum BackupFileReaderError: LocalizedError, Equatable, Sendable {
     case .unsupportedURL:
       "请选择本机或系统“文件”中的笔记备份。"
     case .fileIsNotRegular:
-      "请选择一个普通的笔记备份文件。"
+      "请选择一个笔记备份文件。"
     case .symbolicLink:
-      "不能通过符号链接读取笔记备份。"
-    case .fileTooLarge(let maximum):
-      "备份文件超过 \(Self.formatByteCount(maximum)) 的安全上限。"
+      "无法安全读取所选备份，请从系统“文件”中直接选择原文件。"
+    case .fileTooLarge:
+      "这份备份较大，当前版本暂时无法打开。请保留文件并更新应用后再试。"
     }
-  }
-
-  private static func formatByteCount(_ count: Int) -> String {
-    ByteCountFormatter.string(fromByteCount: Int64(count), countStyle: .file)
   }
 }
 

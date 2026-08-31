@@ -41,6 +41,50 @@ struct CompatibilityContractTests {
     #expect(LibraryDocument.currentSchemaVersion == 1)
   }
 
+  @Test("User-facing recovery messages explain outcomes without implementation jargon")
+  func recoveryMessagesStayUserCentered() throws {
+    let messages = [
+      BackupArchiveError.archiveTooLarge(actual: 2, maximum: 1).localizedDescription,
+      BackupArchiveError.unsupportedVersion(found: 2).localizedDescription,
+      BackupArchiveError.manifestTooLarge(actual: 2, maximum: 1).localizedDescription,
+      BackupArchiveError.invalidDrawingDigest(pageID: blankPageID).localizedDescription,
+      BackupArchiveError.drawingTooLarge(
+        pageID: blankPageID,
+        actual: 2,
+        maximum: 1
+      ).localizedDescription,
+      BackupSnapshotError.invalidDrawing.localizedDescription,
+      BackupSnapshotError.backupIdentityConflict.localizedDescription,
+      BackupFileReaderError.symbolicLink.localizedDescription,
+      BackupFileReaderError.fileTooLarge(maximum: 1).localizedDescription,
+      DrawingRepositoryError.unsupportedSchema(found: 2).localizedDescription,
+      DurableFileWriterError.invalidStoreLayout.localizedDescription,
+      SegmentedDrawingError.invalidAuthority.localizedDescription,
+      SegmentedDrawingError.tooManyEntries(actual: 2, maximum: 1).localizedDescription,
+    ]
+    let implementationTerms = [
+      "PencilKit", "UTF-8", "字节", "分段", "索引", "摘要", "符号链接", "沙盒", "HTTP", "SHA",
+    ]
+    for message in messages {
+      #expect(!message.isEmpty)
+      for term in implementationTerms {
+        #expect(!message.localizedCaseInsensitiveContains(term))
+      }
+    }
+
+    let repositoryRoot = repositoryRootURL()
+    let storeSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent("InkNotes/Stores/LibraryStore.swift"),
+      encoding: .utf8
+    )
+    let libraryViewSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent("InkNotes/Views/LibrarySplitView.swift"),
+      encoding: .utf8
+    )
+    #expect(!storeSource.contains("名称过长：最多允许"))
+    #expect(!libraryViewSource.contains("应用沙盒"))
+  }
+
   @Test("Repository writes the historical directory and filename layout")
   func historicalPersistenceLayoutRemainsStable() async throws {
     let fileManager = FileManager.default

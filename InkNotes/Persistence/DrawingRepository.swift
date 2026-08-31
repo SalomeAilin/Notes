@@ -34,19 +34,19 @@ enum DrawingRepositoryError: LocalizedError, Equatable {
   var errorDescription: String? {
     switch self {
     case .persistenceDirectoryUnavailable:
-      "无法访问应用的永久存储目录。为避免笔记被写入可能清理的临时目录，当前已停止保存。"
-    case .unsupportedSchema(let found):
-      "笔记数据版本 \(found) 暂不受支持，原文件未被改写。"
+      "无法访问可靠的本地存储位置。为保护笔记，当前已停止保存。"
+    case .unsupportedSchema:
+      "这份本地笔记由其他版本创建，请更新应用后再试。原内容没有被改写。"
     case .drawingTooLarge:
       "这页内容较多，当前版本无法一次完整打开，原笔记没有改动。"
     case .restoreTransactionTooLarge:
-      "备份恢复记录异常增大，已停止导入以保护现有笔记。"
-    case .tooManyRestoreTransactions(let maximum):
-      "本地备份恢复记录已达到 \(maximum) 份的安全上限。"
+      "无法确认此前的恢复记录。为保护现有笔记，已停止导入。"
+    case .tooManyRestoreTransactions:
+      "本地恢复记录过多，暂时无法继续导入。原有笔记没有改动。"
     case .restoreTransactionAlreadyExists:
-      "这份备份的恢复记录已存在，未覆盖原记录。"
+      "这份备份已有恢复记录，原记录没有被覆盖。"
     case .invalidRestoreTransaction:
-      "备份恢复记录损坏，已停止导入以保护现有笔记。"
+      "无法确认此前的恢复记录。为保护现有笔记，已停止导入。"
     }
   }
 }

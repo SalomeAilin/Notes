@@ -76,11 +76,11 @@ enum SegmentedDrawingError: LocalizedError, Equatable {
     case .invalidDrawing:
       "这页笔迹暂时无法安全整理，原笔记没有改动。"
     case .invalidAuthority:
-      "这页笔迹的分段索引无法验证，已停止读取以保护原笔记。"
+      "这页笔迹无法完整确认，已停止读取以保护原笔记。"
     case .authorityTooLarge:
-      "这页笔迹的索引异常增大，已停止处理以保护原笔记。"
+      "这页笔迹的记录异常增大，已停止处理以保护原笔记。"
     case .tooManyEntries:
-      "这页笔迹包含过多分段，当前版本已停止处理以保护原笔记。"
+      "这页内容较多，当前版本已停止处理以保护原笔记。"
     case .segmentTooLarge:
       "这页的局部笔迹过于密集，当前版本无法安全整理，原笔记没有改动。"
     case .invalidSegmentDigest, .segmentByteCountMismatch, .segmentChecksumMismatch:

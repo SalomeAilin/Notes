@@ -36,15 +36,15 @@ enum BackupSnapshotError: LocalizedError, Equatable {
   var errorDescription: String? {
     switch self {
     case .invalidDrawing:
-      "备份中包含无法解析的 PencilKit 笔迹，未写入任何导入内容。"
+      "备份中有一页无法读取，未导入任何内容。"
     case .backupIdentityConflict:
-      "这份备份与已有恢复记录使用相同标识，但内容校验值不同，已停止导入。"
+      "这份备份与此前的导入记录不一致。为避免重复或覆盖，已停止导入。"
     case .invalidRestoreTransaction:
-      "本地备份恢复记录无效，已停止导入以保护现有笔记。"
+      "无法确认此前的恢复记录。为保护现有笔记，已停止导入。"
     case .partialPreviousImport:
-      "检测到这份备份此前导入的部分内容，已停止重复追加。"
+      "这份备份以前只导入了一部分。为避免产生重复内容，已停止导入。"
     case .orphanDrawingConflict:
-      "恢复目标位置已有不同的孤立笔迹，已停止导入且未覆盖该文件。"
+      "导入位置已有其他内容。为避免覆盖，已停止导入。"
     }
   }
 }

@@ -599,7 +599,7 @@ final class LibraryStore: ObservableObject {
     let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !cleaned.isEmpty else { return nil }
     guard cleaned.utf8.count <= BackupArchiveLimits.maximumTitleUTF8ByteCount else {
-      persistenceError = "名称过长：最多允许 \(BackupArchiveLimits.maximumTitleUTF8ByteCount) 个 UTF-8 字节。"
+      persistenceError = "名称太长，请缩短后再试。"
       return nil
     }
     return cleaned

@@ -77,7 +77,7 @@ struct DrawingRepositoryTests {
 
     #expect(!store.isLoading)
     #expect(store.isReadOnly)
-    #expect(store.persistenceError?.contains("永久存储目录") == true)
+    #expect(store.persistenceError?.contains("可靠的本地存储位置") == true)
     #expect(!FileManager.default.fileExists(atPath: temporaryFallback.path))
   }
 
