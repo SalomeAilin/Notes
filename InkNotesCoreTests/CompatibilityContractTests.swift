@@ -1048,6 +1048,39 @@ struct CompatibilityContractTests {
     #expect(!editorSource.contains("PageBackgroundView(background:"))
   }
 
+  @Test("The browser opens only on user action and saves only confirmed selected text")
+  func browserExcerptFlowRemainsUserInitiated() throws {
+    let repositoryRoot = repositoryRootURL()
+    let editorSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent(
+        "InkNotes/Views/PageEditorView.swift"
+      ),
+      encoding: .utf8
+    )
+    let browserSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent(
+        "InkNotes/Views/PageSourceBrowserView.swift"
+      ),
+      encoding: .utf8
+    )
+
+    #expect(editorSource.contains("showingPageSourceBrowser = browserPageID != nil"))
+    #expect(editorSource.contains("Label(\"网页资料\", systemImage: \"safari\")"))
+    #expect(browserSource.contains("if browser.hasOpenedPage"))
+    #expect(browserSource.contains("Button(\"打开\", action: openAddress)"))
+    #expect(browserSource.contains("Label(\"保存选中文字\""))
+    #expect(browserSource.contains("PageSourceConfirmationView("))
+    #expect(browserSource.contains("Button(\"保存到当前页\", action: onSave)"))
+    #expect(browserSource.contains("try await store.savePageSource(source, to: pageID)"))
+    #expect(browserSource.contains("configuration.websiteDataStore = .nonPersistent()"))
+    #expect(browserSource.contains("components.scheme?.lowercased() == \"https\""))
+    #expect(browserSource.contains("window.getSelection"))
+    #expect(!browserSource.contains("WKUserScript("))
+    #expect(!browserSource.contains("addScriptMessageHandler"))
+    #expect(!browserSource.localizedCaseInsensitiveContains("openai"))
+    #expect(!browserSource.localizedCaseInsensitiveContains("chatgpt"))
+  }
+
   @Test("Device signing stays local and the current build number is unambiguous")
   func deviceSigningConfigurationRemainsLocal() throws {
     let repositoryRoot = repositoryRootURL()

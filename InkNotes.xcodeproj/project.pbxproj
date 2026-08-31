@@ -13,6 +13,7 @@
 		D00000000000000000000004 /* LibraryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000004 /* LibraryStore.swift */; };
 		D00000000000000000000005 /* LibrarySplitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000005 /* LibrarySplitView.swift */; };
 		D00000000000000000000006 /* PageEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000006 /* PageEditorView.swift */; };
+		D01000000000000000000001 /* PageSourceBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C01000000000000000000001 /* PageSourceBrowserView.swift */; };
 		D00000000000000000000007 /* PencilCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000007 /* PencilCanvas.swift */; };
 		D00000000000000000000008 /* PageBackgroundView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000008 /* PageBackgroundView.swift */; };
 		D00000000000000000000009 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000009 /* Assets.xcassets */; };
@@ -50,6 +51,7 @@
 		C00000000000000000000004 /* LibraryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryStore.swift; sourceTree = "<group>"; };
 		C00000000000000000000005 /* LibrarySplitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibrarySplitView.swift; sourceTree = "<group>"; };
 		C00000000000000000000006 /* PageEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageEditorView.swift; sourceTree = "<group>"; };
+		C01000000000000000000001 /* PageSourceBrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageSourceBrowserView.swift; sourceTree = "<group>"; };
 		C00000000000000000000007 /* PencilCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PencilCanvas.swift; sourceTree = "<group>"; };
 		C00000000000000000000008 /* PageBackgroundView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageBackgroundView.swift; sourceTree = "<group>"; };
 		C00000000000000000000009 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -179,6 +181,7 @@
 				C0000000000000000000000F /* BackupTransferView.swift */,
 				C00000000000000000000005 /* LibrarySplitView.swift */,
 				C00000000000000000000006 /* PageEditorView.swift */,
+				C01000000000000000000001 /* PageSourceBrowserView.swift */,
 				B00000000000000000000009 /* Canvas */,
 			);
 			path = Views;
@@ -308,6 +311,7 @@
 				D0000000000000000000000D /* BackupTransferView.swift in Sources */,
 				D00000000000000000000005 /* LibrarySplitView.swift in Sources */,
 				D00000000000000000000006 /* PageEditorView.swift in Sources */,
+				D01000000000000000000001 /* PageSourceBrowserView.swift in Sources */,
 				D00000000000000000000007 /* PencilCanvas.swift in Sources */,
 				D00000000000000000000008 /* PageBackgroundView.swift in Sources */,
 			);

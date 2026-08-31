@@ -5,6 +5,8 @@ struct PageEditorView: View {
   @StateObject private var canvasController = PencilCanvasController()
   @AppStorage("pencilOnly") private var pencilOnly = true
   @State private var showingClearConfirmation = false
+  @State private var showingPageSourceBrowser = false
+  @State private var browserPageID: UUID?
 
   var body: some View {
     Group {
@@ -35,6 +37,18 @@ struct PageEditorView: View {
     } message: {
       Text("此操作不能撤销。")
     }
+    .sheet(
+      isPresented: $showingPageSourceBrowser,
+      onDismiss: {
+        browserPageID = nil
+      },
+      content: {
+        if let browserPageID {
+          PageSourceBrowserView(pageID: browserPageID)
+            .environmentObject(store)
+        }
+      }
+    )
   }
 
   private func editor(for page: NotePage) -> some View {
@@ -91,6 +105,17 @@ struct PageEditorView: View {
         Label("纸张", systemImage: "square.grid.3x3")
       }
       .disabled(store.isReadOnly || store.isBackupTransferInProgress)
+
+      Button {
+        browserPageID = store.selectedPageID
+        showingPageSourceBrowser = browserPageID != nil
+      } label: {
+        Label("网页资料", systemImage: "safari")
+      }
+      .disabled(
+        store.selectedPageID == nil || store.isReadOnly || store.isDrawingLoading
+          || store.isBackupTransferInProgress || store.isPageSourceSaveInProgress
+      )
 
       Button {
         pencilOnly.toggle()

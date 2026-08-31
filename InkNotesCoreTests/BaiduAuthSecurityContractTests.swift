@@ -73,8 +73,8 @@ struct BaiduAuthSecurityContractTests {
     }
   }
 
-  @Test("Outbound data capabilities remain confined to the dormant Baidu implementation")
-  func outboundDataCapabilitiesRemainQuarantined() throws {
+  @Test("Outbound data capabilities remain confined to explicitly reviewed user flows")
+  func outboundDataCapabilitiesRemainInventoried() throws {
     let rootURL = try repositoryRootURL()
     let expectedFindingsByPath: [String: Set<OutboundDataFinding>] = [
       "InkNotes/Networking/BaiduHTTPTransport.swift": [.networkPrimitive],
@@ -82,6 +82,7 @@ struct BaiduAuthSecurityContractTests {
       "InkNotes/Networking/BaiduNetdiskBackupUploader.swift": [.networkPrimitive],
       "InkNotes/Networking/BaiduRemoteBackupContentVerifier.swift": [.networkPrimitive],
       "InkNotes/Networking/BaiduRemoteBackupMetadataObserver.swift": [.networkPrimitive],
+      "InkNotes/Views/PageSourceBrowserView.swift": [.networkPrimitive],
     ]
     let expectedImportedModules = Set([
       "Combine",
@@ -94,6 +95,7 @@ struct BaiduAuthSecurityContractTests {
       "SwiftUI",
       "UIKit",
       "UniformTypeIdentifiers",
+      "WebKit",
     ])
     let expectedForeignSymbolsByPath = [
       "InkNotes/Persistence/BaiduUploadReconciliationRepository.swift": Set(["flock"])

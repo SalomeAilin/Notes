@@ -209,6 +209,60 @@ struct LibraryStoreTests {
     )
   }
 
+  @Test("A user-confirmed source is saved to the current page and its next backup")
+  @MainActor
+  func confirmedSourceIsDurableAndBackedUp() async throws {
+    let rootURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+
+    let repository = DrawingRepository(rootURL: rootURL)
+    let store = LibraryStore(repository: repository)
+    try await waitUntil { !store.isLoading }
+    let pageID = try #require(store.selectedPageID)
+    let source = PageSourceExcerpt(
+      id: UUID(uuidString: "72000000-0000-0000-0000-000000000001")!,
+      title: "用户确认的网页",
+      excerpt: "只保存用户明确选择的这一段。",
+      sourceURL: URL(string: "https://example.com/confirmed")!,
+      capturedAt: Date(timeIntervalSince1970: 1_700_000_004)
+    )
+
+    try await store.savePageSource(source, to: pageID)
+    #expect(store.currentPageSources == [source])
+    #expect(!store.isPageSourceSaveInProgress)
+    #expect(try await repository.loadPageSources(pageID: pageID) == [source])
+
+    let backup = try await store.makeBackup()
+    let decoded = try BackupArchiveCodec.decode(backup.data)
+    #expect(decoded.pageSources[pageID] == [source])
+  }
+
+  @Test("An unsafe source is rejected without changing the current page")
+  @MainActor
+  func unsafeSourceDoesNotChangeCurrentPage() async throws {
+    let rootURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+
+    let repository = DrawingRepository(rootURL: rootURL)
+    let store = LibraryStore(repository: repository)
+    try await waitUntil { !store.isLoading }
+    let pageID = try #require(store.selectedPageID)
+    let source = PageSourceExcerpt(
+      title: "不安全的来源",
+      excerpt: "不能写入当前页。",
+      sourceURL: URL(string: "http://example.com/not-secure")!
+    )
+
+    await #expect(throws: PageSourceError.invalidURL) {
+      try await store.savePageSource(source, to: pageID)
+    }
+    #expect(store.currentPageSources.isEmpty)
+    #expect(!store.isPageSourceSaveInProgress)
+    #expect(try await repository.loadPageSources(pageID: pageID).isEmpty)
+  }
+
   @Test("A repeated import keeps the current selection and adds nothing")
   @MainActor
   func repeatedImportKeepsCurrentSelection() async throws {

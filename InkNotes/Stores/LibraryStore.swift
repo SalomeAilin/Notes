@@ -4,11 +4,17 @@ import PencilKit
 
 private enum LibraryStoreError: LocalizedError {
   case backupUnavailable
+  case pageSourceUnavailable
+  case pageChanged
 
   var errorDescription: String? {
     switch self {
     case .backupUnavailable:
       "当前正在读取、保存或保护笔记，请稍后再试。"
+    case .pageSourceUnavailable:
+      "当前页面暂时不能保存来源，请稍后再试。"
+    case .pageChanged:
+      "页面已经切换，请回到原页面后重新保存。"
     }
   }
 }
@@ -31,6 +37,7 @@ final class LibraryStore: ObservableObject {
   @Published private(set) var isDrawingLoading = false
   @Published private(set) var isReadOnly = false
   @Published private(set) var isBackupTransferInProgress = false
+  @Published private(set) var isPageSourceSaveInProgress = false
   @Published private(set) var persistenceError: String?
 
   private let repository: DrawingRepository
@@ -59,10 +66,12 @@ final class LibraryStore: ObservableObject {
 
   var canManageBackups: Bool {
     !isLoading && !isDrawingLoading && !isReadOnly && !isBackupTransferInProgress
+      && !isPageSourceSaveInProgress
   }
 
   func selectNotebook(_ id: UUID) {
     guard !isLoading, !isDrawingLoading, !isBackupTransferInProgress,
+      !isPageSourceSaveInProgress,
       id != selectedNotebookID
     else { return }
     guard let notebook = library.notebooks.first(where: { $0.id == id }),
@@ -82,6 +91,7 @@ final class LibraryStore: ObservableObject {
 
   func selectPage(_ id: UUID) {
     guard !isLoading, !isDrawingLoading, !isBackupTransferInProgress,
+      !isPageSourceSaveInProgress,
       id != selectedPageID
     else { return }
     guard selectedNotebook?.pages.contains(where: { $0.id == id }) == true else { return }
@@ -272,6 +282,33 @@ final class LibraryStore: ObservableObject {
       pageAt: location.page
     )
     guard acceptManifestCandidate(candidate, allowNonGrowingOverLimit: true) else { return }
+    scheduleLibrarySave()
+  }
+
+  func savePageSource(_ source: PageSourceExcerpt, to pageID: UUID) async throws {
+    guard !isLoading, !isDrawingLoading, !isReadOnly, !isBackupTransferInProgress,
+      !isPageSourceSaveInProgress
+    else {
+      throw LibraryStoreError.pageSourceUnavailable
+    }
+    guard selectedPageID == pageID, let location = pageLocation(id: pageID) else {
+      throw LibraryStoreError.pageChanged
+    }
+
+    let validatedSource = try source.validated()
+    let candidate = try PageSourceDocument(
+      pageID: pageID,
+      sources: currentPageSources + [validatedSource]
+    ).validated(expectedPageID: pageID).sources
+
+    isPageSourceSaveInProgress = true
+    defer { isPageSourceSaveInProgress = false }
+    try await repository.savePageSources(candidate, pageID: pageID)
+    guard selectedPageID == pageID else {
+      throw LibraryStoreError.pageChanged
+    }
+    currentPageSources = candidate
+    touch(notebookAt: location.notebook, pageAt: location.page)
     scheduleLibrarySave()
   }
 
