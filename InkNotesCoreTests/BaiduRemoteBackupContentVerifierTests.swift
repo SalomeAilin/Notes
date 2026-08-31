@@ -8,6 +8,9 @@ import Testing
 struct BaiduRemoteBackupContentVerifierTests {
   private let backupID = UUID(uuidString: "B8000000-0000-0000-0000-000000000001")!
   private let fsID: UInt64 = 8_001
+  private let verificationChallenge = UUID(
+    uuidString: "B8000000-0000-0000-0000-000000000003"
+  )!
 
   @Test("An unavailable credential stops before metadata and download requests")
   func unavailableCredentialSendsNoVerificationRequest() async throws {
@@ -34,7 +37,12 @@ struct BaiduRemoteBackupContentVerifierTests {
         .unavailableForRequest
       )
     ) {
-      try await verifier.verify(record: record, fsID: fsID, credential: credential)
+      try await verifier.verify(
+        record: record,
+        fsID: fsID,
+        verificationChallenge: verificationChallenge,
+        credential: credential
+      )
     }
     #expect(await metadataTransport.requestCount() == 0)
     #expect(await byteStreamer.requestCount() == 0)
@@ -67,7 +75,12 @@ struct BaiduRemoteBackupContentVerifierTests {
         .unavailableForRequest
       )
     ) {
-      try await verifier.verify(record: record, fsID: fsID, credential: credential)
+      try await verifier.verify(
+        record: record,
+        fsID: fsID,
+        verificationChallenge: verificationChallenge,
+        credential: credential
+      )
     }
     #expect(await metadataTransport.requestCount() == 1)
     #expect(await byteStreamer.requestCount() == 0)
@@ -130,6 +143,7 @@ struct BaiduRemoteBackupContentVerifierTests {
     ).verify(
       record: record,
       fsID: fsID,
+      verificationChallenge: verificationChallenge,
       credential: try credential(scope: record.accountScope, token: secret)
     )
 
@@ -139,10 +153,12 @@ struct BaiduRemoteBackupContentVerifierTests {
     #expect(
       result.verification
         == .contentVerified(
-          BaiduVerifiedRemoteBackupContent(
+          BaiduVerifiedRemoteBackupContentProof.testingOnly(
+            record: record,
             fsID: fsID,
             byteCount: UInt64(archive.count),
-            sha256: Self.sha256Hex(archive)
+            sha256: Self.sha256Hex(archive),
+            verificationChallenge: verificationChallenge
           )
         )
     )
@@ -174,6 +190,7 @@ struct BaiduRemoteBackupContentVerifierTests {
     ).verify(
       record: record,
       fsID: fsID,
+      verificationChallenge: verificationChallenge,
       credential: try credential(scope: record.accountScope)
     )
 
@@ -229,6 +246,7 @@ struct BaiduRemoteBackupContentVerifierTests {
     ).verify(
       record: record,
       fsID: fsID,
+      verificationChallenge: verificationChallenge,
       credential: try credential(scope: record.accountScope)
     )
 
@@ -260,6 +278,7 @@ struct BaiduRemoteBackupContentVerifierTests {
       try await verifier.verify(
         record: record,
         fsID: fsID,
+        verificationChallenge: verificationChallenge,
         credential: self.credential(scope: record.accountScope)
       )
     }
@@ -290,6 +309,7 @@ struct BaiduRemoteBackupContentVerifierTests {
       ).verify(
         record: record,
         fsID: self.fsID,
+        verificationChallenge: verificationChallenge,
         credential: self.credential(scope: record.accountScope)
       )
     }
@@ -320,6 +340,7 @@ struct BaiduRemoteBackupContentVerifierTests {
       ).verify(
         record: record,
         fsID: self.fsID,
+        verificationChallenge: verificationChallenge,
         credential: self.credential(scope: record.accountScope)
       )
     }
@@ -346,6 +367,7 @@ struct BaiduRemoteBackupContentVerifierTests {
       try await verifier.verify(
         record: record,
         fsID: self.fsID,
+        verificationChallenge: verificationChallenge,
         credential: self.credential(scope: otherScope)
       )
     }
@@ -353,6 +375,7 @@ struct BaiduRemoteBackupContentVerifierTests {
       try await verifier.verify(
         record: record,
         fsID: 0,
+        verificationChallenge: verificationChallenge,
         credential: self.credential(scope: record.accountScope)
       )
     }
@@ -626,6 +649,7 @@ struct BaiduRemoteBackupContentVerifierTests {
       ).verify(
         record: record,
         fsID: fsID,
+        verificationChallenge: verificationChallenge,
         credential: try credential(scope: record.accountScope, token: secret)
       )
       Issue.record("Expected a redacted transport error")

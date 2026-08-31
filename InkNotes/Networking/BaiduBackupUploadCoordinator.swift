@@ -53,6 +53,7 @@ enum BaiduBackupUploadRejection: Equatable, Sendable {
 }
 
 enum BaiduBackupUploadTerminalOutcome: Equatable, Sendable {
+  case remoteContentVerified(BaiduVerifiedRemoteBackupReceipt)
   case createResponseMetadataMatchedContentUnproven(BaiduRemoteBackup)
   case needsRemoteVerification(BaiduRapidUploadReceipt)
   case outcomeUnknown(
@@ -104,16 +105,23 @@ actor BaiduBackupUploadCoordinator {
   private var snapshotContinuations:
     [UUID: AsyncStream<BaiduBackupUploadCoordinatorSnapshot>.Continuation] = [:]
 
-  init(
-    uploader: any BaiduBackupUploading = BaiduNetdiskBackupUploader(),
-    reconciliationStore: any BaiduUploadReconciliationStoring =
-      BaiduUploadReconciliationRepository(),
-    now: @escaping @Sendable () -> Date = { Date() }
-  ) {
-    self.uploader = uploader
-    self.reconciliationStore = reconciliationStore
-    self.now = now
+  init() {
+    self.uploader = BaiduNetdiskBackupUploader()
+    self.reconciliationStore = BaiduUploadReconciliationRepository()
+    self.now = { Date() }
   }
+
+  #if SWIFT_PACKAGE
+    init(
+      uploader: any BaiduBackupUploading,
+      reconciliationStore: any BaiduUploadReconciliationStoring,
+      now: @escaping @Sendable () -> Date = { Date() }
+    ) {
+      self.uploader = uploader
+      self.reconciliationStore = reconciliationStore
+      self.now = now
+    }
+  #endif
 
   func upload(
     archive: Data,
@@ -265,6 +273,11 @@ actor BaiduBackupUploadCoordinator {
         terminal: .rejected(
           .remoteVerificationRequired(backupID: admitted.key.backupID)
         )
+      )
+    case .verified(let receipt):
+      return finishReservation(
+        operationID: operationID,
+        terminal: .remoteContentVerified(receipt)
       )
     case .identityConflict:
       return finishReservation(

@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "buildInputs": {
-    "InkNotes.xcodeproj/project.pbxproj": "8cc46ebd2376cb198157aaa9edb15819928e2f67f14f00b92db3fb7391aa8a4b",
+    "InkNotes.xcodeproj/project.pbxproj": "bd08a889a6b560cdd15fa2fa9f8ebadaae66182cdee7aa65f75772f89a6a0ed0",
     "InkNotes/Info.plist": "ad170a9abbacacd971f456d18c832304565f058af81a02b7888348d4bd4830fd",
-    "Package.swift": "b305bd99f44128aa325a04b4e2c768468ef0c541a7e3408591c6218fdff50258"
+    "Package.swift": "2b0636eba77d6ae741beded8a1891eadbc044dd87c569f7312edad4b13899dcf"
   },
   "sources": {
     "InkNotes/App/InkNotesApp.swift": "1828e34b181bc011487e8ce272c76b09684de26fba01afd631597124385bad73",
@@ -15,16 +15,17 @@
     "InkNotes/Models/BaiduNetdiskAccount.swift": "4bf01000654ba46a322b0514711e0dc3b15a9f1397fb8348f8a4b56afcc80092",
     "InkNotes/Models/BaiduNetdiskBackup.swift": "d4fb9e16a2053931533418f98910d666feb59f90be957d22688677a9b5be1f56",
     "InkNotes/Models/LibraryDocument.swift": "2d4ff2f3b90d73bc079f3a2912ef33c9fd67738f654f6ebb8a462d360cb6151b",
-    "InkNotes/Networking/BaiduBackupUploadCoordinator.swift": "86ccce35d6bc511e02f47d2c9cdfe116b893177ad1612a4082ce4876822d7428",
+    "InkNotes/Networking/BaiduBackupUploadCoordinator.swift": "9d6ef1f04bfe7dd8e2efbf886656b667f6f87d7eec3c161073789d85ad3a1460",
     "InkNotes/Networking/BaiduHTTPTransport.swift": "61420d52edf7793289d8f6380df7832b319619be2dda9fd6d6df2d4c7f763b41",
     "InkNotes/Networking/BaiduNetdiskAccountResolver.swift": "365151e72e4e6dcddde4aca87f2231b5e3afe3cdcbf035df401382f4ec44e813",
     "InkNotes/Networking/BaiduNetdiskBackupUploader.swift": "e56ffade918f50b3cd5d18f23c827c0c08844f0ce912a69aa02aa4690c6d5ee8",
-    "InkNotes/Networking/BaiduRemoteBackupContentVerifier.swift": "1597fd197eb7c4256a987983438f77fee1196e88b5161a4ea7cc2bfe58790034",
+    "InkNotes/Networking/BaiduRemoteBackupContentVerifier.swift": "ec31c39d6dd2cfb37483955481405e0bb229625ac91a65d5499aa71a01b73c2b",
+    "InkNotes/Networking/BaiduRemoteBackupReconciliationAuthority.swift": "607eb85089b9676845b1906146c56f53eabc2c3fb05d0f6ee65fa8cecd31dc38",
     "InkNotes/Networking/BaiduRemoteBackupMetadataObserver.swift": "82dcd061902202b86e99f3450dd6ace660fafb8a4f9f45c3097f998ea3368456",
     "InkNotes/Persistence/BackupArchiveCodec.swift": "4209922e709e7d67ae6e0535e1ba5dc288f4a76cbb50c91b03a28db745c430b8",
     "InkNotes/Persistence/BackupFileReader.swift": "f0f1d37bb763d962a06d6387ee52b64b2d1e624ba704bb6979dc7becbbbdaa98",
     "InkNotes/Persistence/BackupSnapshotRepository.swift": "16716f56b2b60b329aed340c23747fccad29c33b9d93026f1ed4e94224a51bd9",
-    "InkNotes/Persistence/BaiduUploadReconciliationRepository.swift": "18ceb1eabeea8f25b179437fe2ab3e52478a95742c1474d02ab6acca38c8a9b2",
+    "InkNotes/Persistence/BaiduUploadReconciliationRepository.swift": "6b8aa3a9272565b1a55356fa942a25410a64cf0ecc064cc26c5a7cc279fc8c37",
     "InkNotes/Persistence/DrawingRepository.swift": "45264e9d118c7a17b80bcb2124e71b571a44daec21b0a0a459970ebe90a8e76f",
     "InkNotes/Persistence/DurableFileWriter.swift": "9897949c6dcd7f58c5d8443cecda14883e61d88be66ed2ab45fb839d71b86b83",
     "InkNotes/Stores/LibraryStore.swift": "b933b85d5200af1a0c55b29d9a32cb9e66abe8be033c4863a8516956bab5e5a8",

@@ -967,6 +967,573 @@ struct BaiduUploadReconciliationRepositoryTests {
     }
   }
 
+  @Test("A verified commit atomically persists one strict v3 receipt across restart")
+  func verifiedCommitPersistsStrictReceiptAcrossRestart() async throws {
+    let fileManager = FileManager.default
+    let rootURL = makeRootURL(fileManager: fileManager)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let repository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    let expected = record()
+    let uploadLease = try #require(
+      (try await repository.admit(expected)).createdLease
+    )
+    let canonicalURL = recordURL(rootURL: rootURL, backupID: backupID)
+    let pendingIdentity = try fileIdentity(at: canonicalURL)
+    uploadLease.release()
+
+    let verificationLease = try #require(
+      (try await repository.claimPending(
+        accountScope: expected.accountScope,
+        backupID: expected.backupID
+      )).claimedLease
+    )
+    defer { verificationLease.release() }
+    let receipt = try await repository.commitVerified(
+      verificationLease,
+      proof: proof(for: verificationLease, fsID: 9_001)
+    )
+
+    #expect(receipt.schemaVersion == 3)
+    #expect(receipt.recordType == "verifiedReceipt")
+    #expect(receipt.verificationVersion == 1)
+    #expect(receipt.record == expected)
+    #expect(receipt.remoteFSID == 9_001)
+    #expect(receipt.verifiedByteCount == expected.localByteCount)
+    #expect(receipt.verifiedSHA256 == expected.archiveSHA256)
+    #expect(try permissions(at: canonicalURL, fileManager: fileManager) == 0o600)
+    let receiptIdentity = try fileIdentity(at: canonicalURL)
+    #expect(
+      receiptIdentity.device != pendingIdentity.device
+        || receiptIdentity.inode != pendingIdentity.inode
+    )
+
+    let persistedBytes = try Data(contentsOf: canonicalURL)
+    let persistedObject = try #require(
+      JSONSerialization.jsonObject(with: persistedBytes) as? [String: Any]
+    )
+    #expect(
+      Set(persistedObject.keys)
+        == Set([
+          "schemaVersion", "recordType", "accountScope", "attemptID", "backupID",
+          "archiveSHA256", "localMD5", "localByteCount", "requestedPath", "remoteFSID",
+          "verifiedByteCount", "verifiedSHA256", "verificationVersion",
+        ])
+    )
+    #expect(persistedObject["schemaVersion"] as? Int == 3)
+    #expect(persistedObject["recordType"] as? String == "verifiedReceipt")
+    #expect(persistedObject["verificationVersion"] as? Int == 1)
+    let directoryEntries = try fileManager.contentsOfDirectory(
+      atPath: canonicalURL.deletingLastPathComponent().path
+    )
+    #expect(directoryEntries == [canonicalURL.lastPathComponent])
+
+    verificationLease.release()
+    let restartedRepository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    #expect(
+      try await restartedRepository.loadPending(
+        accountScope: expected.accountScope,
+        backupID: expected.backupID
+      ) == nil
+    )
+    #expect(
+      try await restartedRepository.loadVerifiedReceipt(
+        accountScope: expected.accountScope,
+        backupID: expected.backupID
+      ) == receipt
+    )
+    let restartedAttempt = record(
+      attemptID: UUID(uuidString: "A2000000-0000-0000-0000-000000000002")!
+    )
+    #expect(try await restartedRepository.admit(restartedAttempt) == .verified(receipt))
+    #expect(
+      try await restartedRepository.admit(
+        record(archiveSHA256: String(repeating: "c", count: 64))
+      ) == .identityConflict
+    )
+    #expect(
+      try await restartedRepository.claimPending(
+        accountScope: expected.accountScope,
+        backupID: expected.backupID
+      ) == .verified(receipt)
+    )
+    #expect(try Data(contentsOf: canonicalURL) == persistedBytes)
+  }
+
+  @Test("Post-swap recovery keeps the verified receipt authoritative without blind upload")
+  func postSwapRecoveryKeepsVerifiedReceiptAuthoritative() async throws {
+    let fileManager = FileManager.default
+    let rootURL = makeRootURL(fileManager: fileManager)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let repository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    let expected = record()
+    let uploadLease = try #require(
+      (try await repository.admit(expected)).createdLease
+    )
+    let canonicalURL = recordURL(
+      rootURL: rootURL,
+      accountScope: expected.accountScope,
+      backupID: expected.backupID
+    )
+    let pendingBytes = try Data(contentsOf: canonicalURL)
+    let pendingObject = try #require(
+      JSONSerialization.jsonObject(with: pendingBytes) as? [String: Any]
+    )
+    #expect(pendingObject["schemaVersion"] as? Int == 2)
+    uploadLease.release()
+
+    let verificationLease = try #require(
+      (try await repository.claimPending(
+        accountScope: expected.accountScope,
+        backupID: expected.backupID
+      )).claimedLease
+    )
+    let receipt = try await repository.commitVerified(
+      verificationLease,
+      proof: proof(for: verificationLease, fsID: 9_003)
+    )
+    verificationLease.release()
+    let verifiedBytes = try Data(contentsOf: canonicalURL)
+    let verifiedObject = try #require(
+      JSONSerialization.jsonObject(with: verifiedBytes) as? [String: Any]
+    )
+    #expect(verifiedObject["schemaVersion"] as? Int == 3)
+    #expect(verifiedBytes != pendingBytes)
+
+    let temporaryURL = canonicalURL.deletingLastPathComponent().appendingPathComponent(
+      ".33333333-3333-3333-3333-333333333333.tmp"
+    )
+    try writeRestricted(pendingBytes, to: temporaryURL, fileManager: fileManager)
+    #expect(try permissions(at: temporaryURL, fileManager: fileManager) == 0o600)
+    #expect(try Data(contentsOf: temporaryURL) == pendingBytes)
+
+    let restartedRepository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    #expect(
+      try await restartedRepository.loadVerifiedReceipt(
+        accountScope: expected.accountScope,
+        backupID: expected.backupID
+      ) == receipt
+    )
+    #expect(!fileManager.fileExists(atPath: temporaryURL.path))
+    #expect(try Data(contentsOf: canonicalURL) == verifiedBytes)
+    #expect(
+      try await restartedRepository.loadPending(
+        accountScope: expected.accountScope,
+        backupID: expected.backupID
+      ) == nil
+    )
+
+    let restartedAttempt = record(
+      attemptID: UUID(uuidString: "A2000000-0000-0000-0000-000000000003")!
+    )
+    #expect(try await restartedRepository.admit(restartedAttempt) == .verified(receipt))
+    #expect(try Data(contentsOf: canonicalURL) == verifiedBytes)
+  }
+
+  @Test("Claims report missing, in-progress, and verified state across repositories")
+  func claimStatesAreStableAcrossRepositories() async throws {
+    let fileManager = FileManager.default
+    let rootURL = makeRootURL(fileManager: fileManager)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let firstRepository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    let secondRepository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    let expected = record()
+
+    #expect(
+      try await firstRepository.claimPending(
+        accountScope: expected.accountScope,
+        backupID: expected.backupID
+      ) == .missing
+    )
+    let uploadLease = try #require(
+      (try await firstRepository.admit(expected)).createdLease
+    )
+    #expect(
+      try await secondRepository.claimPending(
+        accountScope: expected.accountScope,
+        backupID: expected.backupID
+      ) == .inProgress(ownerAttemptID: expected.attemptID)
+    )
+    uploadLease.release()
+
+    let verificationLease = try #require(
+      (try await firstRepository.claimPending(
+        accountScope: expected.accountScope,
+        backupID: expected.backupID
+      )).claimedLease
+    )
+    #expect(
+      try await secondRepository.claimPending(
+        accountScope: expected.accountScope,
+        backupID: expected.backupID
+      ) == .inProgress(ownerAttemptID: expected.attemptID)
+    )
+    let receipt = try await firstRepository.commitVerified(
+      verificationLease,
+      proof: proof(for: verificationLease, fsID: 9_002)
+    )
+    verificationLease.release()
+    #expect(
+      try await secondRepository.claimPending(
+        accountScope: expected.accountScope,
+        backupID: expected.backupID
+      ) == .verified(receipt)
+    )
+  }
+
+  @Test("Upload and verification leases mutually exclude each other")
+  func uploadAndVerificationLeasesMutuallyExclude() async throws {
+    let fileManager = FileManager.default
+    let rootURL = makeRootURL(fileManager: fileManager)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let uploadRepository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    let verificationRepository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    let expected = record()
+
+    let uploadLease = try #require(
+      (try await uploadRepository.admit(expected)).createdLease
+    )
+    #expect(
+      try await verificationRepository.claimPending(
+        accountScope: expected.accountScope,
+        backupID: expected.backupID
+      ) == .inProgress(ownerAttemptID: expected.attemptID)
+    )
+    uploadLease.release()
+
+    let verificationLease = try #require(
+      (try await verificationRepository.claimPending(
+        accountScope: expected.accountScope,
+        backupID: expected.backupID
+      )).claimedLease
+    )
+    #expect(
+      try await uploadRepository.admit(expected)
+        == .inProgress(ownerAttemptID: expected.attemptID)
+    )
+    verificationLease.release()
+    #expect(try await uploadRepository.admit(expected) == .existing)
+  }
+
+  @Test("Verification commit rejects foreign and released leases without changing the WAL")
+  func verificationCommitRequiresIssuerBoundLiveLease() async throws {
+    let fileManager = FileManager.default
+    let rootURL = makeRootURL(fileManager: fileManager)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let repository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    let expected = record()
+    let uploadLease = try #require(
+      (try await repository.admit(expected)).createdLease
+    )
+    uploadLease.release()
+    let canonicalURL = recordURL(rootURL: rootURL, backupID: backupID)
+    let originalBytes = try Data(contentsOf: canonicalURL)
+    let originalIdentity = try fileIdentity(at: canonicalURL)
+
+    let foreignRootURL = makeRootURL(fileManager: fileManager)
+    defer { try? fileManager.removeItem(at: foreignRootURL) }
+    let foreignRepository = BaiduUploadReconciliationRepository(rootURL: foreignRootURL)
+    let foreignUploadLease = try #require(
+      (try await foreignRepository.admit(expected)).createdLease
+    )
+    foreignUploadLease.release()
+    let foreignLease = try #require(
+      (try await foreignRepository.claimPending(
+        accountScope: expected.accountScope,
+        backupID: expected.backupID
+      )).claimedLease
+    )
+    defer { foreignLease.release() }
+    await #expect(throws: BaiduUploadReconciliationRepositoryError.invalidLease) {
+      try await repository.commitVerified(
+        foreignLease,
+        proof: self.proof(for: foreignLease, fsID: 9_003)
+      )
+    }
+
+    let localLease = try #require(
+      (try await repository.claimPending(
+        accountScope: expected.accountScope,
+        backupID: expected.backupID
+      )).claimedLease
+    )
+    let releasedProof = proof(for: localLease, fsID: 9_004)
+    localLease.release()
+    await #expect(throws: BaiduUploadReconciliationRepositoryError.invalidLease) {
+      try await repository.commitVerified(localLease, proof: releasedProof)
+    }
+    #expect(try Data(contentsOf: canonicalURL) == originalBytes)
+    let currentIdentity = try fileIdentity(at: canonicalURL)
+    #expect(currentIdentity.device == originalIdentity.device)
+    #expect(currentIdentity.inode == originalIdentity.inode)
+  }
+
+  @Test("A sealed proof must match every record field, challenge, digest, size, and FS ID")
+  func invalidProofsPreserveExactPendingInodeAndBytes() async throws {
+    let fileManager = FileManager.default
+    let rootURL = makeRootURL(fileManager: fileManager)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let repository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    let expected = record()
+    let uploadLease = try #require(
+      (try await repository.admit(expected)).createdLease
+    )
+    uploadLease.release()
+    let verificationLease = try #require(
+      (try await repository.claimPending(
+        accountScope: expected.accountScope,
+        backupID: expected.backupID
+      )).claimedLease
+    )
+    defer { verificationLease.release() }
+    let canonicalURL = recordURL(rootURL: rootURL, backupID: backupID)
+    let originalBytes = try Data(contentsOf: canonicalURL)
+    let originalIdentity = try fileIdentity(at: canonicalURL)
+    let differentBackupID = UUID(
+      uuidString: "B2000000-0000-0000-0000-000000000002"
+    )!
+    let invalidProofs = [
+      proof(
+        record: expected,
+        fsID: 9_005,
+        verificationChallenge: UUID()
+      ),
+      proof(
+        record: record(
+          attemptID: UUID(uuidString: "A2000000-0000-0000-0000-000000000002")!
+        ),
+        fsID: 9_005,
+        verificationChallenge: verificationLease.verificationChallenge
+      ),
+      proof(
+        record: record(
+          accountScope: accountScope(
+            UUID(uuidString: "D2000000-0000-0000-0000-000000000002")!
+          )
+        ),
+        fsID: 9_005,
+        verificationChallenge: verificationLease.verificationChallenge
+      ),
+      proof(
+        record: record(backupID: differentBackupID),
+        fsID: 9_005,
+        verificationChallenge: verificationLease.verificationChallenge
+      ),
+      proof(
+        record: record(
+          requestedPath: try canonicalPath(folderName: "另一个应用", backupID: backupID)
+        ),
+        fsID: 9_005,
+        verificationChallenge: verificationLease.verificationChallenge
+      ),
+      proof(
+        record: record(localMD5: String(repeating: "c", count: 32)),
+        fsID: 9_005,
+        verificationChallenge: verificationLease.verificationChallenge
+      ),
+      proof(
+        record: record(archiveSHA256: String(repeating: "c", count: 64)),
+        fsID: 9_005,
+        verificationChallenge: verificationLease.verificationChallenge
+      ),
+      proof(
+        record: record(localByteCount: expected.localByteCount + 1),
+        fsID: 9_005,
+        verificationChallenge: verificationLease.verificationChallenge
+      ),
+      proof(
+        record: expected,
+        fsID: 0,
+        verificationChallenge: verificationLease.verificationChallenge
+      ),
+      proof(
+        record: expected,
+        fsID: 9_005,
+        byteCount: expected.localByteCount + 1,
+        verificationChallenge: verificationLease.verificationChallenge
+      ),
+      proof(
+        record: expected,
+        fsID: 9_005,
+        sha256: String(repeating: "c", count: 64),
+        verificationChallenge: verificationLease.verificationChallenge
+      ),
+    ]
+
+    for invalidProof in invalidProofs {
+      await #expect(throws: BaiduUploadReconciliationRepositoryError.invalidProof) {
+        try await repository.commitVerified(verificationLease, proof: invalidProof)
+      }
+      #expect(try Data(contentsOf: canonicalURL) == originalBytes)
+      let currentIdentity = try fileIdentity(at: canonicalURL)
+      #expect(currentIdentity.device == originalIdentity.device)
+      #expect(currentIdentity.inode == originalIdentity.inode)
+    }
+  }
+
+  @Test("A proof cannot be replayed after a new verification challenge is issued")
+  func proofReplayFailsAfterNewClaimChallenge() async throws {
+    let fileManager = FileManager.default
+    let rootURL = makeRootURL(fileManager: fileManager)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let repository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    let expected = record()
+    let uploadLease = try #require(
+      (try await repository.admit(expected)).createdLease
+    )
+    uploadLease.release()
+    let firstLease = try #require(
+      (try await repository.claimPending(
+        accountScope: expected.accountScope,
+        backupID: expected.backupID
+      )).claimedLease
+    )
+    let replayedProof = proof(for: firstLease, fsID: 9_006)
+    firstLease.release()
+
+    let secondLease = try #require(
+      (try await repository.claimPending(
+        accountScope: expected.accountScope,
+        backupID: expected.backupID
+      )).claimedLease
+    )
+    defer { secondLease.release() }
+    #expect(secondLease.verificationChallenge != firstLease.verificationChallenge)
+    let canonicalURL = recordURL(rootURL: rootURL, backupID: backupID)
+    let originalBytes = try Data(contentsOf: canonicalURL)
+    let originalIdentity = try fileIdentity(at: canonicalURL)
+    await #expect(throws: BaiduUploadReconciliationRepositoryError.invalidProof) {
+      try await repository.commitVerified(secondLease, proof: replayedProof)
+    }
+    #expect(try Data(contentsOf: canonicalURL) == originalBytes)
+    let currentIdentity = try fileIdentity(at: canonicalURL)
+    #expect(currentIdentity.device == originalIdentity.device)
+    #expect(currentIdentity.inode == originalIdentity.inode)
+
+    let receipt = try await repository.commitVerified(
+      secondLease,
+      proof: proof(for: secondLease, fsID: 9_006)
+    )
+    #expect(receipt.remoteFSID == 9_006)
+  }
+
+  @Test("Corrupt, non-strict, and wrong-constant receipts fail closed")
+  func invalidCanonicalReceiptsFailClosed() async throws {
+    let fileManager = FileManager.default
+    let rootURL = makeRootURL(fileManager: fileManager)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let repository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    let expected = record()
+    _ = try await commitVerified(
+      expected,
+      fsID: 9_007,
+      repository: repository
+    )
+    let canonicalURL = recordURL(rootURL: rootURL, backupID: backupID)
+    let validBytes = try Data(contentsOf: canonicalURL)
+    let validObject = try #require(
+      JSONSerialization.jsonObject(with: validBytes) as? [String: Any]
+    )
+
+    try writeRestricted(Data("not-json".utf8), to: canonicalURL, fileManager: fileManager)
+    await #expect(throws: BaiduUploadReconciliationRepositoryError.invalidRecord) {
+      _ = try await repository.loadVerifiedReceipt(
+        accountScope: expected.accountScope,
+        backupID: expected.backupID
+      )
+    }
+
+    var variants: [[String: Any]] = []
+    var extraKey = validObject
+    extraKey["unexpected"] = true
+    variants.append(extraKey)
+    var wrongRecordType = validObject
+    wrongRecordType["recordType"] = "pending"
+    variants.append(wrongRecordType)
+    var wrongVerificationVersion = validObject
+    wrongVerificationVersion["verificationVersion"] = 2
+    variants.append(wrongVerificationVersion)
+
+    for variant in variants {
+      let data = try JSONSerialization.data(
+        withJSONObject: variant,
+        options: [.prettyPrinted, .sortedKeys]
+      )
+      try writeRestricted(data, to: canonicalURL, fileManager: fileManager)
+      await #expect(throws: BaiduUploadReconciliationRepositoryError.invalidRecord) {
+        _ = try await repository.loadVerifiedReceipt(
+          accountScope: expected.accountScope,
+          backupID: expected.backupID
+        )
+      }
+    }
+
+    var unsupportedSchema = validObject
+    unsupportedSchema["schemaVersion"] = 4
+    try writeRestricted(
+      try JSONSerialization.data(
+        withJSONObject: unsupportedSchema,
+        options: [.prettyPrinted, .sortedKeys]
+      ),
+      to: canonicalURL,
+      fileManager: fileManager
+    )
+    await #expect(
+      throws: BaiduUploadReconciliationRepositoryError.unsupportedSchemaVersion(found: 4)
+    ) {
+      _ = try await repository.loadVerifiedReceipt(
+        accountScope: expected.accountScope,
+        backupID: expected.backupID
+      )
+    }
+
+    try writeRestricted(validBytes, to: canonicalURL, fileManager: fileManager)
+    #expect(
+      try await repository.loadVerifiedReceipt(
+        accountScope: expected.accountScope,
+        backupID: expected.backupID
+      ) != nil
+    )
+  }
+
+  @Test("Insecure receipt permissions and canonical symlinks fail closed")
+  func insecureCanonicalReceiptLayoutFailsClosed() async throws {
+    let fileManager = FileManager.default
+    let rootURL = makeRootURL(fileManager: fileManager)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let repository = BaiduUploadReconciliationRepository(rootURL: rootURL)
+    let expected = record()
+    _ = try await commitVerified(
+      expected,
+      fsID: 9_008,
+      repository: repository
+    )
+    let canonicalURL = recordURL(rootURL: rootURL, backupID: backupID)
+    let validBytes = try Data(contentsOf: canonicalURL)
+
+    try fileManager.setAttributes(
+      [.posixPermissions: 0o644],
+      ofItemAtPath: canonicalURL.path
+    )
+    await #expect(throws: BaiduUploadReconciliationRepositoryError.invalidStoreLayout) {
+      _ = try await repository.loadVerifiedReceipt(
+        accountScope: expected.accountScope,
+        backupID: expected.backupID
+      )
+    }
+
+    try fileManager.removeItem(at: canonicalURL)
+    let victimURL = rootURL.appendingPathComponent("receipt-victim.json")
+    try writeRestricted(validBytes, to: victimURL, fileManager: fileManager)
+    try fileManager.createSymbolicLink(at: canonicalURL, withDestinationURL: victimURL)
+    await #expect(throws: BaiduUploadReconciliationRepositoryError.invalidStoreLayout) {
+      _ = try await repository.loadVerifiedReceipt(
+        accountScope: expected.accountScope,
+        backupID: expected.backupID
+      )
+    }
+    #expect(try Data(contentsOf: victimURL) == validBytes)
+  }
+
   private func record(
     accountScope: BaiduAccountScope? = nil,
     backupID: UUID? = nil,
@@ -995,6 +1562,55 @@ struct BaiduUploadReconciliationRepositoryTests {
       throw CocoaError(.fileReadUnknown)
     }
     return (status.st_dev, status.st_ino)
+  }
+
+  private func proof(
+    for lease: BaiduUploadReconciliationVerificationLease,
+    fsID: UInt64
+  ) -> BaiduVerifiedRemoteBackupContentProof {
+    proof(
+      record: lease.record,
+      fsID: fsID,
+      verificationChallenge: lease.verificationChallenge
+    )
+  }
+
+  private func proof(
+    record: BaiduUploadReconciliationRecord,
+    fsID: UInt64,
+    byteCount: UInt64? = nil,
+    sha256: String? = nil,
+    verificationChallenge: UUID
+  ) -> BaiduVerifiedRemoteBackupContentProof {
+    .testingOnly(
+      record: record,
+      fsID: fsID,
+      byteCount: byteCount ?? record.localByteCount,
+      sha256: sha256 ?? record.archiveSHA256,
+      verificationChallenge: verificationChallenge
+    )
+  }
+
+  private func commitVerified(
+    _ record: BaiduUploadReconciliationRecord,
+    fsID: UInt64,
+    repository: BaiduUploadReconciliationRepository
+  ) async throws -> BaiduVerifiedRemoteBackupReceipt {
+    let uploadLease = try #require(
+      (try await repository.admit(record)).createdLease
+    )
+    uploadLease.release()
+    let verificationLease = try #require(
+      (try await repository.claimPending(
+        accountScope: record.accountScope,
+        backupID: record.backupID
+      )).claimedLease
+    )
+    defer { verificationLease.release() }
+    return try await repository.commitVerified(
+      verificationLease,
+      proof: proof(for: verificationLease, fsID: fsID)
+    )
   }
 
   private func accountScope(

@@ -5,14 +5,49 @@ protocol BaiduRemoteBackupContentVerifying: Sendable {
   func verify(
     record: BaiduUploadReconciliationRecord,
     fsID: UInt64,
+    verificationChallenge: UUID,
     credential: BaiduAccountBoundCredential
   ) async throws -> BaiduRemoteBackupContentVerificationResult
 }
 
-struct BaiduVerifiedRemoteBackupContent: Equatable, Sendable {
+struct BaiduVerifiedRemoteBackupContentProof: Equatable, Sendable {
+  let record: BaiduUploadReconciliationRecord
   let fsID: UInt64
   let byteCount: UInt64
   let sha256: String
+  let verificationChallenge: UUID
+
+  fileprivate init(
+    record: BaiduUploadReconciliationRecord,
+    fsID: UInt64,
+    byteCount: UInt64,
+    sha256: String,
+    verificationChallenge: UUID
+  ) {
+    self.record = record
+    self.fsID = fsID
+    self.byteCount = byteCount
+    self.sha256 = sha256
+    self.verificationChallenge = verificationChallenge
+  }
+
+  #if SWIFT_PACKAGE
+    static func testingOnly(
+      record: BaiduUploadReconciliationRecord,
+      fsID: UInt64,
+      byteCount: UInt64,
+      sha256: String,
+      verificationChallenge: UUID
+    ) -> BaiduVerifiedRemoteBackupContentProof {
+      BaiduVerifiedRemoteBackupContentProof(
+        record: record,
+        fsID: fsID,
+        byteCount: byteCount,
+        sha256: sha256,
+        verificationChallenge: verificationChallenge
+      )
+    }
+  #endif
 }
 
 enum BaiduRemoteBackupContentMismatch: Equatable, Sendable {
@@ -21,7 +56,7 @@ enum BaiduRemoteBackupContentMismatch: Equatable, Sendable {
 }
 
 enum BaiduRemoteBackupContentVerification: Equatable, Sendable {
-  case contentVerified(BaiduVerifiedRemoteBackupContent)
+  case contentVerified(BaiduVerifiedRemoteBackupContentProof)
   case contentMismatch(BaiduRemoteBackupContentMismatch)
 }
 
@@ -30,6 +65,34 @@ struct BaiduRemoteBackupContentVerificationResult: Equatable, Sendable {
   let attemptID: UUID
   let backupID: UUID
   let verification: BaiduRemoteBackupContentVerification
+
+  fileprivate init(
+    accountScope: BaiduAccountScope,
+    attemptID: UUID,
+    backupID: UUID,
+    verification: BaiduRemoteBackupContentVerification
+  ) {
+    self.accountScope = accountScope
+    self.attemptID = attemptID
+    self.backupID = backupID
+    self.verification = verification
+  }
+
+  #if SWIFT_PACKAGE
+    static func testingOnly(
+      accountScope: BaiduAccountScope,
+      attemptID: UUID,
+      backupID: UUID,
+      verification: BaiduRemoteBackupContentVerification
+    ) -> BaiduRemoteBackupContentVerificationResult {
+      BaiduRemoteBackupContentVerificationResult(
+        accountScope: accountScope,
+        attemptID: attemptID,
+        backupID: backupID,
+        verification: verification
+      )
+    }
+  #endif
 }
 
 enum BaiduRemoteBackupContentVerificationError: LocalizedError, Equatable, Sendable {
@@ -310,22 +373,30 @@ struct BaiduRemoteBackupContentVerifier: BaiduRemoteBackupContentVerifying, Send
   private let byteStreamer: any BaiduRemoteBackupByteStreaming
   private let now: @Sendable () -> Date
 
-  init(
-    metadataTransport: any BaiduHTTPTransport = URLSessionBaiduHTTPTransport(
+  init() {
+    self.metadataTransport = URLSessionBaiduHTTPTransport(
       maximumResponseByteCount: Self.maximumMetadataResponseByteCount
-    ),
-    byteStreamer: any BaiduRemoteBackupByteStreaming =
-      URLSessionBaiduRemoteBackupByteStreamer(),
-    now: @escaping @Sendable () -> Date = { Date() }
-  ) {
-    self.metadataTransport = metadataTransport
-    self.byteStreamer = byteStreamer
-    self.now = now
+    )
+    self.byteStreamer = URLSessionBaiduRemoteBackupByteStreamer()
+    self.now = { Date() }
   }
+
+  #if SWIFT_PACKAGE
+    init(
+      metadataTransport: any BaiduHTTPTransport,
+      byteStreamer: any BaiduRemoteBackupByteStreaming,
+      now: @escaping @Sendable () -> Date = { Date() }
+    ) {
+      self.metadataTransport = metadataTransport
+      self.byteStreamer = byteStreamer
+      self.now = now
+    }
+  #endif
 
   func verify(
     record: BaiduUploadReconciliationRecord,
     fsID: UInt64,
+    verificationChallenge: UUID,
     credential: BaiduAccountBoundCredential
   ) async throws -> BaiduRemoteBackupContentVerificationResult {
     try Task.checkCancellation()
@@ -383,10 +454,12 @@ struct BaiduRemoteBackupContentVerifier: BaiduRemoteBackupContentVerifying, Send
     }
     return Self.result(
       .contentVerified(
-        BaiduVerifiedRemoteBackupContent(
+        BaiduVerifiedRemoteBackupContentProof(
+          record: record,
           fsID: fsID,
           byteCount: digest.byteCount,
-          sha256: digest.sha256
+          sha256: digest.sha256,
+          verificationChallenge: verificationChallenge
         )
       ),
       for: record

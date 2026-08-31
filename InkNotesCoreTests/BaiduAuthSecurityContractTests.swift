@@ -58,6 +58,7 @@ struct BaiduAuthSecurityContractTests {
       "InkNotes/Networking/BaiduNetdiskAccountResolver.swift",
       "InkNotes/Networking/BaiduNetdiskBackupUploader.swift",
       "InkNotes/Networking/BaiduRemoteBackupContentVerifier.swift",
+      "InkNotes/Networking/BaiduRemoteBackupReconciliationAuthority.swift",
       "InkNotes/Networking/BaiduRemoteBackupMetadataObserver.swift",
       "InkNotes/Persistence/BaiduUploadReconciliationRepository.swift",
     ])
@@ -165,16 +166,27 @@ struct BaiduAuthSecurityContractTests {
     )
 
     #expect(coordinator.contains("createResponseMetadataMatchedContentUnproven"))
-    #expect(coordinator.contains("backupsAwaitingRemoteVerification[active.key]"))
+    #expect(coordinator.contains("case remoteContentVerified(BaiduVerifiedRemoteBackupReceipt)"))
+    #expect(coordinator.contains("case .verified(let receipt)"))
+    #expect(coordinator.contains("terminal: .remoteContentVerified(receipt)"))
+    #expect(coordinator.contains("private var backupsAwaitingRemoteVerification:"))
+    #expect(coordinator.contains("backupsAwaitingRemoteVerification[active.key] = active.receipt"))
     #expect(!coordinator.contains("case verifiedRemote"))
     #expect(!coordinator.contains("completedBackups"))
     #expect(!coordinator.contains("alreadyCompletedThisSession"))
-    #expect(!coordinator.contains("contentVerified"))
+    #expect(!coordinator.contains(".contentVerified("))
+    #expect(!coordinator.contains("commitVerified"))
+    #expect(!coordinator.contains("claimPending"))
 
-    let verifierPath = "InkNotes/Networking/BaiduRemoteBackupContentVerifier.swift"
+    let allowedVerifiedClaimPaths = Set([
+      "InkNotes/Networking/BaiduBackupUploadCoordinator.swift",
+      "InkNotes/Networking/BaiduRemoteBackupContentVerifier.swift",
+      "InkNotes/Networking/BaiduRemoteBackupReconciliationAuthority.swift",
+      "InkNotes/Persistence/BaiduUploadReconciliationRepository.swift",
+    ])
     for sourceURL in try productionSwiftURLs(repositoryRoot: rootURL) {
       let path = relativePath(sourceURL, repositoryRoot: rootURL)
-      guard path != verifierPath else { continue }
+      guard !allowedVerifiedClaimPaths.contains(path) else { continue }
       let contents = try String(contentsOf: sourceURL, encoding: .utf8).lowercased()
       for forbiddenClaim in ["verifiedremote", "contentverified"]
       where contents.contains(forbiddenClaim) {
@@ -205,6 +217,90 @@ struct BaiduAuthSecurityContractTests {
     #expect(!verifier.contains("UserDefaults"))
     #expect(!verifier.contains("Keychain"))
     #expect(!verifier.contains("unlink"))
+  }
+
+  @Test("Only sealed full-byte proof plus a verification lease can commit a receipt")
+  func verifiedReceiptAuthorityRemainsSealed() throws {
+    let rootURL = try repositoryRootURL()
+    let verifier = try String(
+      contentsOf: rootURL.appendingPathComponent(
+        "InkNotes/Networking/BaiduRemoteBackupContentVerifier.swift"
+      ),
+      encoding: .utf8
+    )
+    let authority = try String(
+      contentsOf: rootURL.appendingPathComponent(
+        "InkNotes/Networking/BaiduRemoteBackupReconciliationAuthority.swift"
+      ),
+      encoding: .utf8
+    )
+    let repository = try String(
+      contentsOf: rootURL.appendingPathComponent(
+        "InkNotes/Persistence/BaiduUploadReconciliationRepository.swift"
+      ),
+      encoding: .utf8
+    )
+
+    #expect(verifier.contains("struct BaiduVerifiedRemoteBackupContentProof"))
+    #expect(verifier.contains("fileprivate init("))
+    #expect(verifier.contains("let verificationChallenge: UUID"))
+    #expect(verifier.contains("#if SWIFT_PACKAGE"))
+    #expect(verifier.contains("static func testingOnly("))
+    #expect(verifier.contains("init()"))
+
+    #expect(authority.contains("private let repository: BaiduUploadReconciliationRepository"))
+    #expect(authority.contains("private let verifier: BaiduRemoteBackupContentVerifier"))
+    #expect(authority.contains("repository.claimPending("))
+    #expect(authority.contains("repository.commitVerified(lease, proof: proof)"))
+    #expect(authority.contains("verificationChallenge: lease.verificationChallenge"))
+    #expect(!authority.contains("proof: BaiduVerifiedRemoteBackupContentProof"))
+    #expect(!authority.contains("BaiduRemoteBackupContentVerificationResult,"))
+
+    #expect(repository.contains("final class BaiduUploadReconciliationVerificationLease"))
+    #expect(repository.contains("func commitVerified("))
+    #expect(repository.contains("proof: BaiduVerifiedRemoteBackupContentProof"))
+    #expect(repository.contains("proof.verificationChallenge == lease.verificationChallenge"))
+    #expect(repository.contains("UInt32(RENAME_SWAP)"))
+    #expect(repository.contains("case invalidProof"))
+
+    var authorityTypePaths = Set<String>()
+    var claimPendingCounts: [String: Int] = [:]
+    var commitVerifiedCounts: [String: Int] = [:]
+    for sourceURL in try productionSwiftURLs(repositoryRoot: rootURL) {
+      let path = relativePath(sourceURL, repositoryRoot: rootURL)
+      let code = SwiftSourceLexicalMasker.codeOnly(
+        try String(contentsOf: sourceURL, encoding: .utf8)
+      )
+      if code.contains("BaiduRemoteBackupReconciliationAuthority") {
+        authorityTypePaths.insert(path)
+      }
+      let claimCount = code.components(separatedBy: "claimPending(").count - 1
+      if claimCount > 0 {
+        claimPendingCounts[path] = claimCount
+      }
+      let commitCount = code.components(separatedBy: "commitVerified(").count - 1
+      if commitCount > 0 {
+        commitVerifiedCounts[path] = commitCount
+      }
+    }
+    #expect(
+      authorityTypePaths
+        == Set(["InkNotes/Networking/BaiduRemoteBackupReconciliationAuthority.swift"])
+    )
+    #expect(
+      claimPendingCounts
+        == [
+          "InkNotes/Networking/BaiduRemoteBackupReconciliationAuthority.swift": 1,
+          "InkNotes/Persistence/BaiduUploadReconciliationRepository.swift": 1,
+        ]
+    )
+    #expect(
+      commitVerifiedCounts
+        == [
+          "InkNotes/Networking/BaiduRemoteBackupReconciliationAuthority.swift": 1,
+          "InkNotes/Persistence/BaiduUploadReconciliationRepository.swift": 1,
+        ]
+    )
   }
 
   @Test("Account scope is broker-bound, redacted, and never derived from token or UInfo")
