@@ -113,6 +113,98 @@ struct BackupSnapshotRepositoryTests {
     )
   }
 
+  @Test("Export and restore preserve user-saved page sources with remapped pages")
+  func pageSourcesFollowRestoredCopyAndCanBeRepaired() async throws {
+    let sourceFixture = makeRepository()
+    let destinationFixture = makeRepository()
+    defer {
+      try? FileManager.default.removeItem(at: sourceFixture.rootURL)
+      try? FileManager.default.removeItem(at: destinationFixture.rootURL)
+    }
+
+    let sourceLibrary = LibraryDocument.starter()
+    let sourcePageID = try #require(sourceLibrary.notebooks.first?.pages.first?.id)
+    let sourceDrawing = PKDrawing().dataRepresentation()
+    let source = PageSourceExcerpt(
+      id: UUID(uuidString: "71000000-0000-0000-0000-000000000001")!,
+      title: "网页资料",
+      excerpt: "只保存用户主动选择的这一段。",
+      sourceURL: URL(string: "https://example.com/notes")!,
+      capturedAt: Date(timeIntervalSince1970: 1_700_000_010)
+    )
+    try await sourceFixture.repository.saveLibrary(sourceLibrary)
+    try await sourceFixture.repository.saveDrawing(sourceDrawing, pageID: sourcePageID)
+    try await sourceFixture.repository.savePageSources([source], pageID: sourcePageID)
+    let archive = try await sourceFixture.repository.makeBackup(
+      library: sourceLibrary,
+      drawingOverrides: [:],
+      sourceAppVersion: "0.2.0",
+      sourceBuild: "3",
+      createdAt: Date(timeIntervalSince1970: 1_700_000_020)
+    )
+    #expect(
+      try BackupArchiveCodec.decode(archive).formatVersion
+        == BackupArchiveCodec.pageSourceFormatVersion
+    )
+
+    let currentLibrary = LibraryDocument.starter()
+    let currentPageID = try #require(currentLibrary.notebooks.first?.pages.first?.id)
+    let currentDrawing = PKDrawing().dataRepresentation()
+    try await destinationFixture.repository.saveLibrary(currentLibrary)
+    try await destinationFixture.repository.saveDrawing(currentDrawing, pageID: currentPageID)
+    let first = try await destinationFixture.repository.restoreBackupAsCopy(
+      archive,
+      currentLibrary: currentLibrary,
+      currentDrawingOverrides: [:],
+      importedAt: Date(timeIntervalSince1970: 1_700_000_030)
+    )
+    #expect(first.selectedPageID != sourcePageID)
+    #expect(
+      try await destinationFixture.repository.loadPageSources(pageID: first.selectedPageID)
+        == [source]
+    )
+    #expect(try await destinationFixture.repository.loadPageSources(pageID: currentPageID).isEmpty)
+
+    let sourceFile = destinationFixture.rootURL
+      .appendingPathComponent(DrawingRepository.pageSourcesDirectoryName, isDirectory: true)
+      .appendingPathComponent(first.selectedPageID.uuidString.lowercased())
+      .appendingPathExtension(DrawingRepository.pageSourceFileExtension)
+    try FileManager.default.removeItem(at: sourceFile)
+    let retry = try await destinationFixture.repository.restoreBackupAsCopy(
+      archive,
+      currentLibrary: first.library,
+      currentDrawingOverrides: [:]
+    )
+    #expect(retry.disposition == .alreadyImported)
+    #expect(
+      try await destinationFixture.repository.loadPageSources(pageID: first.selectedPageID)
+        == [source]
+    )
+
+    let editedSource = PageSourceExcerpt(
+      id: source.id,
+      title: source.title,
+      excerpt: "用户导入后修改的来源内容。",
+      sourceURL: source.sourceURL,
+      capturedAt: source.capturedAt
+    )
+    try await destinationFixture.repository.savePageSources(
+      [editedSource],
+      pageID: first.selectedPageID
+    )
+    await #expect(throws: BackupSnapshotError.orphanSourceConflict) {
+      try await destinationFixture.repository.restoreBackupAsCopy(
+        archive,
+        currentLibrary: first.library,
+        currentDrawingOverrides: [:]
+      )
+    }
+    #expect(
+      try await destinationFixture.repository.loadPageSources(pageID: first.selectedPageID)
+        == [editedSource]
+    )
+  }
+
   @Test("A new restore accepts the exact combined notebook and page limits")
   func newRestoreCapacityAcceptsExactLimits() throws {
     try DrawingRepository.validateNewRestoreCapacity(

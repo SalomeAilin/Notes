@@ -40,6 +40,7 @@ struct CompatibilityContractTests {
     #expect(BackupArchiveCodec.magic == Data([0x49, 0x4E, 0x4B, 0x4E, 0x4F, 0x54, 0x45, 0x00]))
     #expect(BackupArchiveCodec.legacyFormatVersion == 1)
     #expect(BackupArchiveCodec.currentFormatVersion == 2)
+    #expect(BackupArchiveCodec.pageSourceFormatVersion == 3)
     #expect(BackupArchiveCodec.headerByteCount == 56)
     #expect(LibraryDocument.currentSchemaVersion == 1)
     #expect(PageSourceDocument.currentVersion == 1)

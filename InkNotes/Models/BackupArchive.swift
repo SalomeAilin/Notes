@@ -53,6 +53,17 @@ struct BackupArchiveManifestV2: Codable, Equatable, Sendable {
   let pages: [BackupDrawingPageEntry]
 }
 
+struct BackupArchiveManifestV3: Codable, Equatable, Sendable {
+  let backupID: UUID
+  let createdAt: Date
+  let sourceAppVersion: String
+  let sourceBuild: String
+  let librarySchemaVersion: Int
+  let library: LibraryDocument
+  let pages: [BackupDrawingPageEntry]
+  let pageSources: [PageSourceDocument]
+}
+
 struct ValidatedBackupArchive: Equatable, Sendable {
   let formatVersion: UInt16
   let backupID: UUID
@@ -62,6 +73,7 @@ struct ValidatedBackupArchive: Equatable, Sendable {
   let sourceBuild: String
   let library: LibraryDocument
   let drawings: [UUID: Data]
+  let pageSources: [UUID: [PageSourceExcerpt]]
 }
 
 struct BackupRestoreTransaction: Codable, Equatable, Sendable {
@@ -115,6 +127,8 @@ enum BackupArchiveError: LocalizedError, Equatable {
   case drawingTooLarge(pageID: UUID, actual: UInt64, maximum: Int)
   case invalidDrawingDigest(pageID: UUID)
   case drawingChecksumMismatch(pageID: UUID)
+  case invalidPageSources
+  case duplicatePageSources(UUID)
 
   var errorDescription: String? {
     switch self {
@@ -155,6 +169,8 @@ enum BackupArchiveError: LocalizedError, Equatable {
       "备份中有一页内容较多，当前版本暂时无法处理。原有笔记没有改动。"
     case .invalidDrawingDigest, .drawingChecksumMismatch:
       "这份备份中的一页已损坏或不完整，未导入任何内容。"
+    case .invalidPageSources, .duplicatePageSources:
+      "这份备份中的来源记录已损坏或不完整，未导入任何内容。"
     }
   }
 }

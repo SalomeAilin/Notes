@@ -32,6 +32,7 @@ enum BackupSnapshotError: LocalizedError, Equatable {
   case invalidRestoreTransaction
   case partialPreviousImport
   case orphanDrawingConflict
+  case orphanSourceConflict
 
   var errorDescription: String? {
     switch self {
@@ -45,6 +46,8 @@ enum BackupSnapshotError: LocalizedError, Equatable {
       "这份备份以前只导入了一部分。为避免产生重复内容，已停止导入。"
     case .orphanDrawingConflict:
       "导入位置已有其他内容。为避免覆盖，已停止导入。"
+    case .orphanSourceConflict:
+      "导入位置已有其他来源记录。为避免覆盖，已停止导入。"
     }
   }
 }
@@ -79,9 +82,17 @@ extension DrawingRepository {
       pageIDs: pageIDs,
       drawingOverrides: drawingOverrides
     )
+    var pageSources: [UUID: [PageSourceExcerpt]] = [:]
+    for pageID in pageIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
+      let sources = try loadPageSources(pageID: pageID)
+      if !sources.isEmpty {
+        pageSources[pageID] = sources
+      }
+    }
     return try BackupArchiveCodec.encodeBestAvailable(
       library: library,
       drawings: drawings,
+      pageSources: pageSources,
       createdAt: createdAt,
       sourceAppVersion: sourceAppVersion,
       sourceBuild: sourceBuild
@@ -146,11 +157,15 @@ extension DrawingRepository {
     }
 
     let copiedDrawings = try drawingsForRestoreTransaction(transaction, backup: backup)
+    let copiedPageSources = try pageSourcesForRestoreTransaction(transaction, backup: backup)
     switch restorePresence(transaction, in: currentLibrary) {
     case .all:
       let repair = try repairMissingDrawingsForCompletedRestore(
         expectedDrawings: copiedDrawings,
         currentDrawings: currentDrawings
+      )
+      try repairMissingPageSourcesForCompletedRestore(
+        expectedPageSources: copiedPageSources
       )
       return try makeRestoreResult(
         library: currentLibrary,
@@ -193,8 +208,26 @@ extension DrawingRepository {
       }
     }
 
+    var pageSourcesToWrite: [(pageID: UUID, sources: [PageSourceExcerpt])] = []
+    for copiedPageID in copiedPageSources.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+      guard let expectedSources = copiedPageSources[copiedPageID] else {
+        throw BackupArchiveError.invalidPageSources
+      }
+      let existingSources = try loadPageSources(pageID: copiedPageID)
+      if existingSources.isEmpty {
+        pageSourcesToWrite.append((copiedPageID, expectedSources))
+      } else {
+        guard existingSources == expectedSources else {
+          throw BackupSnapshotError.orphanSourceConflict
+        }
+        try synchronizePageSourcesPersistence(pageID: copiedPageID)
+      }
+    }
     for drawing in drawingsToWrite {
       try saveDrawingForEditing(drawing.data, pageID: drawing.pageID)
+    }
+    for item in pageSourcesToWrite {
+      try savePageSources(item.sources, pageID: item.pageID)
     }
 
     do {
@@ -398,6 +431,26 @@ extension DrawingRepository {
     return copiedDrawings
   }
 
+  private func pageSourcesForRestoreTransaction(
+    _ transaction: BackupRestoreTransaction,
+    backup: ValidatedBackupArchive
+  ) throws -> [UUID: [PageSourceExcerpt]] {
+    var copiedPageSources: [UUID: [PageSourceExcerpt]] = [:]
+    for (sourceNotebook, copiedNotebook) in zip(
+      backup.library.notebooks,
+      transaction.copiedNotebooks
+    ) {
+      for (sourcePage, copiedPage) in zip(sourceNotebook.pages, copiedNotebook.pages) {
+        guard let sources = backup.pageSources[sourcePage.id] else { continue }
+        guard !sources.isEmpty else {
+          throw BackupArchiveError.invalidPageSources
+        }
+        copiedPageSources[copiedPage.id] = sources
+      }
+    }
+    return copiedPageSources
+  }
+
   private func restorePresence(
     _ transaction: BackupRestoreTransaction,
     in library: LibraryDocument
@@ -441,6 +494,25 @@ extension DrawingRepository {
     return (reconciledDrawings, Set(missingDrawings.map(\.pageID)))
   }
 
+  private func repairMissingPageSourcesForCompletedRestore(
+    expectedPageSources: [UUID: [PageSourceExcerpt]]
+  ) throws {
+    for pageID in expectedPageSources.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+      guard let expectedSources = expectedPageSources[pageID] else {
+        throw BackupArchiveError.invalidPageSources
+      }
+      let existingSources = try loadPageSources(pageID: pageID)
+      if existingSources.isEmpty {
+        try savePageSources(expectedSources, pageID: pageID)
+      } else {
+        guard existingSources == expectedSources else {
+          throw BackupSnapshotError.orphanSourceConflict
+        }
+        try synchronizePageSourcesPersistence(pageID: pageID)
+      }
+    }
+  }
+
   private func makeRestoreResult(
     library: LibraryDocument,
     transaction: BackupRestoreTransaction,
@@ -471,7 +543,10 @@ extension DrawingRepository {
   private func makeUniquePageID(usedIDs: inout Set<UUID>) throws -> UUID {
     while true {
       let candidate = UUID()
-      guard !usedIDs.contains(candidate), try !drawingExists(pageID: candidate) else {
+      guard !usedIDs.contains(candidate),
+        try !drawingExists(pageID: candidate),
+        try !pageSourcesExist(pageID: candidate)
+      else {
         continue
       }
       usedIDs.insert(candidate)

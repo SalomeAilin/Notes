@@ -7,6 +7,7 @@ enum BackupArchiveCodec {
   static let mimeType = "application/vnd.salomeailin.notes-backup"
   static let legacyFormatVersion: UInt16 = 1
   static let currentFormatVersion: UInt16 = 2
+  static let pageSourceFormatVersion: UInt16 = 3
   static let headerByteCount = 56
 
   static let magic = Data([0x49, 0x4E, 0x4B, 0x4E, 0x4F, 0x54, 0x45, 0x00])
@@ -132,11 +133,24 @@ enum BackupArchiveCodec {
   static func encodeBestAvailable(
     library: LibraryDocument,
     drawings: [UUID: Data],
+    pageSources: [UUID: [PageSourceExcerpt]] = [:],
     createdAt: Date,
     backupID: UUID = UUID(),
     sourceAppVersion: String = "",
     sourceBuild: String = ""
   ) throws -> Data {
+    let nonemptyPageSources = pageSources.filter { !$0.value.isEmpty }
+    if !nonemptyPageSources.isEmpty {
+      return try encodeV3(
+        library: library,
+        drawings: drawings,
+        pageSources: nonemptyPageSources,
+        createdAt: createdAt,
+        backupID: backupID,
+        sourceAppVersion: sourceAppVersion,
+        sourceBuild: sourceBuild
+      )
+    }
     do {
       return try encode(
         library: library,
@@ -177,10 +191,89 @@ enum BackupArchiveCodec {
       sourceAppVersion: sourceAppVersion,
       sourceBuild: sourceBuild
     )
+    let chunked = try makeChunkedDrawingPayload(
+      pageIDs: pageIDs,
+      drawings: drawings
+    )
+
+    let manifest = BackupArchiveManifestV2(
+      backupID: backupID,
+      createdAt: createdAt,
+      sourceAppVersion: sourceAppVersion,
+      sourceBuild: sourceBuild,
+      librarySchemaVersion: library.schemaVersion,
+      library: library,
+      pages: chunked.pages
+    )
+    let manifestData: Data
+    do {
+      manifestData = try makeEncoder().encode(manifest)
+    } catch {
+      throw BackupArchiveError.invalidManifest
+    }
+    return try encodeChunkedArchive(
+      manifestData: manifestData,
+      payload: chunked.payload,
+      formatVersion: currentFormatVersion
+    )
+  }
+
+  static func encodeV3(
+    library: LibraryDocument,
+    drawings: [UUID: Data],
+    pageSources: [UUID: [PageSourceExcerpt]],
+    createdAt: Date,
+    backupID: UUID = UUID(),
+    sourceAppVersion: String = "",
+    sourceBuild: String = ""
+  ) throws -> Data {
+    let pageIDs = try validateLibrary(library)
+    try validateSourceMetadata(
+      createdAt: createdAt,
+      sourceAppVersion: sourceAppVersion,
+      sourceBuild: sourceBuild
+    )
+    let sourceDocuments = try validatePageSources(
+      pageSources,
+      expectedPageIDs: pageIDs
+    )
+    guard !sourceDocuments.isEmpty else {
+      throw BackupArchiveError.invalidPageSources
+    }
+    let chunked = try makeChunkedDrawingPayload(
+      pageIDs: pageIDs,
+      drawings: drawings
+    )
+    let manifest = BackupArchiveManifestV3(
+      backupID: backupID,
+      createdAt: createdAt,
+      sourceAppVersion: sourceAppVersion,
+      sourceBuild: sourceBuild,
+      librarySchemaVersion: library.schemaVersion,
+      library: library,
+      pages: chunked.pages,
+      pageSources: sourceDocuments
+    )
+    let manifestData: Data
+    do {
+      manifestData = try makeEncoder().encode(manifest)
+    } catch {
+      throw BackupArchiveError.invalidManifest
+    }
+    return try encodeChunkedArchive(
+      manifestData: manifestData,
+      payload: chunked.payload,
+      formatVersion: pageSourceFormatVersion
+    )
+  }
+
+  private static func makeChunkedDrawingPayload(
+    pageIDs: Set<UUID>,
+    drawings: [UUID: Data]
+  ) throws -> (pages: [BackupDrawingPageEntry], payload: Data) {
     guard Set(drawings.keys) == pageIDs else {
       throw BackupArchiveError.drawingIndexMismatch
     }
-
     var payload = Data()
     var pages: [BackupDrawingPageEntry] = []
     pages.reserveCapacity(pageIDs.count)
@@ -200,9 +293,8 @@ enum BackupArchiveCodec {
       var chunks: [BackupDrawingChunkEntry] = []
       var drawingOffset = 0
       while drawingOffset < drawing.count {
-        let remainingByteCount = drawing.count - drawingOffset
         let chunkByteCount = min(
-          remainingByteCount,
+          drawing.count - drawingOffset,
           BackupArchiveLimits.maximumPayloadChunkByteCount
         )
         let nextDrawingOffset = drawingOffset + chunkByteCount
@@ -235,29 +327,20 @@ enum BackupArchiveCodec {
         )
       )
     }
+    return (pages, payload)
+  }
 
-    let manifest = BackupArchiveManifestV2(
-      backupID: backupID,
-      createdAt: createdAt,
-      sourceAppVersion: sourceAppVersion,
-      sourceBuild: sourceBuild,
-      librarySchemaVersion: library.schemaVersion,
-      library: library,
-      pages: pages
-    )
-    let manifestData: Data
-    do {
-      manifestData = try makeEncoder().encode(manifest)
-    } catch {
-      throw BackupArchiveError.invalidManifest
-    }
+  private static func encodeChunkedArchive(
+    manifestData: Data,
+    payload: Data,
+    formatVersion: UInt16
+  ) throws -> Data {
     guard manifestData.count <= BackupArchiveLimits.maximumManifestByteCount else {
       throw BackupArchiveError.manifestTooLarge(
         actual: manifestData.count,
         maximum: BackupArchiveLimits.maximumManifestByteCount
       )
     }
-
     let (bodyByteCount, bodyOverflow) = manifestData.count.addingReportingOverflow(payload.count)
     let (archiveByteCount, archiveOverflow) = headerByteCount.addingReportingOverflow(bodyByteCount)
     guard !bodyOverflow, !archiveOverflow,
@@ -272,7 +355,7 @@ enum BackupArchiveCodec {
     var prefix = Data()
     prefix.reserveCapacity(24)
     prefix.append(magic)
-    appendBigEndian(currentFormatVersion, to: &prefix)
+    appendBigEndian(formatVersion, to: &prefix)
     appendBigEndian(supportedFlags, to: &prefix)
     appendBigEndian(UInt32(manifestData.count), to: &prefix)
     appendBigEndian(UInt64(payload.count), to: &prefix)
@@ -306,6 +389,9 @@ enum BackupArchiveCodec {
     }
 
     let version = readUInt16(data, at: 8)
+    if version == pageSourceFormatVersion {
+      return try decodeV3(data)
+    }
     if version == currentFormatVersion {
       return try decodeV2(data)
     }
@@ -403,7 +489,8 @@ enum BackupArchiveCodec {
       sourceAppVersion: manifest.sourceAppVersion,
       sourceBuild: manifest.sourceBuild,
       library: manifest.library,
-      drawings: drawings
+      drawings: drawings,
+      pageSources: [:]
     )
   }
 
@@ -498,8 +585,155 @@ enum BackupArchiveCodec {
       sourceAppVersion: manifest.sourceAppVersion,
       sourceBuild: manifest.sourceBuild,
       library: manifest.library,
-      drawings: drawings
+      drawings: drawings,
+      pageSources: [:]
     )
+  }
+
+  private static func decodeV3(_ data: Data) throws -> ValidatedBackupArchive {
+    let flags = readUInt16(data, at: 10)
+    guard flags == supportedFlags else {
+      throw BackupArchiveError.unsupportedFlags(found: flags)
+    }
+    let manifestByteCount = Int(readUInt32(data, at: 12))
+    guard manifestByteCount <= BackupArchiveLimits.maximumManifestByteCount else {
+      throw BackupArchiveError.manifestTooLarge(
+        actual: manifestByteCount,
+        maximum: BackupArchiveLimits.maximumManifestByteCount
+      )
+    }
+    let encodedPayloadByteCount = readUInt64(data, at: 16)
+    guard encodedPayloadByteCount <= UInt64(Int.max) else {
+      throw BackupArchiveError.invalidArchiveLength
+    }
+    let payloadByteCount = Int(encodedPayloadByteCount)
+    let (bodyByteCount, bodyOverflow) = manifestByteCount.addingReportingOverflow(payloadByteCount)
+    let (expectedArchiveByteCount, archiveOverflow) =
+      headerByteCount.addingReportingOverflow(bodyByteCount)
+    guard !bodyOverflow, !archiveOverflow else {
+      throw BackupArchiveError.invalidArchiveLength
+    }
+    guard expectedArchiveByteCount <= BackupArchiveLimits.maximumArchiveByteCount else {
+      throw BackupArchiveError.archiveTooLarge(
+        actual: expectedArchiveByteCount,
+        maximum: BackupArchiveLimits.maximumArchiveByteCount
+      )
+    }
+    guard data.count >= expectedArchiveByteCount else {
+      throw BackupArchiveError.truncatedArchive
+    }
+    guard data.count == expectedArchiveByteCount else {
+      throw BackupArchiveError.trailingData
+    }
+
+    let storedDigest = data.subdata(in: 24..<headerByteCount)
+    var hasher = SHA256()
+    hasher.update(data: data.prefix(24))
+    hasher.update(data: data.suffix(from: headerByteCount))
+    guard storedDigest == Data(hasher.finalize()) else {
+      throw BackupArchiveError.archiveChecksumMismatch
+    }
+
+    let manifestStart = headerByteCount
+    let manifestEnd = manifestStart + manifestByteCount
+    let manifestData = data.subdata(in: manifestStart..<manifestEnd)
+    let manifest: BackupArchiveManifestV3
+    do {
+      manifest = try makeDecoder().decode(BackupArchiveManifestV3.self, from: manifestData)
+      guard try makeEncoder().encode(manifest) == manifestData else {
+        throw BackupArchiveError.invalidManifest
+      }
+    } catch let error as BackupArchiveError {
+      throw error
+    } catch {
+      throw BackupArchiveError.invalidManifest
+    }
+
+    try validateSourceMetadata(
+      createdAt: manifest.createdAt,
+      sourceAppVersion: manifest.sourceAppVersion,
+      sourceBuild: manifest.sourceBuild
+    )
+    guard manifest.librarySchemaVersion == manifest.library.schemaVersion else {
+      throw BackupArchiveError.inconsistentLibrarySchema
+    }
+    let pageIDs = try validateLibrary(manifest.library)
+    let drawings = try decodeDrawingPages(
+      manifest.pages,
+      expectedPageIDs: pageIDs,
+      archiveData: data,
+      payloadStart: manifestEnd,
+      declaredPayloadByteCount: encodedPayloadByteCount
+    )
+    let pageSources = try validatePageSourceDocuments(
+      manifest.pageSources,
+      expectedPageIDs: pageIDs
+    )
+    guard !pageSources.isEmpty else {
+      throw BackupArchiveError.invalidPageSources
+    }
+
+    return ValidatedBackupArchive(
+      formatVersion: pageSourceFormatVersion,
+      backupID: manifest.backupID,
+      archiveChecksum: hexString(storedDigest),
+      createdAt: manifest.createdAt,
+      sourceAppVersion: manifest.sourceAppVersion,
+      sourceBuild: manifest.sourceBuild,
+      library: manifest.library,
+      drawings: drawings,
+      pageSources: pageSources
+    )
+  }
+
+  private static func validatePageSources(
+    _ pageSources: [UUID: [PageSourceExcerpt]],
+    expectedPageIDs: Set<UUID>
+  ) throws -> [PageSourceDocument] {
+    guard Set(pageSources.keys).isSubset(of: expectedPageIDs) else {
+      throw BackupArchiveError.invalidPageSources
+    }
+    let documents = pageSources.keys.sorted(by: { $0.uuidString < $1.uuidString }).compactMap {
+      pageID -> PageSourceDocument? in
+      guard let sources = pageSources[pageID], !sources.isEmpty else { return nil }
+      return PageSourceDocument(pageID: pageID, sources: sources)
+    }
+    _ = try validatePageSourceDocuments(documents, expectedPageIDs: expectedPageIDs)
+    return documents
+  }
+
+  private static func validatePageSourceDocuments(
+    _ documents: [PageSourceDocument],
+    expectedPageIDs: Set<UUID>
+  ) throws -> [UUID: [PageSourceExcerpt]] {
+    let orderedPageIDs = documents.map(\.pageID)
+    guard orderedPageIDs == orderedPageIDs.sorted(by: { $0.uuidString < $1.uuidString }) else {
+      throw BackupArchiveError.invalidPageSources
+    }
+    var result: [UUID: [PageSourceExcerpt]] = [:]
+    for document in documents {
+      guard expectedPageIDs.contains(document.pageID),
+        result[document.pageID] == nil,
+        !document.sources.isEmpty
+      else {
+        if result[document.pageID] != nil {
+          throw BackupArchiveError.duplicatePageSources(document.pageID)
+        }
+        throw BackupArchiveError.invalidPageSources
+      }
+      do {
+        let validated = try document.validated(expectedPageID: document.pageID)
+        guard validated == document else {
+          throw BackupArchiveError.invalidPageSources
+        }
+        result[document.pageID] = validated.sources
+      } catch let error as BackupArchiveError {
+        throw error
+      } catch {
+        throw BackupArchiveError.invalidPageSources
+      }
+    }
+    return result
   }
 
   @discardableResult

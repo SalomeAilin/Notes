@@ -301,6 +301,24 @@ actor DrawingRepository {
     try durableFileWriter.synchronizeFileAndParentDirectory(at: url)
   }
 
+  func pageSourcesExist(pageID: UUID) throws -> Bool {
+    let url = try pageSourcesURL(pageID: pageID)
+    var status = stat()
+    let statusResult = url.path.withCString { path in
+      Darwin.lstat(path, &status)
+    }
+    if statusResult == -1, errno == ENOENT {
+      return false
+    }
+    guard statusResult == 0,
+      status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+      status.st_mode & mode_t(0o7777) == mode_t(POSIXDurableFileWriter.filePermissions)
+    else {
+      throw PageSourceError.invalidDocument
+    }
+    return true
+  }
+
   func saveSegmentedDrawing(_ data: Data, pageID: UUID) throws {
     try Task.checkCancellation()
     let snapshot = try SegmentedDrawingCodec.makeSnapshot(

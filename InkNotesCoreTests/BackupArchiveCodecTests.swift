@@ -28,6 +28,7 @@ struct BackupArchiveCodecTests {
     #expect(decoded.sourceBuild == "2")
     #expect(decoded.library == fixture.library)
     #expect(decoded.drawings == fixture.drawings)
+    #expect(decoded.pageSources.isEmpty)
     #expect(archive.count <= BackupArchiveLimits.maximumArchiveByteCount)
   }
 
@@ -83,6 +84,7 @@ struct BackupArchiveCodecTests {
     #expect(readUInt16(largeArchive, at: 8) == BackupArchiveCodec.currentFormatVersion)
     #expect(largeDecoded.formatVersion == BackupArchiveCodec.currentFormatVersion)
     #expect(largeDecoded.drawings == largeDrawings)
+    #expect(largeDecoded.pageSources.isEmpty)
     #expect(largeArchive.count <= BackupArchiveLimits.maximumArchiveByteCount)
 
     let manifestStart = BackupArchiveCodec.headerByteCount
@@ -107,6 +109,82 @@ struct BackupArchiveCodecTests {
     rewriteArchiveChecksum(&internallyTampered)
     #expect(throws: BackupArchiveError.drawingChecksumMismatch(pageID: longPageID)) {
       try BackupArchiveCodec.decode(internallyTampered)
+    }
+  }
+
+  @Test("Page sources select v3 and remain attached to their page")
+  func pageSourcesRoundTripInVersionThree() throws {
+    let fixture = makeFixture()
+    let source = PageSourceExcerpt(
+      id: UUID(uuidString: "70000000-0000-0000-0000-000000000001")!,
+      title: "参考页面",
+      excerpt: "用户主动保存的文字",
+      sourceURL: URL(string: "https://example.com/reference")!,
+      capturedAt: Date(timeIntervalSince1970: 1_700_000_010)
+    )
+    let archive = try BackupArchiveCodec.encodeBestAvailable(
+      library: fixture.library,
+      drawings: fixture.drawings,
+      pageSources: [fixture.firstPageID: [source]],
+      createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+    let decoded = try BackupArchiveCodec.decode(archive)
+
+    #expect(readUInt16(archive, at: 8) == BackupArchiveCodec.pageSourceFormatVersion)
+    #expect(decoded.formatVersion == BackupArchiveCodec.pageSourceFormatVersion)
+    #expect(decoded.drawings == fixture.drawings)
+    #expect(decoded.pageSources == [fixture.firstPageID: [source]])
+  }
+
+  @Test("Page source archives reject unknown pages and duplicate page records")
+  func invalidPageSourcesFailClosed() throws {
+    let fixture = makeFixture()
+    let source = PageSourceExcerpt(
+      title: "参考页面",
+      excerpt: "用户主动保存的文字",
+      sourceURL: URL(string: "https://example.com/reference")!,
+      capturedAt: Date(timeIntervalSince1970: 1_700_000_010)
+    )
+    #expect(throws: BackupArchiveError.invalidPageSources) {
+      try BackupArchiveCodec.encodeV3(
+        library: fixture.library,
+        drawings: fixture.drawings,
+        pageSources: [UUID(): [source]],
+        createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+      )
+    }
+
+    let archive = try BackupArchiveCodec.encodeV3(
+      library: fixture.library,
+      drawings: fixture.drawings,
+      pageSources: [fixture.firstPageID: [source]],
+      createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+    let manifestStart = BackupArchiveCodec.headerByteCount
+    let manifestEnd = manifestStart + Int(readUInt32(archive, at: 12))
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .secondsSince1970
+    let manifest = try decoder.decode(
+      BackupArchiveManifestV3.self,
+      from: archive.subdata(in: manifestStart..<manifestEnd)
+    )
+    let duplicated = BackupArchiveManifestV3(
+      backupID: manifest.backupID,
+      createdAt: manifest.createdAt,
+      sourceAppVersion: manifest.sourceAppVersion,
+      sourceBuild: manifest.sourceBuild,
+      librarySchemaVersion: manifest.librarySchemaVersion,
+      library: manifest.library,
+      pages: manifest.pages,
+      pageSources: manifest.pageSources + manifest.pageSources
+    )
+    let payload = archive.suffix(from: manifestEnd)
+    let duplicateArchive = try makeRawVersionThreeArchive(
+      manifest: duplicated,
+      payload: Data(payload)
+    )
+    #expect(throws: BackupArchiveError.duplicatePageSources(fixture.firstPageID)) {
+      try BackupArchiveCodec.decode(duplicateArchive)
     }
   }
 
@@ -172,8 +250,8 @@ struct BackupArchiveCodecTests {
 
     var unsupportedVersion = archive
     unsupportedVersion[8] = 0x00
-    unsupportedVersion[9] = 0x03
-    #expect(throws: BackupArchiveError.unsupportedVersion(found: 3)) {
+    unsupportedVersion[9] = 0x04
+    #expect(throws: BackupArchiveError.unsupportedVersion(found: 4)) {
       try BackupArchiveCodec.decode(unsupportedVersion)
     }
 
@@ -568,6 +646,32 @@ struct BackupArchiveCodecTests {
     hasher.update(data: manifestData)
     hasher.update(data: payload)
 
+    var result = prefix
+    result.append(Data(hasher.finalize()))
+    result.append(manifestData)
+    result.append(payload)
+    return result
+  }
+
+  private func makeRawVersionThreeArchive(
+    manifest: BackupArchiveManifestV3,
+    payload: Data
+  ) throws -> Data {
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .secondsSince1970
+    encoder.outputFormatting = [.sortedKeys]
+    let manifestData = try encoder.encode(manifest)
+
+    var prefix = Data([0x49, 0x4E, 0x4B, 0x4E, 0x4F, 0x54, 0x45, 0x00])
+    appendBigEndian(UInt16(3), to: &prefix)
+    appendBigEndian(UInt16(0), to: &prefix)
+    appendBigEndian(UInt32(manifestData.count), to: &prefix)
+    appendBigEndian(UInt64(payload.count), to: &prefix)
+
+    var hasher = SHA256()
+    hasher.update(data: prefix)
+    hasher.update(data: manifestData)
+    hasher.update(data: payload)
     var result = prefix
     result.append(Data(hasher.finalize()))
     result.append(manifestData)
