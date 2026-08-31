@@ -7,6 +7,71 @@ import Testing
 struct BaiduRemoteBackupMetadataObserverTests {
   private let backupID = UUID(uuidString: "B7000000-0000-0000-0000-000000000001")!
 
+  @Test("An unavailable credential stops before the first metadata request")
+  func unavailableCredentialSendsNoMetadataRequest() async throws {
+    let record = try reconciliationRecord()
+    let now = Date(timeIntervalSinceReferenceDate: 3_000_000)
+    let transport = ScriptedBaiduHTTPTransport(handlers: [])
+    let clock = CredentialTestClock([now])
+    let observer = BaiduRemoteBackupMetadataObserver(
+      transport: transport,
+      now: clock.now
+    )
+    let credential = try credential(
+      scope: record.accountScope,
+      expiresAt: now.addingTimeInterval(
+        BaiduCredentialUsePolicy.minimumRequestRemainingLifetime
+      )
+    )
+
+    await #expect(
+      throws: BaiduRemoteBackupMetadataObservationError.credential(
+        .unavailableForRequest
+      )
+    ) {
+      try await observer.observe(record: record, credential: credential)
+    }
+    #expect(await transport.requestCount() == 0)
+  }
+
+  @Test("Credential expiry between listing pages prevents the next request")
+  func credentialIsRecheckedBeforeEveryListingPage() async throws {
+    let record = try reconciliationRecord()
+    let now = Date(timeIntervalSinceReferenceDate: 3_100_000)
+    let fullPage = (0..<BaiduRemoteBackupMetadataObserver.pageSize).map { index in
+      Self.entry(
+        path: "/apps/测试应用/expiry-\(index)",
+        fsID: UInt64(index + 1),
+        size: 7,
+        md5: String(repeating: "c", count: 32)
+      )
+    }
+    let fullResponse = try Self.page(entries: fullPage)
+    let transport = ScriptedBaiduHTTPTransport(handlers: [
+      { _ in fullResponse }
+    ])
+    let clock = CredentialTestClock([now, now.addingTimeInterval(61)])
+    let observer = BaiduRemoteBackupMetadataObserver(
+      transport: transport,
+      now: clock.now
+    )
+    let credential = try credential(
+      scope: record.accountScope,
+      expiresAt: now.addingTimeInterval(
+        BaiduCredentialUsePolicy.minimumRequestRemainingLifetime + 60
+      )
+    )
+
+    await #expect(
+      throws: BaiduRemoteBackupMetadataObservationError.credential(
+        .unavailableForRequest
+      )
+    ) {
+      try await observer.observe(record: record, credential: credential)
+    }
+    #expect(await transport.requestCount() == 1)
+  }
+
   @Test("A same-account exact metadata match remains explicitly content-unproven")
   func exactMatchRemainsContentUnproven() async throws {
     let record = try reconciliationRecord()
@@ -739,11 +804,13 @@ struct BaiduRemoteBackupMetadataObserverTests {
 
   private func credential(
     scope: BaiduAccountScope,
-    token: String = "metadata.test-token"
+    token: String = "metadata.test-token",
+    expiresAt: Date = .distantFuture
   ) throws -> BaiduAccountBoundCredential {
-    BaiduAccountBoundCredential.testingOnly(
+    try BaiduAccountBoundCredential.testingOnly(
       accountScope: scope,
-      accessToken: try BaiduAccessToken(token)
+      accessToken: BaiduAccessToken(token),
+      expiresAt: expiresAt
     )
   }
 

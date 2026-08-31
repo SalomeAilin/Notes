@@ -2,13 +2,24 @@ import Foundation
 
 enum BaiduAccountCredentialError: LocalizedError, Equatable, Sendable {
   case invalidBrokerBindingID
+  case invalidExpiration
+  case unavailableForRequest
 
   var errorDescription: String? {
     switch self {
     case .invalidBrokerBindingID:
       "百度网盘账号绑定标识无效，已停止上传。"
+    case .invalidExpiration:
+      "百度网盘访问凭据的到期信息无效，已停止操作。"
+    case .unavailableForRequest:
+      "百度网盘访问凭据已过期或剩余有效期不足，请重新连接。"
     }
   }
+}
+
+enum BaiduCredentialUsePolicy {
+  /// Leaves room for the longest current request timeout plus scheduling and clock drift.
+  static let minimumRequestRemainingLifetime: TimeInterval = 5 * 60
 }
 
 /// An opaque, non-secret capability issued and restored by the future credential broker.
@@ -67,23 +78,47 @@ struct BaiduAccountBoundCredential: Sendable, CustomStringConvertible,
 {
   let accountScope: BaiduAccountScope
   private let accessToken: BaiduAccessToken
+  private let expiresAt: Date
 
-  private init(accountScope: BaiduAccountScope, accessToken: BaiduAccessToken) {
+  private init(
+    accountScope: BaiduAccountScope,
+    accessToken: BaiduAccessToken,
+    expiresAt: Date
+  ) throws {
+    guard expiresAt.timeIntervalSinceReferenceDate.isFinite else {
+      throw BaiduAccountCredentialError.invalidExpiration
+    }
     self.accountScope = accountScope
     self.accessToken = accessToken
+    self.expiresAt = expiresAt
   }
 
   #if SWIFT_PACKAGE
     /// Test-harness-only construction. The shipping Xcode target has no credential issuer.
     static func testingOnly(
       accountScope: BaiduAccountScope,
-      accessToken: BaiduAccessToken
-    ) -> Self {
-      Self(accountScope: accountScope, accessToken: accessToken)
+      accessToken: BaiduAccessToken,
+      expiresAt: Date
+    ) throws -> Self {
+      try Self(
+        accountScope: accountScope,
+        accessToken: accessToken,
+        expiresAt: expiresAt
+      )
     }
   #endif
 
-  var requestAccessToken: BaiduAccessToken { accessToken }
+  func requestAccessToken(at now: Date) throws -> BaiduAccessToken {
+    let nowValue = now.timeIntervalSinceReferenceDate
+    let remainingLifetime = expiresAt.timeIntervalSince(now)
+    guard nowValue.isFinite,
+      remainingLifetime.isFinite,
+      remainingLifetime > BaiduCredentialUsePolicy.minimumRequestRemainingLifetime
+    else {
+      throw BaiduAccountCredentialError.unavailableForRequest
+    }
+    return accessToken
+  }
 
   var description: String { "<redacted>" }
   var debugDescription: String { "<redacted>" }

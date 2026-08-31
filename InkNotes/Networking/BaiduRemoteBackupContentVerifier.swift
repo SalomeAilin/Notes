@@ -36,6 +36,7 @@ enum BaiduRemoteBackupContentVerificationError: LocalizedError, Equatable, Senda
   case accountScopeMismatch
   case invalidRecord
   case invalidFSID
+  case credential(BaiduAccountCredentialError)
   case requestEncoding
   case metadataTransport
   case invalidMetadataHTTPResponse
@@ -58,6 +59,8 @@ enum BaiduRemoteBackupContentVerificationError: LocalizedError, Equatable, Senda
       "百度网盘待核对记录无效，未发起下载。"
     case .invalidFSID:
       "百度网盘文件标识无效，未发起下载。"
+    case .credential:
+      "百度网盘访问凭据已过期或剩余有效期不足，请重新连接。"
     case .requestEncoding:
       "无法安全构造百度网盘完整性核对请求。"
     case .metadataTransport:
@@ -305,16 +308,19 @@ struct BaiduRemoteBackupContentVerifier: BaiduRemoteBackupContentVerifying, Send
 
   private let metadataTransport: any BaiduHTTPTransport
   private let byteStreamer: any BaiduRemoteBackupByteStreaming
+  private let now: @Sendable () -> Date
 
   init(
     metadataTransport: any BaiduHTTPTransport = URLSessionBaiduHTTPTransport(
       maximumResponseByteCount: Self.maximumMetadataResponseByteCount
     ),
     byteStreamer: any BaiduRemoteBackupByteStreaming =
-      URLSessionBaiduRemoteBackupByteStreamer()
+      URLSessionBaiduRemoteBackupByteStreamer(),
+    now: @escaping @Sendable () -> Date = { Date() }
   ) {
     self.metadataTransport = metadataTransport
     self.byteStreamer = byteStreamer
+    self.now = now
   }
 
   func verify(
@@ -335,7 +341,7 @@ struct BaiduRemoteBackupContentVerifier: BaiduRemoteBackupContentVerifying, Send
 
     let metadataRequest = try makeMetadataRequest(
       fsID: fsID,
-      accessToken: credential.requestAccessToken
+      accessToken: try requestAccessToken(for: credential)
     )
     let metadata = try await fetchMetadata(
       metadataRequest,
@@ -357,9 +363,10 @@ struct BaiduRemoteBackupContentVerifier: BaiduRemoteBackupContentVerifying, Send
       )
     }
 
+    try Task.checkCancellation()
     let downloadRequest = try makeDownloadRequest(
       dlink: metadata.dlink,
-      accessToken: credential.requestAccessToken
+      accessToken: try requestAccessToken(for: credential)
     )
     let digest = try await stream(downloadRequest)
     try Task.checkCancellation()
@@ -384,6 +391,16 @@ struct BaiduRemoteBackupContentVerifier: BaiduRemoteBackupContentVerifying, Send
       ),
       for: record
     )
+  }
+
+  private func requestAccessToken(
+    for credential: BaiduAccountBoundCredential
+  ) throws -> BaiduAccessToken {
+    do {
+      return try credential.requestAccessToken(at: now())
+    } catch let error as BaiduAccountCredentialError {
+      throw BaiduRemoteBackupContentVerificationError.credential(error)
+    }
   }
 
   private func fetchMetadata(

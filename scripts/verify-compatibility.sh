@@ -720,6 +720,10 @@ assert_plist_key_absent "$notes_source_plist" "CFBundleURLTypes" "Source callbac
 assert_plist_key_absent "$notes_source_plist" "CFBundleURLSchemes" "Source callback scheme"
 assert_plist_key_absent "$notes_source_plist" "UIBackgroundModes" "Source background transfer capability"
 assert_plist_key_absent "$notes_source_plist" "BGTaskSchedulerPermittedIdentifiers" "Source background task registration"
+if /usr/bin/grep -q 'SWIFT_PACKAGE' InkNotes.xcodeproj/project.pbxproj; then
+  print -u2 "Xcode project must not compile the test-only credential issuer"
+  exit 1
+fi
 print "[3/5] Source backup identity and unconfigured OAuth boundary are stable; privacy manifest is valid"
 
 for notes_configuration in Debug Release; do
@@ -742,10 +746,24 @@ for notes_configuration in Debug Release; do
   notes_info_plist_file="$(plutil -extract 0.buildSettings.INFOPLIST_FILE raw -o - "$notes_settings_json")"
   notes_generates_info_plist="$(plutil -extract 0.buildSettings.GENERATE_INFOPLIST_FILE raw -o - "$notes_settings_json")"
   notes_preprocesses_info_plist="$(plutil -extract 0.buildSettings.INFOPLIST_PREPROCESS raw -o - "$notes_settings_json")"
+  notes_swift_conditions="$(
+    plutil -extract 0.buildSettings.SWIFT_ACTIVE_COMPILATION_CONDITIONS raw -o - \
+      "$notes_settings_json" 2>/dev/null || true
+  )"
+  notes_other_swift_flags="$(
+    plutil -extract 0.buildSettings.OTHER_SWIFT_FLAGS raw -o - \
+      "$notes_settings_json" 2>/dev/null || true
+  )"
   assert_equal "$notes_bundle_id" "$notes_expected_bundle_id" "$notes_configuration bundle identifier"
   assert_equal "$notes_info_plist_file" "InkNotes/Info.plist" "$notes_configuration source Info.plist"
   assert_equal "$notes_generates_info_plist" "NO" "$notes_configuration generated Info.plist setting"
   assert_equal "$notes_preprocesses_info_plist" "NO" "$notes_configuration Info.plist preprocessing"
+  if [[ "$notes_swift_conditions" == *SWIFT_PACKAGE* \
+    || "$notes_other_swift_flags" == *SWIFT_PACKAGE* ]]
+  then
+    print -u2 "$notes_configuration must not compile the test-only credential issuer"
+    exit 1
+  fi
   for notes_forbidden_setting in \
     BAIDU_CLIENT_SECRET BAIDU_SECRET_KEY BAIDU_APP_SECRET CLIENT_SECRET SECRET_KEY \
     BAIDU_OAUTH_BROKER_URL BAIDU_OAUTH_CALLBACK BAIDU_CLIENT_ID BAIDU_APP_KEY \
@@ -759,7 +777,7 @@ for notes_configuration in Debug Release; do
       "$notes_configuration"
   done
 done
-print "[4/5] Debug and Release bundle identifiers and OAuth settings are stable"
+print "[4/5] Debug and Release bundle identifiers, credential conditions, and OAuth settings are stable"
 
 for notes_configuration in Debug Release; do
   notes_derived_data="$notes_temp_dir/DerivedData-$notes_configuration"

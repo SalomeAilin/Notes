@@ -33,12 +33,14 @@ struct BaiduBackupUploadAttemptReceipt: Equatable, Sendable {
 
 enum BaiduBackupUploadUnknownReason: Equatable, Sendable {
   case cancelled(BaiduBackupUploadCancellationSource)
+  case credentialUnavailable
   case responseUnavailable
   case unverifiedResponse
 }
 
 enum BaiduBackupUploadCoordinatorFailure: Equatable, Sendable {
   case invalidBackup(BackupArchiveError)
+  case credential(BaiduAccountCredentialError)
   case reconciliation(BaiduUploadReconciliationRepositoryError)
   case upload(BaiduNetdiskUploadError)
   case unexpected
@@ -75,6 +77,7 @@ actor BaiduBackupUploadCoordinator {
   private enum WorkerResult: Sendable {
     case success(BaiduBackupUploadOutcome)
     case cancelled
+    case credentialFailure(BaiduAccountCredentialError)
     case uploadFailure(BaiduNetdiskUploadError)
     case unexpectedFailure
   }
@@ -94,6 +97,7 @@ actor BaiduBackupUploadCoordinator {
 
   private let uploader: any BaiduBackupUploading
   private let reconciliationStore: any BaiduUploadReconciliationStoring
+  private let now: @Sendable () -> Date
   private var active: ActiveUpload?
   private var backupsAwaitingRemoteVerification:
     [ScopedBackupKey: BaiduBackupUploadAttemptReceipt] = [:]
@@ -103,10 +107,12 @@ actor BaiduBackupUploadCoordinator {
   init(
     uploader: any BaiduBackupUploading = BaiduNetdiskBackupUploader(),
     reconciliationStore: any BaiduUploadReconciliationStoring =
-      BaiduUploadReconciliationRepository()
+      BaiduUploadReconciliationRepository(),
+    now: @escaping @Sendable () -> Date = { Date() }
   ) {
     self.uploader = uploader
     self.reconciliationStore = reconciliationStore
+    self.now = now
   }
 
   func upload(
@@ -214,6 +220,17 @@ actor BaiduBackupUploadCoordinator {
       )
     }
 
+    do {
+      _ = try credential.requestAccessToken(at: now())
+    } catch let error as BaiduAccountCredentialError {
+      return finishReservation(
+        operationID: operationID,
+        terminal: .failed(.credential(error))
+      )
+    } catch {
+      return finishReservation(operationID: operationID, terminal: .failed(.unexpected))
+    }
+
     let admission: BaiduUploadReconciliationAdmission
     do {
       admission = try await reconciliationStore.admit(reservation.record)
@@ -275,21 +292,42 @@ actor BaiduBackupUploadCoordinator {
       )
     }
 
+    let accessToken: BaiduAccessToken
+    do {
+      accessToken = try credential.requestAccessToken(at: now())
+    } catch let error as BaiduAccountCredentialError {
+      return await finishBeforeNetwork(
+        operationID: operationID,
+        terminal: .failed(.credential(error))
+      )
+    } catch {
+      return await finishBeforeNetwork(
+        operationID: operationID,
+        terminal: .failed(.unexpected)
+      )
+    }
+
     let uploader = self.uploader
     let worker: Task<WorkerResult, Never> = Task.detached { [self] in
       do {
         return WorkerResult.success(
           try await uploader.upload(
             archive: archive,
-            accessToken: credential.requestAccessToken,
+            accessToken: accessToken,
             applicationDirectory: applicationDirectory,
             progress: { progress in
-              try await self.checkpoint(progress, operationID: operationID)
+              try await self.checkpoint(
+                progress,
+                credential: credential,
+                operationID: operationID
+              )
             }
           )
         )
       } catch is CancellationError {
         return .cancelled
+      } catch let error as BaiduAccountCredentialError {
+        return .credentialFailure(error)
       } catch let error as BaiduNetdiskUploadError {
         return .uploadFailure(error)
       } catch {
@@ -370,6 +408,7 @@ actor BaiduBackupUploadCoordinator {
 
   private func checkpoint(
     _ progress: BaiduBackupUploadProgress,
+    credential: BaiduAccountBoundCredential,
     operationID: UUID
   ) throws {
     guard var active, active.operationID == operationID else {
@@ -377,6 +416,9 @@ actor BaiduBackupUploadCoordinator {
     }
     guard active.cancellationSource == nil else {
       throw CancellationError()
+    }
+    if Self.requiresCredentialRecheck(progress) {
+      _ = try credential.requestAccessToken(at: now())
     }
     if case .uploadPartDispatchPermitted(let partIndex, _, let total) = progress {
       guard (0..<active.archiveChunkCount).contains(partIndex),
@@ -403,6 +445,19 @@ actor BaiduBackupUploadCoordinator {
     active.phase = nextPhase
     self.active = active
     publishCurrentSnapshot()
+  }
+
+  private static func requiresCredentialRecheck(
+    _ progress: BaiduBackupUploadProgress
+  ) -> Bool {
+    switch progress {
+    case .precreateDispatchPermitted,
+      .uploadPartDispatchPermitted,
+      .createDispatchPermitted:
+      true
+    case .precreateUploadRequiredConfirmed:
+      false
+    }
   }
 
   private func nextPhase(
@@ -564,6 +619,19 @@ actor BaiduBackupUploadCoordinator {
       terminal = .outcomeUnknown(
         receipt: active.receipt,
         reason: .cancelled(source)
+      )
+
+    case .credentialFailure(let error):
+      if active.phase == .preparing {
+        return await finishBeforeNetwork(
+          operationID: operationID,
+          terminal: .failed(.credential(error))
+        )
+      }
+      backupsAwaitingRemoteVerification[active.key] = active.receipt
+      terminal = .outcomeUnknown(
+        receipt: active.receipt,
+        reason: .credentialUnavailable
       )
 
     case .uploadFailure(let error):

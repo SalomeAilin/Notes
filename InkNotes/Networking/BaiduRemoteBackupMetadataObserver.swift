@@ -43,6 +43,7 @@ struct BaiduRemoteBackupMetadataObservationResult: Equatable, Sendable {
 enum BaiduRemoteBackupMetadataObservationError: LocalizedError, Equatable, Sendable {
   case accountScopeMismatch
   case invalidRecord
+  case credential(BaiduAccountCredentialError)
   case requestEncoding
   case transport
   case invalidHTTPResponse
@@ -57,6 +58,8 @@ enum BaiduRemoteBackupMetadataObservationError: LocalizedError, Equatable, Senda
       "百度网盘凭据与待对账记录不属于同一账号，未发起查询。"
     case .invalidRecord:
       "百度网盘待对账记录无效，未发起查询。"
+    case .credential:
+      "百度网盘访问凭据已过期或剩余有效期不足，请重新连接。"
     case .requestEncoding:
       "无法安全构造百度网盘元数据查询。"
     case .transport:
@@ -85,14 +88,17 @@ struct BaiduRemoteBackupMetadataObserver: BaiduRemoteBackupMetadataObserving, Se
   )!
 
   private let transport: any BaiduHTTPTransport
+  private let now: @Sendable () -> Date
 
   init(
     transport: any BaiduHTTPTransport = URLSessionBaiduHTTPTransport(
       maximumResponseByteCount: BaiduRemoteBackupMetadataObserver
         .maximumJSONResponseByteCount
-    )
+    ),
+    now: @escaping @Sendable () -> Date = { Date() }
   ) {
     self.transport = transport
+    self.now = now
   }
 
   func observe(
@@ -113,10 +119,16 @@ struct BaiduRemoteBackupMetadataObserver: BaiduRemoteBackupMetadataObserving, Se
     for pageIndex in 0..<Self.maximumPageCount {
       try Task.checkCancellation()
       let start = pageIndex * Self.pageSize
+      let accessToken: BaiduAccessToken
+      do {
+        accessToken = try credential.requestAccessToken(at: now())
+      } catch let error as BaiduAccountCredentialError {
+        throw BaiduRemoteBackupMetadataObservationError.credential(error)
+      }
       let request = try makeRequest(
         directoryPath: target.directoryPath,
         start: start,
-        accessToken: credential.requestAccessToken
+        accessToken: accessToken
       )
       let page = try await send(request)
       guard page.entries.count <= Self.pageSize else {

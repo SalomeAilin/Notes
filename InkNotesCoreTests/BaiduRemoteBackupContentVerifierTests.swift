@@ -9,6 +9,70 @@ struct BaiduRemoteBackupContentVerifierTests {
   private let backupID = UUID(uuidString: "B8000000-0000-0000-0000-000000000001")!
   private let fsID: UInt64 = 8_001
 
+  @Test("An unavailable credential stops before metadata and download requests")
+  func unavailableCredentialSendsNoVerificationRequest() async throws {
+    let archive = Data(repeating: 0x31, count: 512)
+    let record = try reconciliationRecord(archive: archive)
+    let now = Date(timeIntervalSinceReferenceDate: 4_000_000)
+    let metadataTransport = ScriptedBaiduHTTPTransport(handlers: [])
+    let byteStreamer = ScriptedBaiduRemoteBackupByteStreamer(handlers: [])
+    let clock = CredentialTestClock([now])
+    let verifier = BaiduRemoteBackupContentVerifier(
+      metadataTransport: metadataTransport,
+      byteStreamer: byteStreamer,
+      now: clock.now
+    )
+    let credential = try credential(
+      scope: record.accountScope,
+      expiresAt: now.addingTimeInterval(
+        BaiduCredentialUsePolicy.minimumRequestRemainingLifetime
+      )
+    )
+
+    await #expect(
+      throws: BaiduRemoteBackupContentVerificationError.credential(
+        .unavailableForRequest
+      )
+    ) {
+      try await verifier.verify(record: record, fsID: fsID, credential: credential)
+    }
+    #expect(await metadataTransport.requestCount() == 0)
+    #expect(await byteStreamer.requestCount() == 0)
+  }
+
+  @Test("Credential expiry after metadata prevents the download request")
+  func credentialIsRecheckedBeforeDownload() async throws {
+    let archive = Data(repeating: 0x32, count: 768)
+    let record = try reconciliationRecord(archive: archive)
+    let now = Date(timeIntervalSinceReferenceDate: 4_100_000)
+    let metadataTransport = ScriptedBaiduHTTPTransport(handlers: [
+      { _ in try Self.metadataResponse(record: record, fsID: 8_001) }
+    ])
+    let byteStreamer = ScriptedBaiduRemoteBackupByteStreamer(handlers: [])
+    let clock = CredentialTestClock([now, now.addingTimeInterval(61)])
+    let verifier = BaiduRemoteBackupContentVerifier(
+      metadataTransport: metadataTransport,
+      byteStreamer: byteStreamer,
+      now: clock.now
+    )
+    let credential = try credential(
+      scope: record.accountScope,
+      expiresAt: now.addingTimeInterval(
+        BaiduCredentialUsePolicy.minimumRequestRemainingLifetime + 60
+      )
+    )
+
+    await #expect(
+      throws: BaiduRemoteBackupContentVerificationError.credential(
+        .unavailableForRequest
+      )
+    ) {
+      try await verifier.verify(record: record, fsID: fsID, credential: credential)
+    }
+    #expect(await metadataTransport.requestCount() == 1)
+    #expect(await byteStreamer.requestCount() == 0)
+  }
+
   @Test("An exact full stream is the only successful content proof")
   func exactFullStreamIsVerified() async throws {
     let archive = Data((0..<4_097).map { UInt8($0 % 251) })
@@ -598,11 +662,13 @@ struct BaiduRemoteBackupContentVerifierTests {
 
   private func credential(
     scope: BaiduAccountScope,
-    token: String = "test.short-lived-access-token"
+    token: String = "test.short-lived-access-token",
+    expiresAt: Date = .distantFuture
   ) throws -> BaiduAccountBoundCredential {
     try BaiduAccountBoundCredential.testingOnly(
       accountScope: scope,
-      accessToken: BaiduAccessToken(token)
+      accessToken: BaiduAccessToken(token),
+      expiresAt: expiresAt
     )
   }
 

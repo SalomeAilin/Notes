@@ -36,6 +36,16 @@ struct BaiduAuthSecurityContractTests {
     #expect(plist["BGTaskSchedulerPermittedIdentifiers"] == nil)
   }
 
+  @Test("The Xcode app cannot enable the Swift Package test credential issuer")
+  func xcodeProjectCannotCompileTestingCredentialIssuer() throws {
+    let rootURL = try repositoryRootURL()
+    let project = try String(
+      contentsOf: rootURL.appendingPathComponent("InkNotes.xcodeproj/project.pbxproj"),
+      encoding: .utf8
+    )
+    #expect(!project.contains("SWIFT_PACKAGE"))
+  }
+
   @Test("Baidu implementation remains quarantined from app, views, and stores")
   func uploadCoreRemainsQuarantined() throws {
     let rootURL = try repositoryRootURL()
@@ -210,9 +220,12 @@ struct BaiduAuthSecurityContractTests {
     #expect(credentialModel.contains("init(brokerBindingID: UUID)"))
     #expect(credentialModel.contains("CustomReflectable"))
     #expect(credentialModel.contains("private let accessToken"))
-    #expect(credentialModel.contains("private init(accountScope:"))
+    #expect(credentialModel.contains("private let expiresAt"))
+    #expect(credentialModel.contains("private init("))
+    #expect(credentialModel.contains("func requestAccessToken(at now: Date) throws"))
     #expect(credentialModel.contains("#if SWIFT_PACKAGE"))
     #expect(credentialModel.contains("static func testingOnly("))
+    #expect(!credentialModel.contains("var requestAccessToken"))
     #expect(!credentialModel.contains("import CryptoKit"))
     #expect(!credentialModel.contains("BaiduAccountIdentity"))
     #expect(!credentialModel.contains("requestValue"))
@@ -223,6 +236,39 @@ struct BaiduAuthSecurityContractTests {
     #expect(!credentialModel.contains("SHA256"))
     #expect(!credentialModel.contains("MD5"))
     #expect(!credentialModel.contains("struct BaiduAccountBoundCredential: Codable"))
+  }
+
+  @Test("Every bound-credential token read is expiry-gated and WAL stays credential-free")
+  func credentialExpiryGateCallSitesRemainClosed() throws {
+    let rootURL = try repositoryRootURL()
+    let expectedCounts = [
+      "InkNotes/Models/BaiduAccountCredential.swift": 1,
+      "InkNotes/Networking/BaiduBackupUploadCoordinator.swift": 3,
+      "InkNotes/Networking/BaiduRemoteBackupContentVerifier.swift": 4,
+      "InkNotes/Networking/BaiduRemoteBackupMetadataObserver.swift": 1,
+    ]
+    var actualCounts: [String: Int] = [:]
+
+    for sourceURL in try productionSwiftURLs(repositoryRoot: rootURL) {
+      let contents = SwiftSourceLexicalMasker.codeOnly(
+        try String(contentsOf: sourceURL, encoding: .utf8)
+      )
+      let count = contents.components(separatedBy: "requestAccessToken").count - 1
+      if count > 0 {
+        actualCounts[relativePath(sourceURL, repositoryRoot: rootURL)] = count
+      }
+    }
+    #expect(actualCounts == expectedCounts)
+
+    let reconciliationSource = try String(
+      contentsOf: rootURL.appendingPathComponent(
+        "InkNotes/Persistence/BaiduUploadReconciliationRepository.swift"
+      ),
+      encoding: .utf8
+    )
+    for forbidden in ["expiresAt", "expirationDate", "expires_at"] {
+      #expect(!reconciliationSource.contains(forbidden))
+    }
   }
 
   @Test("Account identity probe remains minimal, redacted, and storage-free")

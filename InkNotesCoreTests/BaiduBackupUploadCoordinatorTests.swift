@@ -274,6 +274,160 @@ struct BaiduBackupUploadCoordinatorTests {
     #expect(await coordinator.snapshot().phase == .idle)
   }
 
+  @Test("An unavailable credential fails before reconciliation admission")
+  func unavailableCredentialCreatesNoUploadRecord() async throws {
+    let archive = try makeArchive(backupID: UUID())
+    let now = Date(timeIntervalSinceReferenceDate: 5_000_000)
+    let store = CoordinatorInMemoryReconciliationStore()
+    let uploader = ScriptedCoordinatorUploader(handlers: [])
+    let clock = CredentialTestClock([now])
+    let coordinator = BaiduBackupUploadCoordinator(
+      uploader: uploader,
+      reconciliationStore: store,
+      now: clock.now
+    )
+    let credential = try credential(
+      expiresAt: now.addingTimeInterval(
+        BaiduCredentialUsePolicy.minimumRequestRemainingLifetime
+      )
+    )
+
+    #expect(
+      await coordinator.upload(
+        archive: archive,
+        credential: credential,
+        applicationDirectory: try applicationDirectory()
+      ) == .failed(.credential(.unavailableForRequest))
+    )
+    #expect(await uploader.invocationCount() == 0)
+    #expect(await store.admissionCount() == 0)
+    #expect(await store.removalCount() == 0)
+    #expect(await store.recordCount() == 0)
+    #expect(await coordinator.snapshot().phase == .idle)
+  }
+
+  @Test("Credential expiry after admission removes the unsent owned record")
+  func credentialExpiryAfterAdmissionCleansUnsentRecord() async throws {
+    let archive = try makeArchive(backupID: UUID())
+    let now = Date(timeIntervalSinceReferenceDate: 5_100_000)
+    let store = CoordinatorInMemoryReconciliationStore()
+    let uploader = ScriptedCoordinatorUploader(handlers: [])
+    let clock = CredentialTestClock([now, now.addingTimeInterval(61)])
+    let coordinator = BaiduBackupUploadCoordinator(
+      uploader: uploader,
+      reconciliationStore: store,
+      now: clock.now
+    )
+    let credential = try credential(
+      expiresAt: now.addingTimeInterval(
+        BaiduCredentialUsePolicy.minimumRequestRemainingLifetime + 60
+      )
+    )
+
+    #expect(
+      await coordinator.upload(
+        archive: archive,
+        credential: credential,
+        applicationDirectory: try applicationDirectory()
+      ) == .failed(.credential(.unavailableForRequest))
+    )
+    #expect(await uploader.invocationCount() == 0)
+    #expect(await store.admissionCount() == 1)
+    #expect(await store.removalCount() == 1)
+    #expect(await store.recordCount() == 0)
+    #expect(await coordinator.snapshot().phase == .idle)
+  }
+
+  @Test("Credential expiry at precreate dispatch removes the unsent WAL")
+  func credentialExpiryAtPrecreateCheckpointCleansUnsentRecord() async throws {
+    let archive = try makeArchive(backupID: UUID())
+    let now = Date(timeIntervalSinceReferenceDate: 5_150_000)
+    let transport = ScriptedBaiduHTTPTransport(handlers: [])
+    let store = CoordinatorInMemoryReconciliationStore()
+    let clock = CredentialTestClock([now, now, now.addingTimeInterval(61)])
+    let coordinator = BaiduBackupUploadCoordinator(
+      uploader: BaiduNetdiskBackupUploader(transport: transport),
+      reconciliationStore: store,
+      now: clock.now
+    )
+    let credential = try credential(
+      expiresAt: now.addingTimeInterval(
+        BaiduCredentialUsePolicy.minimumRequestRemainingLifetime + 60
+      )
+    )
+
+    #expect(
+      await coordinator.upload(
+        archive: archive,
+        credential: credential,
+        applicationDirectory: try applicationDirectory()
+      ) == .failed(.credential(.unavailableForRequest))
+    )
+    #expect(await transport.requestCount() == 0)
+    #expect(await store.admissionCount() == 1)
+    #expect(await store.removalCount() == 1)
+    #expect(await store.recordCount() == 0)
+    #expect(await coordinator.snapshot().phase == .idle)
+  }
+
+  @Test("Credential expiry after precreate preserves the WAL and blocks retry")
+  func credentialExpiryAfterDispatchRequiresRemoteVerification() async throws {
+    let backupID = UUID()
+    let archive = try makeArchive(backupID: backupID)
+    let directory = try applicationDirectory()
+    let receipt = makeReceipt(archive: archive, backupID: backupID, directory: directory)
+    let now = Date(timeIntervalSinceReferenceDate: 5_200_000)
+    let precreateBody = try JSONSerialization.data(
+      withJSONObject: [
+        "errno": 0,
+        "return_type": 1,
+        "uploadid": "expiry-test-upload-id",
+        "block_list": [0],
+      ],
+      options: [.sortedKeys]
+    )
+    let transport = ScriptedBaiduHTTPTransport(handlers: [
+      { _ in BaiduHTTPResponse(statusCode: 200, headers: [:], body: precreateBody) }
+    ])
+    let store = CoordinatorInMemoryReconciliationStore()
+    let clock = CredentialTestClock([
+      now,
+      now,
+      now,
+      now.addingTimeInterval(61),
+    ])
+    let coordinator = BaiduBackupUploadCoordinator(
+      uploader: BaiduNetdiskBackupUploader(transport: transport),
+      reconciliationStore: store,
+      now: clock.now
+    )
+    let credential = try credential(
+      expiresAt: now.addingTimeInterval(
+        BaiduCredentialUsePolicy.minimumRequestRemainingLifetime + 60
+      )
+    )
+
+    #expect(
+      await coordinator.upload(
+        archive: archive,
+        credential: credential,
+        applicationDirectory: directory
+      ) == .outcomeUnknown(receipt: receipt, reason: .credentialUnavailable)
+    )
+    #expect(await transport.requestCount() == 1)
+    #expect(await store.recordCount() == 1)
+    #expect(await store.removalCount() == 0)
+    #expect(
+      await coordinator.upload(
+        archive: archive,
+        credential: credential,
+        applicationDirectory: directory
+      ) == .rejected(.remoteVerificationRequired(backupID: backupID))
+    )
+    #expect(await transport.requestCount() == 1)
+    #expect(await coordinator.snapshot().phase == .idle)
+  }
+
   @Test("A failure before precreate removes the owned record and permits a safe retry")
   func failureBeforePrecreateCanRetry() async throws {
     let backupID = UUID()
@@ -321,6 +475,7 @@ struct BaiduBackupUploadCoordinatorTests {
     let backupID = UUID()
     let archive = try makeArchive(backupID: backupID)
     let directory = try applicationDirectory()
+    let scope = accountScope()
     let receipt = makeReceipt(archive: archive, backupID: backupID, directory: directory)
     let firstUploader = ScriptedCoordinatorUploader(handlers: [
       failureAfterPrecreateHandler(error: .transport(.precreate))
@@ -333,9 +488,27 @@ struct BaiduBackupUploadCoordinatorTests {
     #expect(
       await firstCoordinator.upload(
         archive: archive,
-        credential: try credential(),
+        credential: try credential(
+          accountScope: scope,
+          expiresAt: Date.distantFuture.addingTimeInterval(-1_000)
+        ),
         applicationDirectory: directory
       ) == .outcomeUnknown(receipt: receipt, reason: .responseUnavailable)
+    )
+
+    let recordURL = rootURL.appendingPathComponent(
+      BaiduUploadReconciliationRepository.reconciliationDirectoryName,
+      isDirectory: true
+    ).appendingPathComponent(
+      BaiduUploadReconciliationRepository.recordFilename(
+        accountScope: scope,
+        backupID: backupID
+      )
+    )
+    let originalBytes = try Data(contentsOf: recordURL)
+    let originalInode = try #require(
+      FileManager.default.attributesOfItem(atPath: recordURL.path)[.systemFileNumber]
+        as? NSNumber
     )
 
     let restartedUploader = ScriptedCoordinatorUploader(handlers: [])
@@ -346,12 +519,97 @@ struct BaiduBackupUploadCoordinatorTests {
     #expect(
       await restartedCoordinator.upload(
         archive: archive,
-        credential: try credential(tokenValue: "different-account-token"),
+        credential: try credential(
+          tokenValue: "different-account-token",
+          accountScope: scope,
+          expiresAt: .distantFuture
+        ),
         applicationDirectory: directory
       ) == .rejected(.remoteVerificationRequired(backupID: backupID))
     )
+    #expect(try Data(contentsOf: recordURL) == originalBytes)
+    #expect(
+      (try FileManager.default.attributesOfItem(atPath: recordURL.path)[.systemFileNumber]
+        as? NSNumber) == originalInode
+    )
     #expect(await firstUploader.invocationCount() == 1)
     #expect(await restartedUploader.invocationCount() == 0)
+  }
+
+  @Test("An unavailable credential cannot mutate an existing upload record")
+  func unavailableCredentialPreservesExistingWAL() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString,
+      isDirectory: true
+    )
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let backupID = UUID()
+    let archive = try makeArchive(backupID: backupID)
+    let directory = try applicationDirectory()
+    let scope = accountScope()
+    let receipt = makeReceipt(archive: archive, backupID: backupID, directory: directory)
+    let now = Date(timeIntervalSinceReferenceDate: 5_300_000)
+    let firstClock = CredentialTestClock([now])
+    let firstCoordinator = BaiduBackupUploadCoordinator(
+      uploader: ScriptedCoordinatorUploader(handlers: [
+        failureAfterPrecreateHandler(error: .transport(.precreate))
+      ]),
+      reconciliationStore: BaiduUploadReconciliationRepository(rootURL: rootURL),
+      now: firstClock.now
+    )
+
+    #expect(
+      await firstCoordinator.upload(
+        archive: archive,
+        credential: try credential(
+          accountScope: scope,
+          expiresAt: now.addingTimeInterval(1_000)
+        ),
+        applicationDirectory: directory
+      ) == .outcomeUnknown(receipt: receipt, reason: .responseUnavailable)
+    )
+    let recordURL = rootURL.appendingPathComponent(
+      BaiduUploadReconciliationRepository.reconciliationDirectoryName,
+      isDirectory: true
+    ).appendingPathComponent(
+      BaiduUploadReconciliationRepository.recordFilename(
+        accountScope: scope,
+        backupID: backupID
+      )
+    )
+    let originalBytes = try Data(contentsOf: recordURL)
+    let originalInode = try #require(
+      fileManager.attributesOfItem(atPath: recordURL.path)[.systemFileNumber]
+        as? NSNumber
+    )
+    let restartedUploader = ScriptedCoordinatorUploader(handlers: [])
+    let restartedClock = CredentialTestClock([now])
+    let restartedCoordinator = BaiduBackupUploadCoordinator(
+      uploader: restartedUploader,
+      reconciliationStore: BaiduUploadReconciliationRepository(rootURL: rootURL),
+      now: restartedClock.now
+    )
+
+    #expect(
+      await restartedCoordinator.upload(
+        archive: archive,
+        credential: try credential(
+          tokenValue: "expired-restart-token",
+          accountScope: scope,
+          expiresAt: now.addingTimeInterval(
+            BaiduCredentialUsePolicy.minimumRequestRemainingLifetime
+          )
+        ),
+        applicationDirectory: directory
+      ) == .failed(.credential(.unavailableForRequest))
+    )
+    #expect(await restartedUploader.invocationCount() == 0)
+    #expect(try Data(contentsOf: recordURL) == originalBytes)
+    #expect(
+      (try fileManager.attributesOfItem(atPath: recordURL.path)[.systemFileNumber]
+        as? NSNumber) == originalInode
+    )
   }
 
   @Test("Two broker account scopes keep their distinct credentials isolated")
@@ -1170,11 +1428,13 @@ struct BaiduBackupUploadCoordinatorTests {
 
   private func credential(
     tokenValue: String = "coordinator.test-access-token",
-    accountScope: BaiduAccountScope? = nil
+    accountScope: BaiduAccountScope? = nil,
+    expiresAt: Date = .distantFuture
   ) throws -> BaiduAccountBoundCredential {
-    BaiduAccountBoundCredential.testingOnly(
+    try BaiduAccountBoundCredential.testingOnly(
       accountScope: accountScope ?? self.accountScope(),
-      accessToken: try BaiduAccessToken(tokenValue)
+      accessToken: BaiduAccessToken(tokenValue),
+      expiresAt: expiresAt
     )
   }
 
@@ -1550,10 +1810,13 @@ private struct CoordinatorReconciliationKey: Hashable {
 
 private actor CoordinatorInMemoryReconciliationStore: BaiduUploadReconciliationStoring {
   private var records: [CoordinatorReconciliationKey: BaiduUploadReconciliationRecord] = [:]
+  private var admissions = 0
+  private var removals = 0
 
   func admit(
     _ record: BaiduUploadReconciliationRecord
   ) -> BaiduUploadReconciliationAdmission {
+    admissions += 1
     let key = CoordinatorReconciliationKey(record)
     guard let existing = records[key] else {
       records[key] = record
@@ -1563,6 +1826,7 @@ private actor CoordinatorInMemoryReconciliationStore: BaiduUploadReconciliationS
   }
 
   func removeOwned(_ lease: BaiduUploadReconciliationLease) throws -> Bool {
+    removals += 1
     let record = lease.record
     let key = CoordinatorReconciliationKey(record)
     guard let existing = records[key] else { return false }
@@ -1575,6 +1839,14 @@ private actor CoordinatorInMemoryReconciliationStore: BaiduUploadReconciliationS
 
   func recordCount() -> Int {
     records.count
+  }
+
+  func admissionCount() -> Int {
+    admissions
+  }
+
+  func removalCount() -> Int {
+    removals
   }
 
   private func hasSameUploadIdentity(

@@ -67,7 +67,8 @@ struct BaiduUploadReconciliationRepositoryTests {
     let persistedText = try #require(String(data: originalBytes, encoding: .utf8))
     for forbidden in [
       "access_token", "refresh_token", "uploadid", "rawResponse", "tokenHash", "uk",
-      "baidu_name", "netdisk_name", "avatar_url",
+      "baidu_name", "netdisk_name", "avatar_url", "expiresAt", "expirationDate",
+      "expires_at",
     ] {
       #expect(!persistedText.contains(forbidden))
     }
