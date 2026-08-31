@@ -21,6 +21,8 @@ struct CompatibilityContractTests {
     #expect(DrawingRepository.libraryFilename == "library.json")
     #expect(DrawingRepository.drawingsDirectoryName == "Drawings")
     #expect(DrawingRepository.drawingFileExtension == "drawing")
+    #expect(DrawingRepository.pageSourcesDirectoryName == "PageSources")
+    #expect(DrawingRepository.pageSourceFileExtension == "json")
     #expect(DrawingRepository.restoreTransactionsDirectoryName == "RestoreTransactions")
     #expect(DrawingRepository.restoreTransactionFileExtension == "json")
     #expect(DrawingRepository.defaultRootURL()?.lastPathComponent == "InkNotes")
@@ -40,6 +42,7 @@ struct CompatibilityContractTests {
     #expect(BackupArchiveCodec.currentFormatVersion == 2)
     #expect(BackupArchiveCodec.headerByteCount == 56)
     #expect(LibraryDocument.currentSchemaVersion == 1)
+    #expect(PageSourceDocument.currentVersion == 1)
   }
 
   @Test("User-facing recovery messages explain outcomes without implementation jargon")

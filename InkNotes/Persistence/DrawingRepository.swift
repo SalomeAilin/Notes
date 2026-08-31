@@ -58,6 +58,8 @@ actor DrawingRepository {
   static let drawingFileExtension = "drawing"
   static let segmentedDrawingsDirectoryName = "DrawingSegments"
   static let segmentBlobFileExtension = "drawing"
+  static let pageSourcesDirectoryName = "PageSources"
+  static let pageSourceFileExtension = "json"
   static let segmentedPageLockFilename = ".inknotes-segmented-page.lock"
   static let maximumSegmentedPageEntryCount =
     (SegmentedDrawingLimits.maximumEntryCount
@@ -244,6 +246,61 @@ actor DrawingRepository {
     }
   }
 
+  func loadPageSources(pageID: UUID) throws -> [PageSourceExcerpt] {
+    let url = try pageSourcesURL(pageID: pageID)
+    var status = stat()
+    let statusResult = url.path.withCString { path in
+      Darwin.lstat(path, &status)
+    }
+    if statusResult == -1, errno == ENOENT {
+      return []
+    }
+    guard statusResult == 0,
+      status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+      status.st_mode & mode_t(0o7777) == mode_t(POSIXDurableFileWriter.filePermissions)
+    else {
+      throw PageSourceError.invalidDocument
+    }
+    let data = try readBoundedData(
+      at: url,
+      maximumByteCount: PageSourceLimits.maximumDocumentByteCount
+    ) { _ in PageSourceError.invalidDocument }
+    let decoded: PageSourceDocument
+    do {
+      decoded = try Self.makeDecoder().decode(PageSourceDocument.self, from: data)
+    } catch {
+      throw PageSourceError.invalidDocument
+    }
+    let validated = try decoded.validated(expectedPageID: pageID)
+    guard validated == decoded else {
+      throw PageSourceError.invalidDocument
+    }
+    return validated.sources
+  }
+
+  func savePageSources(_ sources: [PageSourceExcerpt], pageID: UUID) throws {
+    let document = try PageSourceDocument(pageID: pageID, sources: sources)
+      .validated(expectedPageID: pageID)
+    let data: Data
+    do {
+      data = try Self.makeEncoder().encode(document)
+    } catch {
+      throw PageSourceError.invalidDocument
+    }
+    guard data.count <= PageSourceLimits.maximumDocumentByteCount else {
+      throw PageSourceError.invalidDocument
+    }
+    try prepareRootDirectory()
+    try prepareDirectory(at: pageSourcesDirectoryURL())
+    try durableFileWriter.write(data, to: pageSourcesURL(pageID: pageID), mode: .replace)
+  }
+
+  func synchronizePageSourcesPersistence(pageID: UUID) throws {
+    let url = try pageSourcesURL(pageID: pageID)
+    guard fileManager.fileExists(atPath: url.path) else { return }
+    try durableFileWriter.synchronizeFileAndParentDirectory(at: url)
+  }
+
   func saveSegmentedDrawing(_ data: Data, pageID: UUID) throws {
     try Task.checkCancellation()
     let snapshot = try SegmentedDrawingCodec.makeSnapshot(
@@ -413,6 +470,20 @@ actor DrawingRepository {
     try requiredRootURL().appendingPathComponent(
       Self.segmentedDrawingsDirectoryName,
       isDirectory: true
+    )
+  }
+
+  private func pageSourcesDirectoryURL() throws -> URL {
+    try requiredRootURL().appendingPathComponent(
+      Self.pageSourcesDirectoryName,
+      isDirectory: true
+    )
+  }
+
+  private func pageSourcesURL(pageID: UUID) throws -> URL {
+    try pageSourcesDirectoryURL().appendingPathComponent(
+      "\(pageID.uuidString.lowercased()).\(Self.pageSourceFileExtension)",
+      isDirectory: false
     )
   }
 

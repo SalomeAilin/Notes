@@ -24,6 +24,143 @@ enum PageBackground: String, Codable, CaseIterable, Identifiable, Sendable {
   }
 }
 
+enum PageSourceLimits {
+  static let maximumSourceCountPerPage = 100
+  static let maximumTitleUTF8ByteCount = 1024
+  static let maximumExcerptUTF8ByteCount = 16 * 1024
+  static let maximumURLUTF8ByteCount = 2048
+  static let maximumDocumentByteCount = 2 * 1024 * 1024
+}
+
+enum PageSourceError: LocalizedError, Equatable, Sendable {
+  case invalidDocument
+  case invalidURL
+  case emptySelection
+  case titleTooLong
+  case excerptTooLong
+  case tooManySources
+  case duplicateSourceID(UUID)
+
+  var errorDescription: String? {
+    switch self {
+    case .invalidDocument:
+      "这页的来源记录无法确认。为保护原内容，已停止读取。"
+    case .invalidURL:
+      "只能保存安全网页的来源链接。"
+    case .emptySelection:
+      "请先在网页中选中需要保存的文字。"
+    case .titleTooLong:
+      "网页标题太长，暂时无法保存这条摘录。"
+    case .excerptTooLong:
+      "选中的文字太多，请缩小选择范围后再试。"
+    case .tooManySources:
+      "这页保存的来源较多，请先整理后再添加。"
+    case .duplicateSourceID:
+      "这页包含重复的来源记录。为保护原内容，已停止读取。"
+    }
+  }
+}
+
+struct PageSourceExcerpt: Identifiable, Codable, Equatable, Sendable {
+  let id: UUID
+  let title: String
+  let excerpt: String
+  let sourceURL: URL
+  let capturedAt: Date
+
+  init(
+    id: UUID = UUID(),
+    title: String,
+    excerpt: String,
+    sourceURL: URL,
+    capturedAt: Date = Date()
+  ) {
+    self.id = id
+    self.title = title
+    self.excerpt = excerpt
+    self.sourceURL = sourceURL
+    self.capturedAt = capturedAt
+  }
+
+  func validated() throws -> PageSourceExcerpt {
+    let cleanedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+    let cleanedExcerpt = excerpt.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !cleanedExcerpt.isEmpty else {
+      throw PageSourceError.emptySelection
+    }
+    guard !cleanedTitle.isEmpty,
+      cleanedTitle.utf8.count <= PageSourceLimits.maximumTitleUTF8ByteCount
+    else {
+      throw PageSourceError.titleTooLong
+    }
+    guard cleanedExcerpt.utf8.count <= PageSourceLimits.maximumExcerptUTF8ByteCount else {
+      throw PageSourceError.excerptTooLong
+    }
+    guard
+      let components = URLComponents(
+        url: sourceURL,
+        resolvingAgainstBaseURL: false
+      ),
+      components.scheme?.lowercased() == "https",
+      components.host?.isEmpty == false,
+      components.user == nil,
+      components.password == nil,
+      sourceURL.absoluteString.utf8.count <= PageSourceLimits.maximumURLUTF8ByteCount
+    else {
+      throw PageSourceError.invalidURL
+    }
+    guard capturedAt.timeIntervalSince1970.isFinite else {
+      throw PageSourceError.invalidDocument
+    }
+    return PageSourceExcerpt(
+      id: id,
+      title: cleanedTitle,
+      excerpt: cleanedExcerpt,
+      sourceURL: sourceURL,
+      capturedAt: capturedAt
+    )
+  }
+}
+
+struct PageSourceDocument: Codable, Equatable, Sendable {
+  static let currentVersion = 1
+
+  let version: Int
+  let pageID: UUID
+  let sources: [PageSourceExcerpt]
+
+  init(
+    version: Int = PageSourceDocument.currentVersion,
+    pageID: UUID,
+    sources: [PageSourceExcerpt]
+  ) {
+    self.version = version
+    self.pageID = pageID
+    self.sources = sources
+  }
+
+  func validated(expectedPageID: UUID) throws -> PageSourceDocument {
+    guard version == Self.currentVersion,
+      pageID == expectedPageID,
+      sources.count <= PageSourceLimits.maximumSourceCountPerPage
+    else {
+      throw sources.count > PageSourceLimits.maximumSourceCountPerPage
+        ? PageSourceError.tooManySources
+        : PageSourceError.invalidDocument
+    }
+    var sourceIDs = Set<UUID>()
+    var validatedSources: [PageSourceExcerpt] = []
+    validatedSources.reserveCapacity(sources.count)
+    for source in sources {
+      guard sourceIDs.insert(source.id).inserted else {
+        throw PageSourceError.duplicateSourceID(source.id)
+      }
+      validatedSources.append(try source.validated())
+    }
+    return PageSourceDocument(pageID: pageID, sources: validatedSources)
+  }
+}
+
 struct NotePage: Identifiable, Codable, Equatable, Sendable {
   let id: UUID
   var title: String

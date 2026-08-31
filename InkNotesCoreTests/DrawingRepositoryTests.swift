@@ -107,6 +107,93 @@ struct DrawingRepositoryTests {
     #expect(try await repository.loadDrawing(pageID: pageID) == drawing)
   }
 
+  @Test("Page sources survive restart and reject unsafe links before saving")
+  func pageSourceRoundTripAndValidation() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let pageID = UUID(uuidString: "11000000-0000-0000-0000-000000000001")!
+    let source = try PageSourceExcerpt(
+      id: UUID(uuidString: "11000000-0000-0000-0000-000000000002")!,
+      title: "  官方资料  ",
+      excerpt: "  用户主动选中的一段文字。  ",
+      sourceURL: #require(URL(string: "https://example.com/reference?q=notes")),
+      capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    ).validated()
+    let repository = DrawingRepository(rootURL: rootURL)
+
+    try await repository.savePageSources([source], pageID: pageID)
+    let restartedRepository = DrawingRepository(rootURL: rootURL)
+    #expect(try await restartedRepository.loadPageSources(pageID: pageID) == [source])
+
+    let sourceURL =
+      rootURL
+      .appendingPathComponent(
+        DrawingRepository.pageSourcesDirectoryName,
+        isDirectory: true
+      )
+      .appendingPathComponent(
+        "\(pageID.uuidString.lowercased()).\(DrawingRepository.pageSourceFileExtension)"
+      )
+    let attributes = try fileManager.attributesOfItem(atPath: sourceURL.path)
+    #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+
+    let unsafe = PageSourceExcerpt(
+      title: "不安全链接",
+      excerpt: "不应写入",
+      sourceURL: try #require(URL(string: "http://example.com"))
+    )
+    await #expect(throws: PageSourceError.invalidURL) {
+      try await repository.savePageSources([unsafe], pageID: UUID())
+    }
+  }
+
+  @Test("Page source substitution and duplicate records fail closed")
+  func pageSourceIntegrityFailures() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let pageID = UUID(uuidString: "11000000-0000-0000-0000-000000000003")!
+    let otherPageID = UUID(uuidString: "11000000-0000-0000-0000-000000000004")!
+    let sourceID = UUID(uuidString: "11000000-0000-0000-0000-000000000005")!
+    let source = try PageSourceExcerpt(
+      id: sourceID,
+      title: "来源",
+      excerpt: "摘录",
+      sourceURL: try #require(URL(string: "https://example.com"))
+    ).validated()
+    let repository = DrawingRepository(rootURL: rootURL)
+    try await repository.savePageSources([source], pageID: pageID)
+
+    let substituted = PageSourceDocument(pageID: otherPageID, sources: [source])
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .secondsSince1970
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    let url =
+      rootURL
+      .appendingPathComponent(
+        DrawingRepository.pageSourcesDirectoryName,
+        isDirectory: true
+      )
+      .appendingPathComponent(
+        "\(pageID.uuidString.lowercased()).\(DrawingRepository.pageSourceFileExtension)"
+      )
+    try encoder.encode(substituted).write(to: url, options: .atomic)
+    try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    await #expect(throws: PageSourceError.invalidDocument) {
+      _ = try await repository.loadPageSources(pageID: pageID)
+    }
+
+    let duplicate = PageSourceDocument(pageID: pageID, sources: [source, source])
+    try encoder.encode(duplicate).write(to: url, options: .atomic)
+    try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    await #expect(throws: PageSourceError.duplicateSourceID(sourceID)) {
+      _ = try await repository.loadPageSources(pageID: pageID)
+    }
+  }
+
   @Test("Segmented saves publish durable local content before the page authority")
   func segmentedSaveOrderingAndRoundTrip() async throws {
     let fileManager = FileManager.default

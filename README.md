@@ -100,6 +100,9 @@ InkNotes/
 │   └── <page-uuid>/
 │       ├── .inknotes-durable-write.lock
 │       └── <sha256>.drawing
+├── PageSources/
+│   ├── .inknotes-durable-write.lock
+│   └── <page-uuid>.json
 ├── RestoreTransactions/
 │   ├── .inknotes-durable-write.lock
 │   └── <backup-uuid>.json
@@ -108,7 +111,7 @@ InkNotes/
     └── <backup-uuid>.json  # legacy v1；存在时全局失败关闭
 ```
 
-`.inknotes-durable-write.lock` 和 `.inknotes-segmented-page.lock` 是同目录写入协调文件，不属于用户笔记或备份内容。应用首次使用各目录时会把目录权限收紧为 `0700`，新写入或重新确认的持久化文件使用 `0600`，并清理仅符合应用 UUID 命名规则的崩溃残留临时文件；其他 `.tmp` 文件不会被删除。`Drawings/<page-uuid>.drawing` 仍是页面唯一入口：历史页面保存原 PencilKit 数据，新格式保存带完整性校验的分段索引；`DrawingSegments` 同时保存逐字节原稿块和区域笔迹块。原稿块保证现有读取与 v1 备份不改变用户原数据；页面级进程锁与文件锁串行化同页读写，清理只接受规范摘要文件，并在任何新块写入前删除当前权威不再引用的内容、同步目录。一次保存中断最多留下下一代孤立块，后续保存会在替换笔记前安全回收。`RestoreTransactions` 是本机恢复操作的不可变 WAL/回执，不写入 `.notesbackup`，并限制为最多 1,000 份、单份 2 MiB。`UploadReconciliation` 未接 UI，按 broker 签发的随机非秘密账号绑定 UUID 隔离；每个规范文件只能是待核对的 v2 尝试屏障，或是由同一 v2 原子换入的 v3 完整字节核验回执，单份最多 16 KiB、所有账号合计最多 1,000 份。两种记录都不含访问凭据、token 哈希、百度 UK、用户名、头像、`uploadid`、请求 URL 或响应体；v3 只在原身份上增加远端 `fs_id`、实际核验字节数、完整 SHA-256 和核验协议版本。无账号证据的 v1 记录不会自动认领、迁移或删除，只要存在就阻断整个目录的上传，等待未来人工远端核验。删除笔记本或页面后，当前版本会保留对应的孤立笔迹文件及分段目录，避免立即破坏数据；暂未提供“最近删除”恢复界面。
+`.inknotes-durable-write.lock` 和 `.inknotes-segmented-page.lock` 是同目录写入协调文件，不属于用户笔记或备份内容。应用首次使用各目录时会把目录权限收紧为 `0700`，新写入或重新确认的持久化文件使用 `0600`，并清理仅符合应用 UUID 命名规则的崩溃残留临时文件；其他 `.tmp` 文件不会被删除。`Drawings/<page-uuid>.drawing` 仍是页面唯一入口：历史页面保存原 PencilKit 数据，新格式保存带完整性校验的分段索引；`DrawingSegments` 同时保存逐字节原稿块和区域笔迹块。原稿块保证现有读取与 v1 备份不改变用户原数据；页面级进程锁与文件锁串行化同页读写，清理只接受规范摘要文件，并在任何新块写入前删除当前权威不再引用的内容、同步目录。一次保存中断最多留下下一代孤立块，后续保存会在替换笔记前安全回收。`PageSources` 是尚未接 UI 的网页来源基础：每页独立保存用户主动选中的文字、HTTPS 原链接、网页标题和采集时间；不接受带账号凭据的 URL，单页最多 100 条，单条摘录最多 16 KiB，单文件最多 2 MiB。它不修改历史 `library.json` schema，因此旧版本不会在保存目录时静默删除来源；来源进入备份与恢复映射前不会展示浏览器入口。`RestoreTransactions` 是本机恢复操作的不可变 WAL/回执，不写入 `.notesbackup`，并限制为最多 1,000 份、单份 2 MiB。`UploadReconciliation` 未接 UI，按 broker 签发的随机非秘密账号绑定 UUID 隔离；每个规范文件只能是待核对的 v2 尝试屏障，或是由同一 v2 原子换入的 v3 完整字节核验回执，单份最多 16 KiB、所有账号合计最多 1,000 份。两种记录都不含访问凭据、token 哈希、百度 UK、用户名、头像、`uploadid`、请求 URL 或响应体；v3 只在原身份上增加远端 `fs_id`、实际核验字节数、完整 SHA-256 和核验协议版本。无账号证据的 v1 记录不会自动认领、迁移或删除，只要存在就阻断整个目录的上传，等待未来人工远端核验。删除笔记本或页面后，当前版本会保留对应的孤立笔迹文件、分段目录及来源文件，避免立即破坏数据；暂未提供“最近删除”恢复界面。
 
 ## 更名兼容边界
 
