@@ -1,9 +1,12 @@
 import Foundation
 
 enum BackupArchiveLimits {
-  static let maximumArchiveByteCount = 32 * 1024 * 1024
+  static let maximumLegacyArchiveByteCount = 32 * 1024 * 1024
+  static let maximumArchiveByteCount = 128 * 1024 * 1024
   static let maximumManifestByteCount = 2 * 1024 * 1024
-  static let maximumDrawingByteCount = 8 * 1024 * 1024
+  static let maximumLegacyDrawingByteCount = 8 * 1024 * 1024
+  static let maximumDrawingByteCount = 64 * 1024 * 1024
+  static let maximumPayloadChunkByteCount = 1024 * 1024
   static let maximumNotebookCount = 1_000
   static let maximumPageCount = 5_000
   static let maximumTitleUTF8ByteCount = 1_024
@@ -27,7 +30,31 @@ struct BackupArchiveManifest: Codable, Equatable, Sendable {
   let drawings: [BackupDrawingEntry]
 }
 
+struct BackupDrawingChunkEntry: Codable, Equatable, Sendable {
+  let offset: UInt64
+  let byteCount: UInt64
+  let sha256: String
+}
+
+struct BackupDrawingPageEntry: Codable, Equatable, Sendable {
+  let pageID: UUID
+  let byteCount: UInt64
+  let sha256: String
+  let chunks: [BackupDrawingChunkEntry]
+}
+
+struct BackupArchiveManifestV2: Codable, Equatable, Sendable {
+  let backupID: UUID
+  let createdAt: Date
+  let sourceAppVersion: String
+  let sourceBuild: String
+  let librarySchemaVersion: Int
+  let library: LibraryDocument
+  let pages: [BackupDrawingPageEntry]
+}
+
 struct ValidatedBackupArchive: Equatable, Sendable {
+  let formatVersion: UInt16
   let backupID: UUID
   let archiveChecksum: String
   let createdAt: Date

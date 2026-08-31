@@ -26,6 +26,7 @@ struct BackupSnapshotRepositoryTests {
     let decoded = try BackupArchiveCodec.decode(archive)
     let persistedLibrary = try #require(try await fixture.repository.loadLibrary())
 
+    #expect(decoded.formatVersion == BackupArchiveCodec.legacyFormatVersion)
     #expect(decoded.drawings[pageID] == latestDrawing)
     #expect(try await fixture.repository.loadDrawing(pageID: pageID) == latestDrawing)
     expectSameLibraryContent(persistedLibrary, library)
@@ -74,6 +75,42 @@ struct BackupSnapshotRepositoryTests {
     #expect(persistedCurrentDrawing == currentDrawing)
     #expect(persistedImportedDrawing == sourceDrawing)
     expectSameLibraryContent(persistedLibrary, result.library)
+  }
+
+  @Test("A v2 backup restores as a copy without replacing current notes")
+  func restoreVersionTwoAsCopy() async throws {
+    let fixture = makeRepository()
+    defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+    let currentLibrary = LibraryDocument.starter()
+    let currentPageID = try #require(currentLibrary.notebooks.first?.pages.first?.id)
+    let currentDrawing = PKDrawing().dataRepresentation()
+    try await fixture.repository.saveLibrary(currentLibrary)
+    try await fixture.repository.saveDrawing(currentDrawing, pageID: currentPageID)
+
+    let sourceLibrary = LibraryDocument.starter()
+    let sourcePageID = try #require(sourceLibrary.notebooks.first?.pages.first?.id)
+    let sourceDrawing = PKDrawing().dataRepresentation()
+    let archive = try BackupArchiveCodec.encodeV2(
+      library: sourceLibrary,
+      drawings: [sourcePageID: sourceDrawing],
+      createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+
+    let result = try await fixture.repository.restoreBackupAsCopy(
+      archive,
+      currentLibrary: currentLibrary,
+      currentDrawingOverrides: [currentPageID: currentDrawing],
+      importedAt: Date(timeIntervalSince1970: 1_700_000_100)
+    )
+
+    #expect(result.disposition == .imported)
+    #expect(result.library.notebooks.count == 2)
+    #expect(try await fixture.repository.loadDrawing(pageID: currentPageID) == currentDrawing)
+    #expect(
+      try await fixture.repository.loadDrawing(pageID: result.selectedPageID)
+        == sourceDrawing
+    )
   }
 
   @Test("A new restore accepts the exact combined notebook and page limits")

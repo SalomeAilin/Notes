@@ -79,7 +79,7 @@ extension DrawingRepository {
       pageIDs: pageIDs,
       drawingOverrides: drawingOverrides
     )
-    return try BackupArchiveCodec.encode(
+    return try BackupArchiveCodec.encodeBestAvailable(
       library: library,
       drawings: drawings,
       createdAt: createdAt,
@@ -194,7 +194,7 @@ extension DrawingRepository {
     }
 
     for drawing in drawingsToWrite {
-      try saveDrawing(drawing.data, pageID: drawing.pageID)
+      try saveDrawingForEditing(drawing.data, pageID: drawing.pageID)
     }
 
     do {
@@ -435,7 +435,7 @@ extension DrawingRepository {
 
     var reconciledDrawings = currentDrawings
     for drawing in missingDrawings {
-      try saveDrawing(drawing.data, pageID: drawing.pageID)
+      try saveDrawingForEditing(drawing.data, pageID: drawing.pageID)
       reconciledDrawings[drawing.pageID] = drawing.data
     }
     return (reconciledDrawings, Set(missingDrawings.map(\.pageID)))

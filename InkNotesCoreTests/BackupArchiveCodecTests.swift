@@ -53,6 +53,63 @@ struct BackupArchiveCodecTests {
     #expect(first == second)
   }
 
+  @Test("Compatible backups stay v1 while oversized pages move to chunked v2")
+  func bestAvailableFormatIsSelectedWithoutChangingTheFileIdentity() throws {
+    let fixture = makeFixture()
+    let smallArchive = try BackupArchiveCodec.encodeBestAvailable(
+      library: fixture.library,
+      drawings: fixture.drawings,
+      createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+    let smallDecoded = try BackupArchiveCodec.decode(smallArchive)
+    #expect(readUInt16(smallArchive, at: 8) == BackupArchiveCodec.legacyFormatVersion)
+    #expect(smallDecoded.formatVersion == BackupArchiveCodec.legacyFormatVersion)
+    #expect(smallDecoded.drawings == fixture.drawings)
+
+    let longPageID = fixture.firstPageID
+    let largeDrawing = Data(
+      repeating: 0xA5,
+      count: BackupArchiveLimits.maximumLegacyDrawingByteCount + 1
+    )
+    var largeDrawings = fixture.drawings
+    largeDrawings[longPageID] = largeDrawing
+    let largeArchive = try BackupArchiveCodec.encodeBestAvailable(
+      library: fixture.library,
+      drawings: largeDrawings,
+      createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+    let largeDecoded = try BackupArchiveCodec.decode(largeArchive)
+
+    #expect(readUInt16(largeArchive, at: 8) == BackupArchiveCodec.currentFormatVersion)
+    #expect(largeDecoded.formatVersion == BackupArchiveCodec.currentFormatVersion)
+    #expect(largeDecoded.drawings == largeDrawings)
+    #expect(largeArchive.count <= BackupArchiveLimits.maximumArchiveByteCount)
+
+    let manifestStart = BackupArchiveCodec.headerByteCount
+    let manifestEnd = manifestStart + Int(readUInt32(largeArchive, at: 12))
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .secondsSince1970
+    let manifest = try decoder.decode(
+      BackupArchiveManifestV2.self,
+      from: largeArchive.subdata(in: manifestStart..<manifestEnd)
+    )
+    let largePage = try #require(manifest.pages.first { $0.pageID == longPageID })
+    #expect(largePage.chunks.count == 9)
+    #expect(
+      largePage.chunks.allSatisfy {
+        $0.byteCount > 0
+          && $0.byteCount <= UInt64(BackupArchiveLimits.maximumPayloadChunkByteCount)
+      }
+    )
+
+    var internallyTampered = largeArchive
+    internallyTampered[internallyTampered.count - 1] ^= 0x01
+    rewriteArchiveChecksum(&internallyTampered)
+    #expect(throws: BackupArchiveError.drawingChecksumMismatch(pageID: longPageID)) {
+      try BackupArchiveCodec.decode(internallyTampered)
+    }
+  }
+
   @Test("Any payload tampering fails the archive checksum before import")
   func tamperedPayloadIsRejected() throws {
     let fixture = makeFixture()
@@ -115,8 +172,8 @@ struct BackupArchiveCodecTests {
 
     var unsupportedVersion = archive
     unsupportedVersion[8] = 0x00
-    unsupportedVersion[9] = 0x02
-    #expect(throws: BackupArchiveError.unsupportedVersion(found: 2)) {
+    unsupportedVersion[9] = 0x03
+    #expect(throws: BackupArchiveError.unsupportedVersion(found: 3)) {
       try BackupArchiveCodec.decode(unsupportedVersion)
     }
 
@@ -590,6 +647,20 @@ struct BackupArchiveCodecTests {
     for (index, shift) in stride(from: 24, through: 0, by: -8).enumerated() {
       data[offset + index] = UInt8((value >> UInt32(shift)) & 0xFF)
     }
+  }
+
+  private func readUInt16(_ data: Data, at offset: Int) -> UInt16 {
+    (UInt16(data[offset]) << 8) | UInt16(data[offset + 1])
+  }
+
+  private func rewriteArchiveChecksum(_ archive: inout Data) {
+    var hasher = SHA256()
+    hasher.update(data: archive.prefix(24))
+    hasher.update(data: archive.suffix(from: BackupArchiveCodec.headerByteCount))
+    archive.replaceSubrange(
+      24..<BackupArchiveCodec.headerByteCount,
+      with: Data(hasher.finalize())
+    )
   }
 
   private func readUInt32(_ data: Data, at offset: Int) -> UInt32 {

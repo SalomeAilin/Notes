@@ -5,7 +5,8 @@ enum BackupArchiveCodec {
   static let uniformTypeIdentifier = "com.salomeailin.notes.backup"
   static let fileExtension = "notesbackup"
   static let mimeType = "application/vnd.salomeailin.notes-backup"
-  static let formatVersion: UInt16 = 1
+  static let legacyFormatVersion: UInt16 = 1
+  static let currentFormatVersion: UInt16 = 2
   static let headerByteCount = 56
 
   static let magic = Data([0x49, 0x4E, 0x4B, 0x4E, 0x4F, 0x54, 0x45, 0x00])
@@ -48,21 +49,21 @@ enum BackupArchiveCodec {
       guard let drawing = drawings[pageID] else {
         throw BackupArchiveError.drawingIndexMismatch
       }
-      guard drawing.count <= BackupArchiveLimits.maximumDrawingByteCount else {
+      guard drawing.count <= BackupArchiveLimits.maximumLegacyDrawingByteCount else {
         throw BackupArchiveError.drawingTooLarge(
           pageID: pageID,
           actual: UInt64(drawing.count),
-          maximum: BackupArchiveLimits.maximumDrawingByteCount
+          maximum: BackupArchiveLimits.maximumLegacyDrawingByteCount
         )
       }
 
       let (nextPayloadCount, overflow) = payload.count.addingReportingOverflow(drawing.count)
       guard !overflow,
-        nextPayloadCount <= BackupArchiveLimits.maximumArchiveByteCount - headerByteCount
+        nextPayloadCount <= BackupArchiveLimits.maximumLegacyArchiveByteCount - headerByteCount
       else {
         throw BackupArchiveError.archiveTooLarge(
           actual: overflow ? Int.max : nextPayloadCount,
-          maximum: BackupArchiveLimits.maximumArchiveByteCount
+          maximum: BackupArchiveLimits.maximumLegacyArchiveByteCount
         )
       }
 
@@ -97,18 +98,18 @@ enum BackupArchiveCodec {
     let (bodyByteCount, bodyOverflow) = manifestData.count.addingReportingOverflow(payload.count)
     let (archiveByteCount, archiveOverflow) = headerByteCount.addingReportingOverflow(bodyByteCount)
     guard !bodyOverflow, !archiveOverflow,
-      archiveByteCount <= BackupArchiveLimits.maximumArchiveByteCount
+      archiveByteCount <= BackupArchiveLimits.maximumLegacyArchiveByteCount
     else {
       throw BackupArchiveError.archiveTooLarge(
         actual: bodyOverflow || archiveOverflow ? Int.max : archiveByteCount,
-        maximum: BackupArchiveLimits.maximumArchiveByteCount
+        maximum: BackupArchiveLimits.maximumLegacyArchiveByteCount
       )
     }
 
     var prefix = Data()
     prefix.reserveCapacity(24)
     prefix.append(magic)
-    appendBigEndian(formatVersion, to: &prefix)
+    appendBigEndian(legacyFormatVersion, to: &prefix)
     appendBigEndian(supportedFlags, to: &prefix)
     appendBigEndian(UInt32(manifestData.count), to: &prefix)
     appendBigEndian(UInt64(payload.count), to: &prefix)
@@ -123,6 +124,168 @@ enum BackupArchiveCodec {
     archive.reserveCapacity(archiveByteCount)
     archive.append(prefix)
     archive.append(archiveDigest)
+    archive.append(manifestData)
+    archive.append(payload)
+    return archive
+  }
+
+  static func encodeBestAvailable(
+    library: LibraryDocument,
+    drawings: [UUID: Data],
+    createdAt: Date,
+    backupID: UUID = UUID(),
+    sourceAppVersion: String = "",
+    sourceBuild: String = ""
+  ) throws -> Data {
+    do {
+      return try encode(
+        library: library,
+        drawings: drawings,
+        createdAt: createdAt,
+        backupID: backupID,
+        sourceAppVersion: sourceAppVersion,
+        sourceBuild: sourceBuild
+      )
+    } catch let error as BackupArchiveError {
+      switch error {
+      case .drawingTooLarge, .archiveTooLarge:
+        return try encodeV2(
+          library: library,
+          drawings: drawings,
+          createdAt: createdAt,
+          backupID: backupID,
+          sourceAppVersion: sourceAppVersion,
+          sourceBuild: sourceBuild
+        )
+      default:
+        throw error
+      }
+    }
+  }
+
+  static func encodeV2(
+    library: LibraryDocument,
+    drawings: [UUID: Data],
+    createdAt: Date,
+    backupID: UUID = UUID(),
+    sourceAppVersion: String = "",
+    sourceBuild: String = ""
+  ) throws -> Data {
+    let pageIDs = try validateLibrary(library)
+    try validateSourceMetadata(
+      createdAt: createdAt,
+      sourceAppVersion: sourceAppVersion,
+      sourceBuild: sourceBuild
+    )
+    guard Set(drawings.keys) == pageIDs else {
+      throw BackupArchiveError.drawingIndexMismatch
+    }
+
+    var payload = Data()
+    var pages: [BackupDrawingPageEntry] = []
+    pages.reserveCapacity(pageIDs.count)
+
+    for pageID in pageIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
+      guard let drawing = drawings[pageID] else {
+        throw BackupArchiveError.drawingIndexMismatch
+      }
+      guard drawing.count <= BackupArchiveLimits.maximumDrawingByteCount else {
+        throw BackupArchiveError.drawingTooLarge(
+          pageID: pageID,
+          actual: UInt64(drawing.count),
+          maximum: BackupArchiveLimits.maximumDrawingByteCount
+        )
+      }
+
+      var chunks: [BackupDrawingChunkEntry] = []
+      var drawingOffset = 0
+      while drawingOffset < drawing.count {
+        let remainingByteCount = drawing.count - drawingOffset
+        let chunkByteCount = min(
+          remainingByteCount,
+          BackupArchiveLimits.maximumPayloadChunkByteCount
+        )
+        let nextDrawingOffset = drawingOffset + chunkByteCount
+        let chunk = drawing.subdata(in: drawingOffset..<nextDrawingOffset)
+        let (nextPayloadCount, overflow) = payload.count.addingReportingOverflow(chunk.count)
+        guard !overflow,
+          nextPayloadCount <= BackupArchiveLimits.maximumArchiveByteCount - headerByteCount
+        else {
+          throw BackupArchiveError.archiveTooLarge(
+            actual: overflow ? Int.max : nextPayloadCount,
+            maximum: BackupArchiveLimits.maximumArchiveByteCount
+          )
+        }
+        chunks.append(
+          BackupDrawingChunkEntry(
+            offset: UInt64(payload.count),
+            byteCount: UInt64(chunk.count),
+            sha256: sha256Hex(chunk)
+          )
+        )
+        payload.append(chunk)
+        drawingOffset = nextDrawingOffset
+      }
+      pages.append(
+        BackupDrawingPageEntry(
+          pageID: pageID,
+          byteCount: UInt64(drawing.count),
+          sha256: sha256Hex(drawing),
+          chunks: chunks
+        )
+      )
+    }
+
+    let manifest = BackupArchiveManifestV2(
+      backupID: backupID,
+      createdAt: createdAt,
+      sourceAppVersion: sourceAppVersion,
+      sourceBuild: sourceBuild,
+      librarySchemaVersion: library.schemaVersion,
+      library: library,
+      pages: pages
+    )
+    let manifestData: Data
+    do {
+      manifestData = try makeEncoder().encode(manifest)
+    } catch {
+      throw BackupArchiveError.invalidManifest
+    }
+    guard manifestData.count <= BackupArchiveLimits.maximumManifestByteCount else {
+      throw BackupArchiveError.manifestTooLarge(
+        actual: manifestData.count,
+        maximum: BackupArchiveLimits.maximumManifestByteCount
+      )
+    }
+
+    let (bodyByteCount, bodyOverflow) = manifestData.count.addingReportingOverflow(payload.count)
+    let (archiveByteCount, archiveOverflow) = headerByteCount.addingReportingOverflow(bodyByteCount)
+    guard !bodyOverflow, !archiveOverflow,
+      archiveByteCount <= BackupArchiveLimits.maximumArchiveByteCount
+    else {
+      throw BackupArchiveError.archiveTooLarge(
+        actual: bodyOverflow || archiveOverflow ? Int.max : archiveByteCount,
+        maximum: BackupArchiveLimits.maximumArchiveByteCount
+      )
+    }
+
+    var prefix = Data()
+    prefix.reserveCapacity(24)
+    prefix.append(magic)
+    appendBigEndian(currentFormatVersion, to: &prefix)
+    appendBigEndian(supportedFlags, to: &prefix)
+    appendBigEndian(UInt32(manifestData.count), to: &prefix)
+    appendBigEndian(UInt64(payload.count), to: &prefix)
+
+    var hasher = SHA256()
+    hasher.update(data: prefix)
+    hasher.update(data: manifestData)
+    hasher.update(data: payload)
+
+    var archive = Data()
+    archive.reserveCapacity(archiveByteCount)
+    archive.append(prefix)
+    archive.append(Data(hasher.finalize()))
     archive.append(manifestData)
     archive.append(payload)
     return archive
@@ -143,8 +306,17 @@ enum BackupArchiveCodec {
     }
 
     let version = readUInt16(data, at: 8)
-    guard version == formatVersion else {
+    if version == currentFormatVersion {
+      return try decodeV2(data)
+    }
+    guard version == legacyFormatVersion else {
       throw BackupArchiveError.unsupportedVersion(found: version)
+    }
+    guard data.count <= BackupArchiveLimits.maximumLegacyArchiveByteCount else {
+      throw BackupArchiveError.archiveTooLarge(
+        actual: data.count,
+        maximum: BackupArchiveLimits.maximumLegacyArchiveByteCount
+      )
     }
     let flags = readUInt16(data, at: 10)
     guard flags == supportedFlags else {
@@ -170,10 +342,10 @@ enum BackupArchiveCodec {
     guard !bodyOverflow, !archiveOverflow else {
       throw BackupArchiveError.invalidArchiveLength
     }
-    guard expectedArchiveByteCount <= BackupArchiveLimits.maximumArchiveByteCount else {
+    guard expectedArchiveByteCount <= BackupArchiveLimits.maximumLegacyArchiveByteCount else {
       throw BackupArchiveError.archiveTooLarge(
         actual: expectedArchiveByteCount,
-        maximum: BackupArchiveLimits.maximumArchiveByteCount
+        maximum: BackupArchiveLimits.maximumLegacyArchiveByteCount
       )
     }
     guard data.count >= expectedArchiveByteCount else {
@@ -224,6 +396,102 @@ enum BackupArchiveCodec {
     )
 
     return ValidatedBackupArchive(
+      formatVersion: legacyFormatVersion,
+      backupID: manifest.backupID,
+      archiveChecksum: hexString(storedDigest),
+      createdAt: manifest.createdAt,
+      sourceAppVersion: manifest.sourceAppVersion,
+      sourceBuild: manifest.sourceBuild,
+      library: manifest.library,
+      drawings: drawings
+    )
+  }
+
+  private static func decodeV2(_ data: Data) throws -> ValidatedBackupArchive {
+    guard data.count <= BackupArchiveLimits.maximumArchiveByteCount else {
+      throw BackupArchiveError.archiveTooLarge(
+        actual: data.count,
+        maximum: BackupArchiveLimits.maximumArchiveByteCount
+      )
+    }
+    let flags = readUInt16(data, at: 10)
+    guard flags == supportedFlags else {
+      throw BackupArchiveError.unsupportedFlags(found: flags)
+    }
+
+    let manifestByteCount = Int(readUInt32(data, at: 12))
+    guard manifestByteCount <= BackupArchiveLimits.maximumManifestByteCount else {
+      throw BackupArchiveError.manifestTooLarge(
+        actual: manifestByteCount,
+        maximum: BackupArchiveLimits.maximumManifestByteCount
+      )
+    }
+    let encodedPayloadByteCount = readUInt64(data, at: 16)
+    guard encodedPayloadByteCount <= UInt64(Int.max) else {
+      throw BackupArchiveError.invalidArchiveLength
+    }
+    let payloadByteCount = Int(encodedPayloadByteCount)
+    let (bodyByteCount, bodyOverflow) = manifestByteCount.addingReportingOverflow(payloadByteCount)
+    let (expectedArchiveByteCount, archiveOverflow) =
+      headerByteCount.addingReportingOverflow(bodyByteCount)
+    guard !bodyOverflow, !archiveOverflow else {
+      throw BackupArchiveError.invalidArchiveLength
+    }
+    guard expectedArchiveByteCount <= BackupArchiveLimits.maximumArchiveByteCount else {
+      throw BackupArchiveError.archiveTooLarge(
+        actual: expectedArchiveByteCount,
+        maximum: BackupArchiveLimits.maximumArchiveByteCount
+      )
+    }
+    guard data.count >= expectedArchiveByteCount else {
+      throw BackupArchiveError.truncatedArchive
+    }
+    guard data.count == expectedArchiveByteCount else {
+      throw BackupArchiveError.trailingData
+    }
+
+    let storedDigest = data.subdata(in: 24..<headerByteCount)
+    var hasher = SHA256()
+    hasher.update(data: data.prefix(24))
+    hasher.update(data: data.suffix(from: headerByteCount))
+    guard storedDigest == Data(hasher.finalize()) else {
+      throw BackupArchiveError.archiveChecksumMismatch
+    }
+
+    let manifestStart = headerByteCount
+    let manifestEnd = manifestStart + manifestByteCount
+    let manifestData = data.subdata(in: manifestStart..<manifestEnd)
+    let manifest: BackupArchiveManifestV2
+    do {
+      manifest = try makeDecoder().decode(BackupArchiveManifestV2.self, from: manifestData)
+      guard try makeEncoder().encode(manifest) == manifestData else {
+        throw BackupArchiveError.invalidManifest
+      }
+    } catch let error as BackupArchiveError {
+      throw error
+    } catch {
+      throw BackupArchiveError.invalidManifest
+    }
+
+    try validateSourceMetadata(
+      createdAt: manifest.createdAt,
+      sourceAppVersion: manifest.sourceAppVersion,
+      sourceBuild: manifest.sourceBuild
+    )
+    guard manifest.librarySchemaVersion == manifest.library.schemaVersion else {
+      throw BackupArchiveError.inconsistentLibrarySchema
+    }
+    let pageIDs = try validateLibrary(manifest.library)
+    let drawings = try decodeDrawingPages(
+      manifest.pages,
+      expectedPageIDs: pageIDs,
+      archiveData: data,
+      payloadStart: manifestEnd,
+      declaredPayloadByteCount: encodedPayloadByteCount
+    )
+
+    return ValidatedBackupArchive(
+      formatVersion: currentFormatVersion,
       backupID: manifest.backupID,
       archiveChecksum: hexString(storedDigest),
       createdAt: manifest.createdAt,
@@ -291,8 +559,8 @@ enum BackupArchiveCodec {
     let projectedEntries = pageIDs.sorted(by: { $0.uuidString < $1.uuidString }).map {
       BackupDrawingEntry(
         pageID: $0,
-        offset: UInt64(BackupArchiveLimits.maximumArchiveByteCount),
-        byteCount: UInt64(BackupArchiveLimits.maximumDrawingByteCount),
+        offset: UInt64(BackupArchiveLimits.maximumLegacyArchiveByteCount),
+        byteCount: UInt64(BackupArchiveLimits.maximumLegacyDrawingByteCount),
         sha256: projectionDigest
       )
     }
@@ -373,11 +641,11 @@ enum BackupArchiveCodec {
       guard entry.offset == expectedOffset else {
         throw BackupArchiveError.invalidDrawingLayout
       }
-      guard entry.byteCount <= UInt64(BackupArchiveLimits.maximumDrawingByteCount) else {
+      guard entry.byteCount <= UInt64(BackupArchiveLimits.maximumLegacyDrawingByteCount) else {
         throw BackupArchiveError.drawingTooLarge(
           pageID: entry.pageID,
           actual: entry.byteCount,
-          maximum: BackupArchiveLimits.maximumDrawingByteCount
+          maximum: BackupArchiveLimits.maximumLegacyDrawingByteCount
         )
       }
       guard isValidSHA256Hex(entry.sha256) else {
@@ -398,6 +666,105 @@ enum BackupArchiveCodec {
       }
       result[entry.pageID] = drawing
       expectedOffset = nextOffset
+    }
+
+    guard expectedOffset == declaredPayloadByteCount,
+      archiveData.count - payloadStart == Int(declaredPayloadByteCount)
+    else {
+      throw BackupArchiveError.invalidDrawingLayout
+    }
+    return result
+  }
+
+  private static func decodeDrawingPages(
+    _ pages: [BackupDrawingPageEntry],
+    expectedPageIDs: Set<UUID>,
+    archiveData: Data,
+    payloadStart: Int,
+    declaredPayloadByteCount: UInt64
+  ) throws -> [UUID: Data] {
+    var entryPageIDs = Set<UUID>()
+    for page in pages {
+      guard entryPageIDs.insert(page.pageID).inserted else {
+        throw BackupArchiveError.duplicateDrawingEntry(page.pageID)
+      }
+    }
+    guard entryPageIDs == expectedPageIDs else {
+      throw BackupArchiveError.drawingIndexMismatch
+    }
+    let orderedPageIDs = expectedPageIDs.sorted(by: { $0.uuidString < $1.uuidString })
+    guard pages.map(\.pageID) == orderedPageIDs else {
+      throw BackupArchiveError.invalidDrawingLayout
+    }
+
+    var expectedOffset: UInt64 = 0
+    var result: [UUID: Data] = [:]
+    result.reserveCapacity(pages.count)
+
+    for page in pages {
+      guard page.byteCount <= UInt64(BackupArchiveLimits.maximumDrawingByteCount) else {
+        throw BackupArchiveError.drawingTooLarge(
+          pageID: page.pageID,
+          actual: page.byteCount,
+          maximum: BackupArchiveLimits.maximumDrawingByteCount
+        )
+      }
+      guard isValidSHA256Hex(page.sha256) else {
+        throw BackupArchiveError.invalidDrawingDigest(pageID: page.pageID)
+      }
+      guard (page.byteCount == 0) == page.chunks.isEmpty else {
+        throw BackupArchiveError.invalidDrawingLayout
+      }
+      let maximumChunkByteCount = UInt64(BackupArchiveLimits.maximumPayloadChunkByteCount)
+      let expectedChunkCount =
+        page.byteCount == 0
+        ? 0
+        : Int((page.byteCount + maximumChunkByteCount - 1) / maximumChunkByteCount)
+      guard page.chunks.count == expectedChunkCount else {
+        throw BackupArchiveError.invalidDrawingLayout
+      }
+
+      var drawing = Data()
+      drawing.reserveCapacity(Int(page.byteCount))
+      var pageByteCount: UInt64 = 0
+      for chunk in page.chunks {
+        let expectedChunkByteCount = min(
+          maximumChunkByteCount,
+          page.byteCount - pageByteCount
+        )
+        guard chunk.offset == expectedOffset,
+          chunk.byteCount == expectedChunkByteCount,
+          isValidSHA256Hex(chunk.sha256)
+        else {
+          throw BackupArchiveError.invalidDrawingLayout
+        }
+        let (nextOffset, offsetOverflow) = expectedOffset.addingReportingOverflow(chunk.byteCount)
+        let (nextPageByteCount, pageOverflow) =
+          pageByteCount.addingReportingOverflow(chunk.byteCount)
+        guard !offsetOverflow, !pageOverflow,
+          nextOffset <= declaredPayloadByteCount,
+          nextOffset <= UInt64(Int.max),
+          nextPageByteCount <= page.byteCount
+        else {
+          throw BackupArchiveError.invalidDrawingLayout
+        }
+
+        let start = payloadStart + Int(expectedOffset)
+        let end = payloadStart + Int(nextOffset)
+        let chunkData = archiveData.subdata(in: start..<end)
+        guard sha256Hex(chunkData) == chunk.sha256 else {
+          throw BackupArchiveError.drawingChecksumMismatch(pageID: page.pageID)
+        }
+        drawing.append(chunkData)
+        expectedOffset = nextOffset
+        pageByteCount = nextPageByteCount
+      }
+      guard pageByteCount == page.byteCount,
+        sha256Hex(drawing) == page.sha256
+      else {
+        throw BackupArchiveError.drawingChecksumMismatch(pageID: page.pageID)
+      }
+      result[page.pageID] = drawing
     }
 
     guard expectedOffset == declaredPayloadByteCount,
