@@ -410,14 +410,24 @@ struct BackupTransferView: View {
           message: appendingInboxCleanupWarning(to: message, pendingImport: pendingImport)
         )
       case .alreadyImported:
-        if result.repairedDrawingCount > 0 {
+        if result.repairedDrawingCount > 0 || result.repairedSourceCount > 0 {
+          let repairedDescription: String
+          if result.repairedDrawingCount > 0, result.repairedSourceCount > 0 {
+            repairedDescription =
+              "\(result.repairedDrawingCount) 页缺失笔迹和 "
+              + "\(result.repairedSourceCount) 页缺失来源"
+          } else if result.repairedDrawingCount > 0 {
+            repairedDescription = "\(result.repairedDrawingCount) 页缺失笔迹"
+          } else {
+            repairedDescription = "\(result.repairedSourceCount) 页缺失来源"
+          }
           notice = BackupTransferNotice(
             title: "恢复完成",
             message:
               appendingInboxCleanupWarning(
                 to:
-                  "这份备份此前已导入；本次补回 \(result.repairedDrawingCount) 页缺失笔迹，"
-                  + "未新增笔记本或页面，也未覆盖已有笔迹。",
+                  "这份备份此前已导入；本次补回 \(repairedDescription)，"
+                  + "未新增笔记本或页面，也未覆盖已有内容。",
                 pendingImport: pendingImport
               )
           )
@@ -425,7 +435,7 @@ struct BackupTransferView: View {
           notice = BackupTransferNotice(
             title: "无需重复导入",
             message: appendingInboxCleanupWarning(
-              to: "这份备份此前已导入，本次未新增笔记本或页面，也未覆盖已有笔迹。",
+              to: "这份备份此前已导入，本次未新增笔记本或页面，也未覆盖已有内容。",
               pendingImport: pendingImport
             )
           )

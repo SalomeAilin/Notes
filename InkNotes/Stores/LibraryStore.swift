@@ -26,6 +26,7 @@ final class LibraryStore: ObservableObject {
   @Published private(set) var selectedNotebookID: UUID?
   @Published private(set) var selectedPageID: UUID?
   @Published private(set) var currentDrawingData = Data()
+  @Published private(set) var currentPageSources: [PageSourceExcerpt] = []
   @Published private(set) var isLoading = true
   @Published private(set) var isDrawingLoading = false
   @Published private(set) var isReadOnly = false
@@ -72,7 +73,7 @@ final class LibraryStore: ObservableObject {
     let previousDrawing = currentDrawingData
     selectedNotebookID = id
     selectedPageID = page.id
-    transitionDrawing(
+    transitionPageContent(
       from: previousPageID,
       previousDrawing: previousDrawing,
       to: page.id
@@ -88,7 +89,7 @@ final class LibraryStore: ObservableObject {
     let previousPageID = selectedPageID
     let previousDrawing = currentDrawingData
     selectedPageID = id
-    transitionDrawing(
+    transitionPageContent(
       from: previousPageID,
       previousDrawing: previousDrawing,
       to: id
@@ -119,7 +120,7 @@ final class LibraryStore: ObservableObject {
     selectedNotebookID = notebook.id
     selectedPageID = page.id
     scheduleLibrarySave()
-    transitionDrawing(
+    transitionPageContent(
       from: previousPageID,
       previousDrawing: previousDrawing,
       to: page.id
@@ -151,7 +152,7 @@ final class LibraryStore: ObservableObject {
     guard acceptManifestCandidate(candidate) else { return }
     selectedPageID = page.id
     scheduleLibrarySave()
-    transitionDrawing(
+    transitionPageContent(
       from: previousPageID,
       previousDrawing: previousDrawing,
       to: page.id
@@ -206,7 +207,7 @@ final class LibraryStore: ObservableObject {
     {
       selectedNotebookID = notebook.id
       selectedPageID = page.id
-      transitionDrawing(
+      transitionPageContent(
         from: previousPageID,
         previousDrawing: previousDrawing,
         to: page.id
@@ -233,7 +234,7 @@ final class LibraryStore: ObservableObject {
       let page = library.notebooks[location.notebook].pages.first
     {
       selectedPageID = page.id
-      transitionDrawing(
+      transitionPageContent(
         from: id,
         previousDrawing: previousDrawing,
         to: page.id
@@ -326,8 +327,12 @@ final class LibraryStore: ObservableObject {
       selectedNotebookID = result.selectedNotebookID
       selectedPageID = result.selectedPageID
       currentDrawingData = result.selectedDrawingData
+      currentPageSources = result.selectedPageSources
     } else if let pageID = selectedPageID, result.repairedPageIDs.contains(pageID) {
       currentDrawingData = try await validatedDrawingData(pageID: pageID)
+    }
+    if let pageID = selectedPageID, result.repairedSourcePageIDs.contains(pageID) {
+      currentPageSources = try await repository.loadPageSources(pageID: pageID)
     }
     unsavedDrawings.removeAll()
     persistenceError = nil
@@ -384,7 +389,9 @@ final class LibraryStore: ObservableObject {
       selectedNotebookID = library.notebooks.first?.id
       selectedPageID = library.notebooks.first?.pages.first?.id
       if let pageID = selectedPageID {
-        currentDrawingData = try await validatedDrawingData(pageID: pageID)
+        let content = try await loadPageContent(pageID: pageID)
+        currentDrawingData = content.drawing
+        currentPageSources = content.sources
       }
       isLoading = false
     } catch {
@@ -396,7 +403,7 @@ final class LibraryStore: ObservableObject {
     }
   }
 
-  private func transitionDrawing(
+  private func transitionPageContent(
     from previousPageID: UUID?,
     previousDrawing: Data,
     to nextPageID: UUID
@@ -405,6 +412,7 @@ final class LibraryStore: ObservableObject {
     let shouldSavePrevious = !isReadOnly
     isDrawingLoading = true
     currentDrawingData = Data()
+    currentPageSources = []
 
     drawingTransitionTask = Task { [weak self, repository] in
       guard let self else { return }
@@ -423,9 +431,10 @@ final class LibraryStore: ObservableObject {
       }
 
       do {
-        let loaded = try await validatedDrawingData(pageID: nextPageID)
+        let loaded = try await loadPageContent(pageID: nextPageID)
         guard selectedPageID == nextPageID else { return }
-        currentDrawingData = loaded
+        currentDrawingData = loaded.drawing
+        currentPageSources = loaded.sources
         isDrawingLoading = false
       } catch {
         isReadOnly = true
@@ -540,6 +549,14 @@ final class LibraryStore: ObservableObject {
       _ = try PKDrawing(data: data)
     }
     return data
+  }
+
+  private func loadPageContent(
+    pageID: UUID
+  ) async throws -> (drawing: Data, sources: [PageSourceExcerpt]) {
+    let drawing = try await validatedDrawingData(pageID: pageID)
+    let sources = try await repository.loadPageSources(pageID: pageID)
+    return (drawing, sources)
   }
 
   private func touch(notebookAt notebookIndex: Int, pageAt pageIndex: Int) {

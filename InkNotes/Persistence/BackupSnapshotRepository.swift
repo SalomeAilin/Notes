@@ -19,10 +19,13 @@ struct BackupRestoreResult: Equatable, Sendable {
   let selectedNotebookID: UUID
   let selectedPageID: UUID
   let selectedDrawingData: Data
+  let selectedPageSources: [PageSourceExcerpt]
   let importedNotebookCount: Int
   let importedPageCount: Int
   let repairedDrawingCount: Int
   let repairedPageIDs: Set<UUID>
+  let repairedSourceCount: Int
+  let repairedSourcePageIDs: Set<UUID>
   let disposition: BackupRestoreDisposition
 }
 
@@ -164,15 +167,17 @@ extension DrawingRepository {
         expectedDrawings: copiedDrawings,
         currentDrawings: currentDrawings
       )
-      try repairMissingPageSourcesForCompletedRestore(
+      let repairedSourcePageIDs = try repairMissingPageSourcesForCompletedRestore(
         expectedPageSources: copiedPageSources
       )
       return try makeRestoreResult(
         library: currentLibrary,
         transaction: transaction,
         drawings: repair.drawings,
+        pageSources: copiedPageSources,
         disposition: .alreadyImported,
-        repairedPageIDs: repair.pageIDs
+        repairedPageIDs: repair.pageIDs,
+        repairedSourcePageIDs: repairedSourcePageIDs
       )
     case .partial:
       throw BackupSnapshotError.partialPreviousImport
@@ -245,6 +250,7 @@ extension DrawingRepository {
           library: persistedLibrary,
           transaction: transaction,
           drawings: copiedDrawings,
+          pageSources: copiedPageSources,
           disposition: .imported
         )
       }
@@ -255,6 +261,7 @@ extension DrawingRepository {
       library: mergedLibrary,
       transaction: transaction,
       drawings: copiedDrawings,
+      pageSources: copiedPageSources,
       disposition: .imported
     )
   }
@@ -496,7 +503,8 @@ extension DrawingRepository {
 
   private func repairMissingPageSourcesForCompletedRestore(
     expectedPageSources: [UUID: [PageSourceExcerpt]]
-  ) throws {
+  ) throws -> Set<UUID> {
+    var repairedPageIDs = Set<UUID>()
     for pageID in expectedPageSources.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
       guard let expectedSources = expectedPageSources[pageID] else {
         throw BackupArchiveError.invalidPageSources
@@ -504,6 +512,7 @@ extension DrawingRepository {
       let existingSources = try loadPageSources(pageID: pageID)
       if existingSources.isEmpty {
         try savePageSources(expectedSources, pageID: pageID)
+        repairedPageIDs.insert(pageID)
       } else {
         guard existingSources == expectedSources else {
           throw BackupSnapshotError.orphanSourceConflict
@@ -511,14 +520,17 @@ extension DrawingRepository {
         try synchronizePageSourcesPersistence(pageID: pageID)
       }
     }
+    return repairedPageIDs
   }
 
   private func makeRestoreResult(
     library: LibraryDocument,
     transaction: BackupRestoreTransaction,
     drawings: [UUID: Data],
+    pageSources: [UUID: [PageSourceExcerpt]],
     disposition: BackupRestoreDisposition,
-    repairedPageIDs: Set<UUID> = []
+    repairedPageIDs: Set<UUID> = [],
+    repairedSourcePageIDs: Set<UUID> = []
   ) throws -> BackupRestoreResult {
     guard let firstNotebook = transaction.copiedNotebooks.first,
       let firstPage = firstNotebook.pages.first,
@@ -532,10 +544,13 @@ extension DrawingRepository {
       selectedNotebookID: firstNotebook.id,
       selectedPageID: firstPage.id,
       selectedDrawingData: firstDrawing,
+      selectedPageSources: pageSources[firstPage.id] ?? [],
       importedNotebookCount: transaction.copiedNotebooks.count,
       importedPageCount: transaction.copiedNotebooks.reduce(0) { $0 + $1.pages.count },
       repairedDrawingCount: repairedPageIDs.count,
       repairedPageIDs: repairedPageIDs,
+      repairedSourceCount: repairedSourcePageIDs.count,
+      repairedSourcePageIDs: repairedSourcePageIDs,
       disposition: disposition
     )
   }

@@ -159,6 +159,7 @@ struct BackupSnapshotRepositoryTests {
       importedAt: Date(timeIntervalSince1970: 1_700_000_030)
     )
     #expect(first.selectedPageID != sourcePageID)
+    #expect(first.selectedPageSources == [source])
     #expect(
       try await destinationFixture.repository.loadPageSources(pageID: first.selectedPageID)
         == [source]
@@ -176,6 +177,8 @@ struct BackupSnapshotRepositoryTests {
       currentDrawingOverrides: [:]
     )
     #expect(retry.disposition == .alreadyImported)
+    #expect(retry.repairedSourceCount == 1)
+    #expect(retry.repairedSourcePageIDs == [first.selectedPageID])
     #expect(
       try await destinationFixture.repository.loadPageSources(pageID: first.selectedPageID)
         == [source]

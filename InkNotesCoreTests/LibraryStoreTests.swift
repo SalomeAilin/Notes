@@ -48,6 +48,46 @@ struct LibraryStoreTests {
     #expect(savedLibrary.notebooks[0].pages.count == 2)
   }
 
+  @Test("Switching pages replaces the visible source list with the selected page")
+  @MainActor
+  func pageTransitionLoadsMatchingSources() async throws {
+    let rootURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+
+    let firstPage = NotePage(title: "第一页")
+    let secondPage = NotePage(title: "第二页")
+    let library = LibraryDocument(notebooks: [
+      Notebook(title: "资料", pages: [firstPage, secondPage])
+    ])
+    let firstSource = PageSourceExcerpt(
+      title: "第一条来源",
+      excerpt: "第一条用户选择的内容",
+      sourceURL: URL(string: "https://example.com/first")!,
+      capturedAt: Date(timeIntervalSince1970: 1_700_000_001)
+    )
+    let secondSource = PageSourceExcerpt(
+      title: "第二条来源",
+      excerpt: "第二条用户选择的内容",
+      sourceURL: URL(string: "https://example.com/second")!,
+      capturedAt: Date(timeIntervalSince1970: 1_700_000_002)
+    )
+    let repository = DrawingRepository(rootURL: rootURL)
+    try await repository.saveLibrary(library)
+    try await repository.savePageSources([firstSource], pageID: firstPage.id)
+    try await repository.savePageSources([secondSource], pageID: secondPage.id)
+
+    let store = LibraryStore(repository: repository)
+    try await waitUntil { !store.isLoading }
+    #expect(store.selectedPageID == firstPage.id)
+    #expect(store.currentPageSources == [firstSource])
+
+    store.selectPage(secondPage.id)
+    try await waitUntil { !store.isDrawingLoading }
+    #expect(store.selectedPageID == secondPage.id)
+    #expect(store.currentPageSources == [secondSource])
+  }
+
   @Test("Invalid PencilKit bytes enter read-only mode and remain untouched")
   @MainActor
   func invalidDrawingIsProtected() async throws {
@@ -130,6 +170,43 @@ struct LibraryStoreTests {
     #expect(decoded.drawings[pageID] == drawing)
     #expect(try await repository.loadDrawing(pageID: pageID) == drawing)
     #expect(!store.isBackupTransferInProgress)
+  }
+
+  @Test("Importing a sourced page makes its remapped sources current")
+  @MainActor
+  func importedPageSourcesBecomeCurrent() async throws {
+    let rootURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+
+    let repository = DrawingRepository(rootURL: rootURL)
+    let store = LibraryStore(repository: repository)
+    try await waitUntil { !store.isLoading }
+
+    let sourceLibrary = LibraryDocument.starter()
+    let sourcePageID = try #require(sourceLibrary.notebooks.first?.pages.first?.id)
+    let source = PageSourceExcerpt(
+      title: "网页资料",
+      excerpt: "用户主动保存的内容",
+      sourceURL: URL(string: "https://example.com/imported")!,
+      capturedAt: Date(timeIntervalSince1970: 1_700_000_003)
+    )
+    let archive = try BackupArchiveCodec.encodeBestAvailable(
+      library: sourceLibrary,
+      drawings: [sourcePageID: PKDrawing().dataRepresentation()],
+      pageSources: [sourcePageID: [source]],
+      createdAt: Date(timeIntervalSince1970: 1_700_010_000)
+    )
+
+    let result = try await store.importBackupAsCopy(archive)
+
+    #expect(result.disposition == .imported)
+    #expect(store.selectedPageID == result.selectedPageID)
+    #expect(store.currentPageSources == [source])
+    #expect(
+      try await repository.loadPageSources(pageID: result.selectedPageID)
+        == [source]
+    )
   }
 
   @Test("A repeated import keeps the current selection and adds nothing")
