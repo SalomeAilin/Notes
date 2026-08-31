@@ -127,6 +127,7 @@ struct BackupTransferView: View {
   @Environment(\.dismiss) private var dismiss
   @EnvironmentObject private var store: LibraryStore
   @Binding var importQueue: BackupImportQueue
+  @AppStorage(BackupSaveStatus.storageKey) private var lastSuccessfulBackupSaveTimestamp = 0.0
 
   @State private var preparedBackup: PreparedBackup?
   @State private var pendingImport: PendingBackupImport?
@@ -222,6 +223,22 @@ struct BackupTransferView: View {
         Label("保存最新备份", systemImage: "folder.badge.plus")
       }
       .disabled(!canStartOperation)
+
+      if let lastSuccessfulBackupSaveDate {
+        LabeledContent("上次保存") {
+          Text(
+            lastSuccessfulBackupSaveDate,
+            format: .dateTime.year().month().day().hour().minute()
+          )
+        }
+      } else {
+        Label("这里还没有保存记录", systemImage: "clock")
+          .foregroundStyle(.secondary)
+      }
+
+      Text("这里只记录完成保存的时间，不记录位置；如果选择网盘，请以网盘中的文件为准。")
+        .font(.footnote)
+        .foregroundStyle(.secondary)
 
       if let preparedBackup {
         LabeledContent("生成时间") {
@@ -320,6 +337,10 @@ struct BackupTransferView: View {
     canStartOperation && pendingImport == nil && notice == nil
   }
 
+  private var lastSuccessfulBackupSaveDate: Date? {
+    BackupSaveStatus.savedAt(timestamp: lastSuccessfulBackupSaveTimestamp)
+  }
+
   private var importConfirmationIsPresented: Binding<Bool> {
     Binding(
       get: { pendingImport != nil },
@@ -354,6 +375,7 @@ struct BackupTransferView: View {
   private func handleExportResult(_ result: Result<URL, Error>) {
     switch result {
     case .success:
+      lastSuccessfulBackupSaveTimestamp = Date().timeIntervalSince1970
       notice = BackupTransferNotice(
         title: "备份已保存",
         message: "未加密备份已保存到你选择的位置，请确认该位置值得信任。"

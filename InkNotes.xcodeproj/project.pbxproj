@@ -21,6 +21,7 @@
 		D0000000000000000000000B /* BackupArchiveCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000000D /* BackupArchiveCodec.swift */; };
 		D0000000000000000000000C /* BackupSnapshotRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000000E /* BackupSnapshotRepository.swift */; };
 		D0000000000000000000000D /* BackupTransferView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000000F /* BackupTransferView.swift */; };
+		D00000000000000000000010 /* BackupSaveStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000010 /* BackupSaveStatus.swift */; };
 		DC0000000000000000000001 /* BackupExportArtifact.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC0000000000000000000001 /* BackupExportArtifact.swift */; };
 		D10000000000000000000001 /* BaiduNetdiskBackup.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10000000000000000000001 /* BaiduNetdiskBackup.swift */; };
 		D10000000000000000000002 /* BaiduHTTPTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10000000000000000000002 /* BaiduHTTPTransport.swift */; };
@@ -61,6 +62,7 @@
 		C0000000000000000000000D /* BackupArchiveCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupArchiveCodec.swift; sourceTree = "<group>"; };
 		C0000000000000000000000E /* BackupSnapshotRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupSnapshotRepository.swift; sourceTree = "<group>"; };
 		C0000000000000000000000F /* BackupTransferView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupTransferView.swift; sourceTree = "<group>"; };
+		C00000000000000000000010 /* BackupSaveStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupSaveStatus.swift; sourceTree = "<group>"; };
 		CC0000000000000000000001 /* BackupExportArtifact.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupExportArtifact.swift; sourceTree = "<group>"; };
 		C10000000000000000000001 /* BaiduNetdiskBackup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaiduNetdiskBackup.swift; sourceTree = "<group>"; };
 		C10000000000000000000002 /* BaiduHTTPTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaiduHTTPTransport.swift; sourceTree = "<group>"; };
@@ -144,6 +146,7 @@
 				CC0000000000000000000001 /* BackupExportArtifact.swift */,
 				C50000000000000000000003 /* BackupImportPresentationState.swift */,
 				C50000000000000000000001 /* BackupImportRequest.swift */,
+				C00000000000000000000010 /* BackupSaveStatus.swift */,
 				C60000000000000000000001 /* BaiduAccountCredential.swift */,
 				CE0000000000000000000001 /* BaiduBrokerProtocolV1.swift */,
 				C40000000000000000000001 /* BaiduNetdiskAccount.swift */,
@@ -288,6 +291,7 @@
 				DC0000000000000000000001 /* BackupExportArtifact.swift in Sources */,
 				D50000000000000000000003 /* BackupImportPresentationState.swift in Sources */,
 				D50000000000000000000001 /* BackupImportRequest.swift in Sources */,
+				D00000000000000000000010 /* BackupSaveStatus.swift in Sources */,
 				D60000000000000000000001 /* BaiduAccountCredential.swift in Sources */,
 				DE0000000000000000000001 /* BaiduBrokerProtocolV1.swift in Sources */,
 				D40000000000000000000001 /* BaiduNetdiskAccount.swift in Sources */,

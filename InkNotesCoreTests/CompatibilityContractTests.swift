@@ -588,7 +588,8 @@ struct CompatibilityContractTests {
           "InkNotes/Persistence/DurableFileWriter.swift",
         ]),
         "NSPrivacyAccessedAPICategoryUserDefaults": Set([
-          "InkNotes/Views/PageEditorView.swift"
+          "InkNotes/Views/BackupTransferView.swift",
+          "InkNotes/Views/PageEditorView.swift",
         ]),
       ]
     )
@@ -780,6 +781,14 @@ struct CompatibilityContractTests {
       )
     )
     #expect(transferSource.contains("保存位置和分享对象都由你选择"))
+    #expect(transferSource.contains("@AppStorage(BackupSaveStatus.storageKey)"))
+    #expect(transferSource.contains("LabeledContent(\"上次保存\")"))
+    #expect(transferSource.contains("Label(\"这里还没有保存记录\", systemImage: \"clock\")"))
+    #expect(
+      transferSource.contains(
+        "这里只记录完成保存的时间，不记录位置；如果选择网盘，请以网盘中的文件为准。"
+      )
+    )
     #expect(!transferSource.contains("Label(\"生成最新备份\""))
     #expect(!transferSource.contains("未加密备份已生成"))
     let makeBackupRange = try #require(
@@ -792,6 +801,27 @@ struct CompatibilityContractTests {
       )
     )
     #expect(makeBackupRange.lowerBound < presentExporterRange.lowerBound)
+    let exportResultRange = try #require(
+      transferSource.range(of: "private func handleExportResult")
+    )
+    let successfulSaveRange = try #require(
+      transferSource.range(
+        of: "lastSuccessfulBackupSaveTimestamp = Date().timeIntervalSince1970",
+        range: exportResultRange.upperBound..<transferSource.endIndex
+      )
+    )
+    #expect(
+      transferSource.components(
+        separatedBy: "lastSuccessfulBackupSaveTimestamp = Date().timeIntervalSince1970"
+      ).count == 2
+    )
+    let failedSaveRange = try #require(
+      transferSource.range(
+        of: "case .failure(let error):",
+        range: successfulSaveRange.upperBound..<transferSource.endIndex
+      )
+    )
+    #expect(successfulSaveRange.lowerBound < failedSaveRange.lowerBound)
     #expect(
       transferSource.contains(
         """
