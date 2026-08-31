@@ -41,6 +41,73 @@ private struct PendingBackupImport: Sendable {
   let inboxCleanupWarning: String?
 }
 
+private struct BackupImportConfirmationView: View {
+  let pendingImport: PendingBackupImport
+  let canImport: Bool
+  let onCancel: () -> Void
+  let onImport: () -> Void
+
+  var body: some View {
+    NavigationStack {
+      List {
+        Section("这份备份") {
+          LabeledContent("文件") {
+            Text(pendingImport.filename)
+              .multilineTextAlignment(.trailing)
+              .lineLimit(2)
+          }
+          LabeledContent("创建时间") {
+            Text(
+              pendingImport.preview.createdAt,
+              format: .dateTime.year().month().day().hour().minute()
+            )
+          }
+          LabeledContent("笔记内容") {
+            Text(
+              "\(pendingImport.preview.notebookCount) 个笔记本，"
+                + "\(pendingImport.preview.pageCount) 页"
+            )
+          }
+          LabeledContent("网页来源") {
+            Text(sourceDescription)
+          }
+        }
+
+        Section("导入后") {
+          Label("会新增一份副本，原备份文件保持不变。", systemImage: "plus.square.on.square")
+          Label("现有笔记、手写内容和网页来源不会被覆盖。", systemImage: "checkmark.shield")
+        }
+
+        if let warning = pendingImport.inboxCleanupWarning {
+          Section("需要注意") {
+            Label(warning, systemImage: "exclamationmark.triangle")
+              .foregroundStyle(.orange)
+          }
+        }
+      }
+      .navigationTitle("确认导入")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("取消", action: onCancel)
+        }
+        ToolbarItem(placement: .confirmationAction) {
+          Button("作为副本导入", action: onImport)
+            .disabled(!canImport)
+        }
+      }
+    }
+  }
+
+  private var sourceDescription: String {
+    if pendingImport.preview.sourceCount == 0 {
+      "无"
+    } else {
+      "\(pendingImport.preview.sourceCount) 条"
+    }
+  }
+}
+
 private enum BackupInspectionOutcome: Equatable {
   case consumed
   case notStarted
@@ -111,26 +178,24 @@ struct BackupTransferView: View {
     ) { result in
       handleImportSelection(result)
     }
-    .confirmationDialog(
-      "导入这份备份？",
-      isPresented: importConfirmationIsPresented,
-      titleVisibility: .visible
-    ) {
-      Button("作为副本导入") {
-        guard let pendingImport, canStartOperation else { return }
-        operationMessage = "正在作为副本导入…"
-        self.pendingImport = nil
-        Task {
-          await restoreBackup(pendingImport)
-        }
-      }
-      .disabled(!canStartOperation)
-      Button("取消", role: .cancel) {
-        pendingImport = nil
-      }
-    } message: {
+    .sheet(isPresented: importConfirmationIsPresented) {
       if let pendingImport {
-        Text(importConfirmationMessage(pendingImport))
+        BackupImportConfirmationView(
+          pendingImport: pendingImport,
+          canImport: canStartOperation,
+          onCancel: {
+            self.pendingImport = nil
+          },
+          onImport: {
+            guard canStartOperation else { return }
+            operationMessage = "正在作为副本导入…"
+            self.pendingImport = nil
+            Task {
+              await restoreBackup(pendingImport)
+            }
+          }
+        )
+        .presentationDetents([.medium, .large])
       }
     }
     .alert(item: $notice) { notice in
@@ -165,12 +230,16 @@ struct BackupTransferView: View {
         LabeledContent("内容") {
           Text("\(preparedBackup.notebookCount) 个笔记本，\(preparedBackup.pageCount) 页")
         }
+        LabeledContent("备份范围") {
+          Text("全部手写内容和已保存的网页来源")
+            .multilineTextAlignment(.trailing)
+        }
         LabeledContent("文件大小") {
           Text(formatBackupByteCount(preparedBackup.artifact.data.count))
         }
 
         Label(
-          "此备份未加密，包含笔记名称和原始笔迹；只存到你信任的位置或应用。",
+          "此备份未加密，包含笔记名称、原始笔迹和已保存的网页来源；只存到你信任的位置或应用。",
           systemImage: "lock.open.trianglebadge.exclamationmark"
         )
         .font(.footnote)
@@ -186,7 +255,9 @@ struct BackupTransferView: View {
         ShareLink(
           item: preparedBackup.transferItem,
           subject: Text("未加密的笔记备份"),
-          message: Text("此文件未加密，包含笔记名称和原始笔迹，请仅保存到信任的位置。"),
+          message: Text(
+            "此文件未加密，包含笔记名称、原始笔迹和已保存的网页来源，请仅保存到信任的位置。"
+          ),
           preview: SharePreview(
             "笔记备份",
             image: Image(systemName: "doc.badge.arrow.up")
@@ -221,7 +292,7 @@ struct BackupTransferView: View {
   private var privacySection: some View {
     Section("隐私提示") {
       Label(
-        "备份文件包含原始笔迹和笔记名称，当前未加密。",
+        "备份文件包含笔记名称、原始笔迹和已保存的网页来源，当前未加密。",
         systemImage: "lock.open.trianglebadge.exclamationmark"
       )
       .foregroundStyle(.orange)
@@ -282,7 +353,9 @@ struct BackupTransferView: View {
       )
       notice = BackupTransferNotice(
         title: "未加密备份已生成",
-        message: "此文件包含笔记名称和原始笔迹。请只存储到你信任的“文件”位置或应用。"
+        message:
+          "此文件包含笔记名称、原始笔迹和已保存的网页来源。"
+          + "请只存储到你信任的“文件”位置或应用。"
       )
     } catch {
       presentError(error, action: "生成备份失败")
@@ -448,25 +521,6 @@ struct BackupTransferView: View {
         additionalMessage: pendingImport.inboxCleanupWarning
       )
     }
-  }
-
-  private func importConfirmationMessage(_ pendingImport: PendingBackupImport) -> String {
-    let preview = pendingImport.preview
-    let createdAt = preview.createdAt.formatted(date: .abbreviated, time: .shortened)
-    let source: String
-    if preview.sourceAppVersion.isEmpty {
-      source = "来源版本未知"
-    } else if preview.sourceBuild.isEmpty {
-      source = "版本 \(preview.sourceAppVersion)"
-    } else {
-      source = "版本 \(preview.sourceAppVersion)（\(preview.sourceBuild)）"
-    }
-    let contents =
-      "\(preview.notebookCount) 个笔记本、\(preview.pageCount) 页"
-    return
-      "“\(pendingImport.filename)”创建于 \(createdAt)，包含 \(contents)，\(source)。"
-      + "导入会创建副本，不覆盖现有笔记。"
-      + (pendingImport.inboxCleanupWarning.map { "\n\n\($0)" } ?? "")
   }
 
   private func cleanupWarning(for url: URL, source: BackupImportSource) -> String? {

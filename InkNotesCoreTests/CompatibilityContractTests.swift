@@ -743,8 +743,16 @@ struct CompatibilityContractTests {
       )
     )
     #expect(transferSource.contains("BackupInboxCopyCleaner().removeIfInboxCopy"))
-    #expect(transferSource.contains(".confirmationDialog("))
-    #expect(transferSource.contains("Button(\"作为副本导入\")"))
+    #expect(transferSource.contains(".sheet(isPresented: importConfirmationIsPresented)"))
+    #expect(transferSource.contains("BackupImportConfirmationView("))
+    #expect(transferSource.contains("Button(\"作为副本导入\", action: onImport)"))
+    #expect(transferSource.contains("Section(\"这份备份\")"))
+    #expect(transferSource.contains("LabeledContent(\"网页来源\")"))
+    #expect(transferSource.contains("Section(\"导入后\")"))
+    #expect(transferSource.contains("会新增一份副本，原备份文件保持不变。"))
+    #expect(transferSource.contains("现有笔记、手写内容和网页来源不会被覆盖。"))
+    #expect(!transferSource.contains("preview.sourceAppVersion"))
+    #expect(!transferSource.contains("preview.sourceBuild"))
     #expect(transferSource.contains(".interactiveDismissDisabled(isBusy)"))
     #expect(readerSource.contains("NSFileCoordinator(filePresenter: nil)"))
     #expect(readerSource.contains("O_RDONLY | O_CLOEXEC | O_NOFOLLOW"))
@@ -798,7 +806,16 @@ struct CompatibilityContractTests {
         "exportedAs: BackupExportArtifact.uniformTypeIdentifier"
       )
     )
-    #expect(transferSource.contains("此文件未加密，包含笔记名称和原始笔迹"))
+    #expect(
+      transferSource.contains(
+        "此文件未加密，包含笔记名称、原始笔迹和已保存的网页来源"
+      )
+    )
+    #expect(
+      transferSource.contains(
+        "备份文件包含笔记名称、原始笔迹和已保存的网页来源，当前未加密。"
+      )
+    )
     #expect(!transferSource.contains("BackupArchiveCodec.uniformTypeIdentifier"))
     #expect(!transferSource.contains("private func backupFilename"))
   }

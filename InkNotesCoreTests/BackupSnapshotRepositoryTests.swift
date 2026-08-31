@@ -146,6 +146,10 @@ struct BackupSnapshotRepositoryTests {
       try BackupArchiveCodec.decode(archive).formatVersion
         == BackupArchiveCodec.pageSourceFormatVersion
     )
+    let preview = try await sourceFixture.repository.inspectBackup(archive)
+    #expect(preview.notebookCount == 1)
+    #expect(preview.pageCount == 1)
+    #expect(preview.sourceCount == 1)
 
     let currentLibrary = LibraryDocument.starter()
     let currentPageID = try #require(currentLibrary.notebooks.first?.pages.first?.id)

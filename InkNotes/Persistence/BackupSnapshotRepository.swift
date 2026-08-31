@@ -7,6 +7,7 @@ struct BackupArchivePreview: Equatable, Sendable {
   let sourceBuild: String
   let notebookCount: Int
   let pageCount: Int
+  let sourceCount: Int
 }
 
 enum BackupRestoreDisposition: Equatable, Sendable {
@@ -109,7 +110,8 @@ extension DrawingRepository {
       sourceAppVersion: backup.sourceAppVersion,
       sourceBuild: backup.sourceBuild,
       notebookCount: backup.library.notebooks.count,
-      pageCount: backup.library.notebooks.reduce(0) { $0 + $1.pages.count }
+      pageCount: backup.library.notebooks.reduce(0) { $0 + $1.pages.count },
+      sourceCount: backup.pageSources.values.reduce(0) { $0 + $1.count }
     )
   }
 
