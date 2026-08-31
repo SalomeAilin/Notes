@@ -8,6 +8,7 @@ struct PageSourceBrowserView: View {
   @State private var address = ""
   @State private var pendingSource: PageSourceExcerpt?
   @State private var alert: PageSourceBrowserAlert?
+  @State private var showingSavedSources = false
   @State private var isReadingSelection = false
   @State private var isSaving = false
 
@@ -54,6 +55,21 @@ struct PageSourceBrowserView: View {
           },
           onSave: {
             save(source)
+          }
+        )
+        .presentationDetents([.medium, .large])
+      }
+      .sheet(isPresented: $showingSavedSources) {
+        PageSourceListView(
+          sources: store.currentPageSources,
+          isSourceUpdateInProgress: store.isPageSourceSaveInProgress,
+          onOpen: { source in
+            showingSavedSources = false
+            address = source.sourceURL.absoluteString
+            browser.open(source.sourceURL)
+          },
+          onDelete: { source in
+            try await store.deletePageSource(source.id, from: pageID)
           }
         )
         .presentationDetents([.medium, .large])
@@ -158,15 +174,8 @@ struct PageSourceBrowserView: View {
       Label("本页暂无来源", systemImage: "bookmark")
         .foregroundStyle(.secondary)
     } else {
-      Menu {
-        ForEach(store.currentPageSources) { source in
-          Button {
-            address = source.sourceURL.absoluteString
-            browser.open(source.sourceURL)
-          } label: {
-            Label(source.title, systemImage: "link")
-          }
-        }
+      Button {
+        showingSavedSources = true
       } label: {
         Label(
           "本页来源 \(store.currentPageSources.count)",
@@ -221,6 +230,125 @@ struct PageSourceBrowserView: View {
           message: error.localizedDescription
         )
       }
+    }
+  }
+}
+
+private struct PageSourceListView: View {
+  @Environment(\.dismiss) private var dismiss
+  @State private var alert: PageSourceListAlert?
+  @State private var isDeleting = false
+
+  let sources: [PageSourceExcerpt]
+  let isSourceUpdateInProgress: Bool
+  let onOpen: (PageSourceExcerpt) -> Void
+  let onDelete: (PageSourceExcerpt) async throws -> Void
+
+  var body: some View {
+    NavigationStack {
+      Group {
+        if sources.isEmpty {
+          ContentUnavailableView(
+            "本页暂无来源",
+            systemImage: "bookmark",
+            description: Text("返回网页选中文字后，可以保存到当前页。")
+          )
+        } else {
+          List(sources) { source in
+            sourceRow(source)
+          }
+        }
+      }
+      .navigationTitle("本页来源")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("关闭") {
+            dismiss()
+          }
+          .disabled(isDeleting)
+        }
+        if isDeleting || isSourceUpdateInProgress {
+          ToolbarItem(placement: .confirmationAction) {
+            ProgressView()
+          }
+        }
+      }
+      .alert(item: $alert) { alert in
+        switch alert {
+        case .confirmDeletion(let source):
+          Alert(
+            title: Text("删除这个来源？"),
+            message: Text("只会删除当前页保存的这条文字和链接，不会影响网页或笔记内容。"),
+            primaryButton: .destructive(Text("删除来源")) {
+              delete(source)
+            },
+            secondaryButton: .cancel(Text("取消"))
+          )
+        case .error(_, let message):
+          Alert(
+            title: Text("暂时无法删除"),
+            message: Text(message),
+            dismissButton: .default(Text("知道了"))
+          )
+        }
+      }
+    }
+    .interactiveDismissDisabled(isDeleting)
+  }
+
+  private func sourceRow(_ source: PageSourceExcerpt) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text(source.title)
+        .font(.headline)
+      Text(source.excerpt)
+        .font(.body)
+        .lineLimit(3)
+      Text(source.sourceURL.absoluteString)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+      HStack {
+        Button {
+          onOpen(source)
+        } label: {
+          Label("打开网页", systemImage: "safari")
+        }
+        .buttonStyle(.bordered)
+
+        Button(role: .destructive) {
+          alert = .confirmDeletion(source)
+        } label: {
+          Label("删除来源", systemImage: "trash")
+        }
+        .buttonStyle(.bordered)
+      }
+      .disabled(isDeleting || isSourceUpdateInProgress)
+    }
+    .padding(.vertical, 4)
+  }
+
+  private func delete(_ source: PageSourceExcerpt) {
+    isDeleting = true
+    Task {
+      defer { isDeleting = false }
+      do {
+        try await onDelete(source)
+      } catch {
+        alert = .error(UUID(), error.localizedDescription)
+      }
+    }
+  }
+}
+
+private enum PageSourceListAlert: Identifiable {
+  case confirmDeletion(PageSourceExcerpt)
+  case error(UUID, String)
+
+  var id: UUID {
+    switch self {
+    case .confirmDeletion(let source): source.id
+    case .error(let id, _): id
     }
   }
 }

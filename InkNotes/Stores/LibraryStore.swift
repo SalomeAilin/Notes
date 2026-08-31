@@ -6,6 +6,7 @@ private enum LibraryStoreError: LocalizedError {
   case backupUnavailable
   case pageSourceUnavailable
   case pageChanged
+  case pageSourceMissing
 
   var errorDescription: String? {
     switch self {
@@ -15,6 +16,8 @@ private enum LibraryStoreError: LocalizedError {
       "当前页面暂时不能保存来源，请稍后再试。"
     case .pageChanged:
       "页面已经切换，请回到原页面后重新保存。"
+    case .pageSourceMissing:
+      "这条来源已经不在当前页。"
     }
   }
 }
@@ -301,6 +304,31 @@ final class LibraryStore: ObservableObject {
       sources: currentPageSources + [validatedSource]
     ).validated(expectedPageID: pageID).sources
 
+    isPageSourceSaveInProgress = true
+    defer { isPageSourceSaveInProgress = false }
+    try await repository.savePageSources(candidate, pageID: pageID)
+    guard selectedPageID == pageID else {
+      throw LibraryStoreError.pageChanged
+    }
+    currentPageSources = candidate
+    touch(notebookAt: location.notebook, pageAt: location.page)
+    scheduleLibrarySave()
+  }
+
+  func deletePageSource(_ sourceID: UUID, from pageID: UUID) async throws {
+    guard !isLoading, !isDrawingLoading, !isReadOnly, !isBackupTransferInProgress,
+      !isPageSourceSaveInProgress
+    else {
+      throw LibraryStoreError.pageSourceUnavailable
+    }
+    guard selectedPageID == pageID, let location = pageLocation(id: pageID) else {
+      throw LibraryStoreError.pageChanged
+    }
+    guard currentPageSources.contains(where: { $0.id == sourceID }) else {
+      throw LibraryStoreError.pageSourceMissing
+    }
+
+    let candidate = currentPageSources.filter { $0.id != sourceID }
     isPageSourceSaveInProgress = true
     defer { isPageSourceSaveInProgress = false }
     try await repository.savePageSources(candidate, pageID: pageID)

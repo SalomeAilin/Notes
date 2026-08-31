@@ -263,6 +263,49 @@ struct LibraryStoreTests {
     #expect(try await repository.loadPageSources(pageID: pageID).isEmpty)
   }
 
+  @Test("A user-confirmed source deletion is durable and leaves other sources untouched")
+  @MainActor
+  func confirmedSourceDeletionIsDurable() async throws {
+    let rootURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+
+    let repository = DrawingRepository(rootURL: rootURL)
+    let store = LibraryStore(repository: repository)
+    try await waitUntil { !store.isLoading }
+    let pageID = try #require(store.selectedPageID)
+    let first = PageSourceExcerpt(
+      id: UUID(uuidString: "73000000-0000-0000-0000-000000000001")!,
+      title: "第一条来源",
+      excerpt: "用户决定删除这一条。",
+      sourceURL: URL(string: "https://example.com/first")!,
+      capturedAt: Date(timeIntervalSince1970: 1_700_000_005)
+    )
+    let second = PageSourceExcerpt(
+      id: UUID(uuidString: "73000000-0000-0000-0000-000000000002")!,
+      title: "第二条来源",
+      excerpt: "这一条应该继续保留。",
+      sourceURL: URL(string: "https://example.com/second")!,
+      capturedAt: Date(timeIntervalSince1970: 1_700_000_006)
+    )
+
+    try await store.savePageSource(first, to: pageID)
+    try await store.savePageSource(second, to: pageID)
+    try await store.deletePageSource(first.id, from: pageID)
+    #expect(store.currentPageSources == [second])
+    #expect(try await repository.loadPageSources(pageID: pageID) == [second])
+
+    let sourcedBackup = try await store.makeBackup()
+    #expect(try BackupArchiveCodec.decode(sourcedBackup.data).pageSources[pageID] == [second])
+
+    try await store.deletePageSource(second.id, from: pageID)
+    #expect(store.currentPageSources.isEmpty)
+    #expect(!store.isPageSourceSaveInProgress)
+    #expect(try await repository.loadPageSources(pageID: pageID).isEmpty)
+    let cleanBackup = try await store.makeBackup()
+    #expect(try BackupArchiveCodec.decode(cleanBackup.data).pageSources[pageID] == nil)
+  }
+
   @Test("A repeated import keeps the current selection and adds nothing")
   @MainActor
   func repeatedImportKeepsCurrentSelection() async throws {

@@ -32,12 +32,12 @@
     "InkNotes/Persistence/DrawingRepository.swift": "ac83bf87dc166d1d7d8fdf1e55bf723386f7917cd08105803fe377f3aea4ed30",
     "InkNotes/Persistence/DurableFileWriter.swift": "24b0fa801165c82139730b589666ee6bc34b69dc9fe514060146ab7c65f0c542",
     "InkNotes/Persistence/SegmentedDrawingCodec.swift": "b98a03bd6ce754c2600fda60f7fa4b22c594e78641e2679ca785ccd59af4103b",
-    "InkNotes/Stores/LibraryStore.swift": "483ddba45e3a665de8c9a35f15b6939d93e66d8e150765e62642168bfb6f20f1",
+    "InkNotes/Stores/LibraryStore.swift": "8cd0f0efccbc2800f963f2eaf214863500c22f1d8ad2eff4822143d894f1f0bc",
     "InkNotes/Views/BackupTransferView.swift": "3965c1310aa36cc81474d5e6a5bf93df785fd13180f9c425422e0a8f597d26ca",
     "InkNotes/Views/Canvas/PageBackgroundView.swift": "47c92fee4f6c2b6dedfbe489695605458a0346b3aeb3287d5532d8bce11cfc85",
     "InkNotes/Views/Canvas/PencilCanvas.swift": "7649b9655cd04711cc10b27df882401c303b7ff9b1e8119a961e6faa7f8366e3",
     "InkNotes/Views/LibrarySplitView.swift": "537824525a53cbe65db05048bf732950138b234c15a9cfc237611bdb3d615017",
     "InkNotes/Views/PageEditorView.swift": "79d6d97610ac557c728d30cc21cef0194d1dbab6eafffe094b278c62ee1a36cd",
-    "InkNotes/Views/PageSourceBrowserView.swift": "321472611ac64a294531daa9c36e212e7c8f936854094d7b74ed0d99e59fd99f"
+    "InkNotes/Views/PageSourceBrowserView.swift": "61676152a12c0d67e45b80f902046a4a03db15e6f6ca13da09a8da63eb7162a4"
   }
 }
