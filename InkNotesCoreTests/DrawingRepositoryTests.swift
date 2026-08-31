@@ -273,6 +273,143 @@ struct DrawingRepositoryTests {
     #expect(all.strokes.map(\.renderBounds) == source.strokes.map(\.renderBounds))
   }
 
+  @Test("Segment storage remains bounded to the current and next durable generations")
+  func segmentedStorageIsBoundedAcrossChangedSaves() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let pageID = UUID(uuidString: "12000000-0000-0000-0000-000000000006")!
+    let repository = DrawingRepository(rootURL: rootURL)
+    let firstData = try drawingAcrossRegions(additionalOffsetY: 0).dataRepresentation()
+    let secondData = try drawingAcrossRegions(additionalOffsetY: 300).dataRepresentation()
+    let thirdData = try drawingAcrossRegions(additionalOffsetY: 700).dataRepresentation()
+
+    try await repository.saveSegmentedDrawing(firstData, pageID: pageID)
+    let firstDigests = try authorityDigests(rootURL: rootURL, pageID: pageID)
+    try await repository.saveSegmentedDrawing(secondData, pageID: pageID)
+    let secondDigests = try authorityDigests(rootURL: rootURL, pageID: pageID)
+    try await repository.saveSegmentedDrawing(thirdData, pageID: pageID)
+    let thirdDigests = try authorityDigests(rootURL: rootURL, pageID: pageID)
+
+    let persistedDigests = try segmentBlobDigests(rootURL: rootURL, pageID: pageID)
+    #expect(persistedDigests == secondDigests.union(thirdDigests))
+    #expect(persistedDigests.isDisjoint(with: firstDigests.subtracting(secondDigests)))
+    #expect(try await repository.loadDrawing(pageID: pageID) == thirdData)
+  }
+
+  @Test("Editing keeps short pages light and migrates long pages without downgrade")
+  func editingStoragePolicyMigratesOnlyWhenUseful() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let pageID = UUID(uuidString: "12000000-0000-0000-0000-000000000009")!
+    let repository = DrawingRepository(rootURL: rootURL)
+    let shortData = try fixtureDrawingData()
+
+    try await repository.saveDrawingForEditing(shortData, pageID: pageID)
+    let authorityURL = drawingURL(rootURL: rootURL, pageID: pageID)
+    #expect(try Data(contentsOf: authorityURL) == shortData)
+    #expect(
+      !fileManager.fileExists(
+        atPath: rootURL.appendingPathComponent(
+          DrawingRepository.segmentedDrawingsDirectoryName,
+          isDirectory: true
+        ).path
+      )
+    )
+
+    let longData = try drawingAcrossRegions().dataRepresentation()
+    try await repository.saveDrawingForEditing(longData, pageID: pageID)
+    #expect(
+      SegmentedDrawingCodec.isSegmentedAuthority(
+        try Data(contentsOf: authorityURL)
+      )
+    )
+    #expect(try await repository.loadDrawing(pageID: pageID) == longData)
+
+    try await repository.saveDrawingForEditing(shortData, pageID: pageID)
+    #expect(
+      SegmentedDrawingCodec.isSegmentedAuthority(
+        try Data(contentsOf: authorityURL)
+      )
+    )
+    #expect(try await repository.loadDrawing(pageID: pageID) == shortData)
+  }
+
+  @Test("A page transaction lock serializes two repositories before blob publication")
+  func segmentedSavesAreSerializedAcrossRepositories() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let pageID = UUID(uuidString: "12000000-0000-0000-0000-000000000007")!
+    let initialRepository = DrawingRepository(rootURL: rootURL)
+    try await initialRepository.saveSegmentedDrawing(
+      try drawingAcrossRegions(additionalOffsetY: 0).dataRepresentation(),
+      pageID: pageID
+    )
+
+    let gate = SegmentedWriteBlockingGate()
+    let firstWriter = POSIXDurableFileWriter { stage, url in
+      try gate.checkpoint(stage: stage, url: url)
+    }
+    let secondRecorder = SegmentedWriteRecorder()
+    let secondWriter = POSIXDurableFileWriter { stage, url in
+      secondRecorder.record(stage: stage, url: url)
+    }
+    let firstRepository = DrawingRepository(rootURL: rootURL, durableFileWriter: firstWriter)
+    let secondRepository = DrawingRepository(rootURL: rootURL, durableFileWriter: secondWriter)
+    let firstData = try drawingAcrossRegions(additionalOffsetY: 400).dataRepresentation()
+    let secondData = try drawingAcrossRegions(additionalOffsetY: 800).dataRepresentation()
+
+    let firstSave = Task {
+      try await firstRepository.saveSegmentedDrawing(firstData, pageID: pageID)
+    }
+    try #require(gate.waitUntilBlocked())
+    let secondSave = Task {
+      try await secondRepository.saveSegmentedDrawing(secondData, pageID: pageID)
+    }
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(
+      !secondRecorder.events().contains {
+        $0.stage == .temporaryFileCreated
+          || $0.stage == .dataWritten
+          || $0.stage == .published
+      }
+    )
+
+    gate.release()
+    try await firstSave.value
+    try await secondSave.value
+    #expect(try await secondRepository.loadDrawing(pageID: pageID) == secondData)
+  }
+
+  @Test("Unexpected page-segment entries stop cleanup before replacing current notes")
+  func segmentedCleanupRejectsUnexpectedEntries() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? fileManager.removeItem(at: rootURL) }
+    let pageID = UUID(uuidString: "12000000-0000-0000-0000-000000000008")!
+    let repository = DrawingRepository(rootURL: rootURL)
+    let originalData = try drawingAcrossRegions(additionalOffsetY: 0).dataRepresentation()
+    try await repository.saveSegmentedDrawing(originalData, pageID: pageID)
+    let unexpectedURL = segmentDirectoryURL(rootURL: rootURL, pageID: pageID)
+      .appendingPathComponent("unexpected-entry")
+    try Data("do-not-touch".utf8).write(to: unexpectedURL)
+
+    await #expect(throws: DurableFileWriterError.invalidStoreLayout) {
+      try await repository.saveSegmentedDrawing(
+        try drawingAcrossRegions(additionalOffsetY: 500).dataRepresentation(),
+        pageID: pageID
+      )
+    }
+    #expect(try Data(contentsOf: unexpectedURL) == Data("do-not-touch".utf8))
+    #expect(try await repository.loadDrawing(pageID: pageID) == originalData)
+  }
+
   @Test("Duplicate notebook identifiers are rejected without rewriting the library")
   func duplicateNotebookIDsAreRejected() async throws {
     let fileManager = FileManager.default
@@ -502,16 +639,52 @@ struct DrawingRepositoryTests {
     return try Data(contentsOf: fixtureURL)
   }
 
-  private func drawingAcrossRegions() throws -> PKDrawing {
+  private func drawingAcrossRegions(additionalOffsetY: CGFloat = 0) throws -> PKDrawing {
     let fixture = try PKDrawing(data: fixtureDrawingData())
     var drawing = fixture.transformed(
-      using: CGAffineTransform(translationX: 0, y: 5_000)
+      using: CGAffineTransform(translationX: 0, y: 5_000 + additionalOffsetY)
     )
-    drawing.append(fixture)
     drawing.append(
-      fixture.transformed(using: CGAffineTransform(translationX: 0, y: 9_000))
+      fixture.transformed(
+        using: CGAffineTransform(translationX: 0, y: additionalOffsetY)
+      )
+    )
+    drawing.append(
+      fixture.transformed(
+        using: CGAffineTransform(translationX: 0, y: 9_000 + additionalOffsetY)
+      )
     )
     return drawing
+  }
+
+  private func authorityDigests(rootURL: URL, pageID: UUID) throws -> Set<String> {
+    let authority = try SegmentedDrawingCodec.decodeAuthority(
+      Data(contentsOf: drawingURL(rootURL: rootURL, pageID: pageID)),
+      expectedPageID: pageID
+    )
+    return Set(authority.entries.map(\.sha256) + authority.sourceChunks.map(\.sha256))
+  }
+
+  private func segmentBlobDigests(rootURL: URL, pageID: UUID) throws -> Set<String> {
+    let suffix = ".\(DrawingRepository.segmentBlobFileExtension)"
+    return try Set(
+      FileManager.default.contentsOfDirectory(
+        atPath: segmentDirectoryURL(rootURL: rootURL, pageID: pageID).path
+      ).compactMap { name in
+        guard name.hasSuffix(suffix) else { return nil }
+        let digest = String(name.dropLast(suffix.count))
+        return SegmentedDrawingCodec.isValidSHA256Hex(digest) ? digest : nil
+      }
+    )
+  }
+
+  private func segmentDirectoryURL(rootURL: URL, pageID: UUID) -> URL {
+    rootURL
+      .appendingPathComponent(
+        DrawingRepository.segmentedDrawingsDirectoryName,
+        isDirectory: true
+      )
+      .appendingPathComponent(pageID.uuidString.lowercased(), isDirectory: true)
   }
 
   private func drawingURL(rootURL: URL, pageID: UUID) -> URL {
@@ -523,12 +696,7 @@ struct DrawingRepositoryTests {
   }
 
   private func segmentBlobURL(rootURL: URL, pageID: UUID, digest: String) -> URL {
-    rootURL
-      .appendingPathComponent(
-        DrawingRepository.segmentedDrawingsDirectoryName,
-        isDirectory: true
-      )
-      .appendingPathComponent(pageID.uuidString.lowercased(), isDirectory: true)
+    segmentDirectoryURL(rootURL: rootURL, pageID: pageID)
       .appendingPathComponent("\(digest).\(DrawingRepository.segmentBlobFileExtension)")
   }
 }
@@ -558,6 +726,41 @@ private final class SegmentedWriteRecorder: @unchecked Sendable {
     lock.lock()
     storedEvents.removeAll()
     lock.unlock()
+  }
+}
+
+private final class SegmentedWriteBlockingGate: @unchecked Sendable {
+  private let condition = NSCondition()
+  private var hasBlocked = false
+  private var isReleased = false
+
+  func checkpoint(stage: DurableFileWriteStage, url: URL) throws {
+    guard stage == .published,
+      url.path.contains("/\(DrawingRepository.segmentedDrawingsDirectoryName)/")
+    else { return }
+    condition.lock()
+    defer { condition.unlock() }
+    guard !hasBlocked else { return }
+    hasBlocked = true
+    condition.broadcast()
+    while !isReleased {
+      condition.wait()
+    }
+  }
+
+  func waitUntilBlocked(timeout: TimeInterval = 2) -> Bool {
+    condition.lock()
+    defer { condition.unlock() }
+    let deadline = Date().addingTimeInterval(timeout)
+    while !hasBlocked, condition.wait(until: deadline) {}
+    return hasBlocked
+  }
+
+  func release() {
+    condition.lock()
+    isReleased = true
+    condition.broadcast()
+    condition.unlock()
   }
 }
 

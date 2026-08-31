@@ -9,6 +9,7 @@ enum SegmentedDrawingLimits {
   static let maximumAuthorityByteCount = 2 * 1024 * 1024
   static let maximumEntryCount = 20_000
   static let maximumReconstructedDrawingByteCount = 64 * 1024 * 1024
+  static let activationDrawingByteCount = 1024 * 1024
   static let maximumSourceChunkCount =
     maximumReconstructedDrawingByteCount / maximumSegmentByteCount
 }
@@ -98,6 +99,25 @@ enum SegmentedDrawingCodec {
 
   static func isSegmentedAuthority(_ data: Data) -> Bool {
     data.count >= magic.count && data.prefix(magic.count) == magic
+  }
+
+  static func shouldUseSegmentedStorage(drawingData: Data) throws -> Bool {
+    let drawing: PKDrawing
+    do {
+      drawing = drawingData.isEmpty ? PKDrawing() : try PKDrawing(data: drawingData)
+    } catch {
+      throw SegmentedDrawingError.invalidDrawing
+    }
+    if drawingData.count >= SegmentedDrawingLimits.activationDrawingByteCount {
+      return true
+    }
+    guard !drawing.strokes.isEmpty,
+      !drawing.bounds.isNull,
+      drawing.bounds.maxY.isFinite
+    else {
+      return false
+    }
+    return drawing.bounds.maxY >= Double(SegmentedDrawingLimits.segmentHeight)
   }
 
   static func makeSnapshot(pageID: UUID, drawingData: Data) throws -> SegmentedDrawingSnapshot {

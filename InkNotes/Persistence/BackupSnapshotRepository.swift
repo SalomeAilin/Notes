@@ -569,7 +569,7 @@ extension DrawingRepository {
       // Overrides originate from the live PencilKit canvas. Persist them before
       // the slower whole-library validation so a backup operation cannot widen
       // the durability window for the user's latest strokes.
-      try saveDrawing(drawing, pageID: pageID)
+      try saveDrawingForEditing(drawing, pageID: pageID)
     }
     try saveLibrary(library)
   }

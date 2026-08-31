@@ -1,4 +1,26 @@
+import Darwin
 import Foundation
+
+private struct SegmentedPageLockIdentity: Hashable, Sendable {
+  let device: UInt64
+  let inode: UInt64
+}
+
+private final class SegmentedPageLockRegistry: @unchecked Sendable {
+  private let lock = NSLock()
+  private var locks: [SegmentedPageLockIdentity: NSLock] = [:]
+
+  func processLock(for identity: SegmentedPageLockIdentity) -> NSLock {
+    lock.lock()
+    defer { lock.unlock() }
+    if let existing = locks[identity] {
+      return existing
+    }
+    let created = NSLock()
+    locks[identity] = created
+    return created
+  }
+}
 
 enum DrawingRepositoryError: LocalizedError, Equatable {
   case persistenceDirectoryUnavailable
@@ -36,6 +58,10 @@ actor DrawingRepository {
   static let drawingFileExtension = "drawing"
   static let segmentedDrawingsDirectoryName = "DrawingSegments"
   static let segmentBlobFileExtension = "drawing"
+  static let segmentedPageLockFilename = ".inknotes-segmented-page.lock"
+  static let maximumSegmentedPageEntryCount =
+    (SegmentedDrawingLimits.maximumEntryCount
+      + SegmentedDrawingLimits.maximumSourceChunkCount) * 2 + 2
   static let restoreTransactionsDirectoryName = "RestoreTransactions"
   static let restoreTransactionFileExtension = "json"
   static let maximumRestoreTransactionByteCount = BackupArchiveLimits.maximumManifestByteCount
@@ -46,6 +72,7 @@ actor DrawingRepository {
   private let rootURL: URL?
   private let durableFileWriter: any DurableFileWriting
   private var preparedDirectoryURLs: Set<URL> = []
+  private static let segmentedPageLockRegistry = SegmentedPageLockRegistry()
 
   init(
     rootURL: URL,
@@ -112,8 +139,7 @@ actor DrawingRepository {
     guard SegmentedDrawingCodec.isSegmentedAuthority(storedData) else {
       return storedData
     }
-    return try reconstructSegmentedDrawing(
-      authorityData: storedData,
+    return try loadSegmentedDrawing(
       pageID: pageID,
       maximumByteCount: SegmentedDrawingLimits.maximumReconstructedDrawingByteCount
     )
@@ -131,11 +157,7 @@ actor DrawingRepository {
       DrawingRepositoryError.drawingTooLarge(actual: $0, maximum: maximumByteCount)
     }
     if SegmentedDrawingCodec.isSegmentedAuthority(storedData) {
-      return try reconstructSegmentedDrawing(
-        authorityData: storedData,
-        pageID: pageID,
-        maximumByteCount: maximumByteCount
-      )
+      return try loadSegmentedDrawing(pageID: pageID, maximumByteCount: maximumByteCount)
     }
     guard storedData.count <= maximumByteCount else {
       throw DrawingRepositoryError.drawingTooLarge(
@@ -161,33 +183,36 @@ actor DrawingRepository {
       return try loadDrawing(pageID: pageID, maximumByteCount: maximumByteCount)
     }
 
-    let authority = try SegmentedDrawingCodec.decodeAuthority(
-      storedData,
-      expectedPageID: pageID
-    )
-    let visibleEntries = authority.entries.filter {
-      $0.maximumY >= verticalRange.lowerBound
-        && $0.minimumY <= verticalRange.upperBound
-    }
-    do {
-      return try SegmentedDrawingCodec.reconstructDrawingData(
-        entries: visibleEntries,
-        maximumByteCount: maximumByteCount
-      ) { entry in
-        let blobURL = try segmentBlobURL(pageID: pageID, digest: entry.sha256)
-        guard fileManager.fileExists(atPath: blobURL.path) else {
-          throw SegmentedDrawingError.missingSegment(entry.sha256)
-        }
-        return try readBoundedData(
-          at: blobURL,
-          maximumByteCount: SegmentedDrawingLimits.maximumSegmentByteCount
-        ) { _ in SegmentedDrawingError.segmentByteCountMismatch }
-      }
-    } catch SegmentedDrawingError.reconstructedDrawingTooLarge(let actual, _) {
-      throw DrawingRepositoryError.drawingTooLarge(
-        actual: actual,
-        maximum: maximumByteCount
+    return try withSegmentedPageLock(pageID: pageID) {
+      let latestAuthorityData = try Data(contentsOf: url)
+      let authority = try SegmentedDrawingCodec.decodeAuthority(
+        latestAuthorityData,
+        expectedPageID: pageID
       )
+      let visibleEntries = authority.entries.filter {
+        $0.maximumY >= verticalRange.lowerBound
+          && $0.minimumY <= verticalRange.upperBound
+      }
+      do {
+        return try SegmentedDrawingCodec.reconstructDrawingData(
+          entries: visibleEntries,
+          maximumByteCount: maximumByteCount
+        ) { entry in
+          let blobURL = try segmentBlobURL(pageID: pageID, digest: entry.sha256)
+          guard fileManager.fileExists(atPath: blobURL.path) else {
+            throw SegmentedDrawingError.missingSegment(entry.sha256)
+          }
+          return try readBoundedData(
+            at: blobURL,
+            maximumByteCount: SegmentedDrawingLimits.maximumSegmentByteCount
+          ) { _ in SegmentedDrawingError.segmentByteCountMismatch }
+        }
+      } catch SegmentedDrawingError.reconstructedDrawingTooLarge(let actual, _) {
+        throw DrawingRepositoryError.drawingTooLarge(
+          actual: actual,
+          maximum: maximumByteCount
+        )
+      }
     }
   }
 
@@ -204,43 +229,76 @@ actor DrawingRepository {
     try durableFileWriter.write(data, to: drawingURL(for: pageID), mode: .replace)
   }
 
+  func saveDrawingForEditing(_ data: Data, pageID: UUID) throws {
+    let authorityURL = try drawingURL(for: pageID)
+    if fileManager.fileExists(atPath: authorityURL.path),
+      SegmentedDrawingCodec.isSegmentedAuthority(try Data(contentsOf: authorityURL))
+    {
+      try saveSegmentedDrawing(data, pageID: pageID)
+      return
+    }
+    if try SegmentedDrawingCodec.shouldUseSegmentedStorage(drawingData: data) {
+      try saveSegmentedDrawing(data, pageID: pageID)
+    } else {
+      try saveDrawing(data, pageID: pageID)
+    }
+  }
+
   func saveSegmentedDrawing(_ data: Data, pageID: UUID) throws {
     try Task.checkCancellation()
-    let existingAuthorityURL = try drawingURL(for: pageID)
-    if fileManager.fileExists(atPath: existingAuthorityURL.path) {
-      let existingAuthorityData = try Data(contentsOf: existingAuthorityURL)
-      if SegmentedDrawingCodec.isSegmentedAuthority(existingAuthorityData) {
+    let snapshot = try SegmentedDrawingCodec.makeSnapshot(
+      pageID: pageID,
+      drawingData: data
+    )
+    try prepareSegmentDirectories(pageID: pageID)
+    let authorityURL = try drawingURL(for: pageID)
+
+    try withSegmentedPageLock(pageID: pageID) {
+      let existingAuthorityData =
+        fileManager.fileExists(atPath: authorityURL.path)
+        ? try Data(contentsOf: authorityURL)
+        : nil
+      let referencedDigests = try referencedSegmentDigests(
+        authorityData: existingAuthorityData,
+        pageID: pageID
+      )
+      try removeUnreferencedSegmentBlobs(
+        pageID: pageID,
+        keeping: referencedDigests
+      )
+
+      if let existingAuthorityData,
+        SegmentedDrawingCodec.isSegmentedAuthority(existingAuthorityData)
+      {
         let existingData = try reconstructSegmentedDrawing(
           authorityData: existingAuthorityData,
           pageID: pageID,
           maximumByteCount: SegmentedDrawingLimits.maximumReconstructedDrawingByteCount
         )
         if existingData == data {
-          try synchronizeDrawingPersistence(pageID: pageID)
+          try synchronizeSegmentedDrawingPersistence(
+            authorityData: existingAuthorityData,
+            pageID: pageID
+          )
           return
         }
       }
-    }
-    let snapshot = try SegmentedDrawingCodec.makeSnapshot(
-      pageID: pageID,
-      drawingData: data
-    )
-    try prepareSegmentDirectories(pageID: pageID)
 
-    for digest in snapshot.blobsBySHA256.keys.sorted() {
-      try Task.checkCancellation()
-      guard let blob = snapshot.blobsBySHA256[digest] else {
-        throw SegmentedDrawingError.invalidAuthority
+      for digest in snapshot.blobsBySHA256.keys.sorted() {
+        try Task.checkCancellation()
+        guard let blob = snapshot.blobsBySHA256[digest] else {
+          throw SegmentedDrawingError.invalidAuthority
+        }
+        try persistSegmentBlob(blob, digest: digest, pageID: pageID)
       }
-      try persistSegmentBlob(blob, digest: digest, pageID: pageID)
-    }
 
-    try Task.checkCancellation()
-    try durableFileWriter.write(
-      snapshot.authorityData,
-      to: drawingURL(for: pageID),
-      mode: .replace
-    )
+      try Task.checkCancellation()
+      try durableFileWriter.write(
+        snapshot.authorityData,
+        to: authorityURL,
+        mode: .replace
+      )
+    }
   }
 
   func removeDrawingIfPresent(pageID: UUID) throws {
@@ -324,16 +382,14 @@ actor DrawingRepository {
     let authorityURL = try drawingURL(for: pageID)
     let authorityData = try Data(contentsOf: authorityURL)
     if SegmentedDrawingCodec.isSegmentedAuthority(authorityData) {
-      let authority = try SegmentedDrawingCodec.decodeAuthority(
-        authorityData,
-        expectedPageID: pageID
-      )
-      let digests = Set(authority.entries.map(\.sha256) + authority.sourceChunks.map(\.sha256))
-      for digest in digests.sorted() {
-        try durableFileWriter.synchronizeFileAndParentDirectory(
-          at: try segmentBlobURL(pageID: pageID, digest: digest)
+      try withSegmentedPageLock(pageID: pageID) {
+        let latestAuthorityData = try Data(contentsOf: authorityURL)
+        try synchronizeSegmentedDrawingPersistence(
+          authorityData: latestAuthorityData,
+          pageID: pageID
         )
       }
+      return
     }
     try durableFileWriter.synchronizeFileAndParentDirectory(at: authorityURL)
   }
@@ -407,6 +463,192 @@ actor DrawingRepository {
     try prepareDirectories()
     try prepareDirectory(at: segmentedDrawingsURL())
     try prepareDirectory(at: pageSegmentsURL(pageID: pageID))
+  }
+
+  private func referencedSegmentDigests(
+    authorityData: Data?,
+    pageID: UUID
+  ) throws -> Set<String> {
+    guard let authorityData,
+      SegmentedDrawingCodec.isSegmentedAuthority(authorityData)
+    else {
+      return []
+    }
+    let authority = try SegmentedDrawingCodec.decodeAuthority(
+      authorityData,
+      expectedPageID: pageID
+    )
+    return Set(authority.entries.map(\.sha256) + authority.sourceChunks.map(\.sha256))
+  }
+
+  private func removeUnreferencedSegmentBlobs(
+    pageID: UUID,
+    keeping referencedDigests: Set<String>
+  ) throws {
+    let directoryURL = try pageSegmentsURL(pageID: pageID)
+    let directoryDescriptor = directoryURL.path.withCString { path in
+      Darwin.open(path, O_RDONLY | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW)
+    }
+    guard directoryDescriptor >= 0 else {
+      throw DurableFileWriterError.persistenceFailure
+    }
+    defer { Darwin.close(directoryDescriptor) }
+
+    let names: [String]
+    do {
+      names = try fileManager.contentsOfDirectory(atPath: directoryURL.path)
+    } catch {
+      throw DurableFileWriterError.persistenceFailure
+    }
+    guard names.count <= Self.maximumSegmentedPageEntryCount else {
+      throw DurableFileWriterError.invalidStoreLayout
+    }
+
+    var removedAnyBlob = false
+    for name in names.sorted() {
+      try Task.checkCancellation()
+      if name == POSIXDurableFileWriter.lockFilename
+        || name == Self.segmentedPageLockFilename
+      {
+        continue
+      }
+      guard let digest = Self.segmentDigest(fromCanonicalFilename: name) else {
+        throw DurableFileWriterError.invalidStoreLayout
+      }
+      var status = stat()
+      let statusResult = name.withCString { filename in
+        Darwin.fstatat(directoryDescriptor, filename, &status, AT_SYMLINK_NOFOLLOW)
+      }
+      guard statusResult == 0,
+        status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+        status.st_mode & mode_t(0o7777) == mode_t(POSIXDurableFileWriter.filePermissions)
+      else {
+        throw DurableFileWriterError.invalidStoreLayout
+      }
+      guard !referencedDigests.contains(digest) else { continue }
+      let unlinkResult = name.withCString { filename in
+        Darwin.unlinkat(directoryDescriptor, filename, 0)
+      }
+      guard unlinkResult == 0 else {
+        throw DurableFileWriterError.persistenceFailure
+      }
+      removedAnyBlob = true
+    }
+
+    if removedAnyBlob {
+      try synchronizeDescriptor(directoryDescriptor)
+    }
+  }
+
+  private func loadSegmentedDrawing(
+    pageID: UUID,
+    maximumByteCount: Int
+  ) throws -> Data {
+    try withSegmentedPageLock(pageID: pageID) {
+      let authorityData = try Data(contentsOf: drawingURL(for: pageID))
+      return try reconstructSegmentedDrawing(
+        authorityData: authorityData,
+        pageID: pageID,
+        maximumByteCount: maximumByteCount
+      )
+    }
+  }
+
+  private func synchronizeSegmentedDrawingPersistence(
+    authorityData: Data,
+    pageID: UUID
+  ) throws {
+    let authority = try SegmentedDrawingCodec.decodeAuthority(
+      authorityData,
+      expectedPageID: pageID
+    )
+    let digests = Set(authority.entries.map(\.sha256) + authority.sourceChunks.map(\.sha256))
+    for digest in digests.sorted() {
+      try durableFileWriter.synchronizeFileAndParentDirectory(
+        at: segmentBlobURL(pageID: pageID, digest: digest)
+      )
+    }
+    try durableFileWriter.synchronizeFileAndParentDirectory(at: drawingURL(for: pageID))
+  }
+
+  private func withSegmentedPageLock<Result>(
+    pageID: UUID,
+    operation: () throws -> Result
+  ) throws -> Result {
+    let directoryURL = try pageSegmentsURL(pageID: pageID)
+    let directoryDescriptor = directoryURL.path.withCString { path in
+      Darwin.open(path, O_RDONLY | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW)
+    }
+    guard directoryDescriptor >= 0 else {
+      throw DurableFileWriterError.persistenceFailure
+    }
+    defer { Darwin.close(directoryDescriptor) }
+
+    var directoryStatus = stat()
+    guard Darwin.fstat(directoryDescriptor, &directoryStatus) == 0,
+      directoryStatus.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR)
+    else {
+      throw DurableFileWriterError.invalidStoreLayout
+    }
+    let identity = SegmentedPageLockIdentity(
+      device: UInt64(bitPattern: Int64(directoryStatus.st_dev)),
+      inode: UInt64(directoryStatus.st_ino)
+    )
+    let processLock = Self.segmentedPageLockRegistry.processLock(for: identity)
+    processLock.lock()
+    defer { processLock.unlock() }
+
+    let lockDescriptor = Self.segmentedPageLockFilename.withCString { filename in
+      Darwin.openat(
+        directoryDescriptor,
+        filename,
+        O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW,
+        mode_t(POSIXDurableFileWriter.filePermissions)
+      )
+    }
+    guard lockDescriptor >= 0 else {
+      throw DurableFileWriterError.persistenceFailure
+    }
+    defer { Darwin.close(lockDescriptor) }
+    guard Darwin.fchmod(lockDescriptor, mode_t(POSIXDurableFileWriter.filePermissions)) == 0 else {
+      throw DurableFileWriterError.persistenceFailure
+    }
+    var lockStatus = stat()
+    guard Darwin.fstat(lockDescriptor, &lockStatus) == 0,
+      lockStatus.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+      lockStatus.st_mode & mode_t(0o7777) == mode_t(POSIXDurableFileWriter.filePermissions)
+    else {
+      throw DurableFileWriterError.invalidStoreLayout
+    }
+
+    var fileLock = flock()
+    fileLock.l_type = Int16(F_WRLCK)
+    fileLock.l_whence = Int16(SEEK_SET)
+    while Darwin.fcntl(lockDescriptor, F_SETLKW, &fileLock) == -1 {
+      guard errno == EINTR else {
+        throw DurableFileWriterError.persistenceFailure
+      }
+    }
+    defer {
+      fileLock.l_type = Int16(F_UNLCK)
+      _ = Darwin.fcntl(lockDescriptor, F_SETLK, &fileLock)
+    }
+    return try operation()
+  }
+
+  private func synchronizeDescriptor(_ descriptor: Int32) throws {
+    while Darwin.fsync(descriptor) == -1 {
+      guard errno == EINTR else {
+        throw DurableFileWriterError.persistenceFailure
+      }
+    }
+  }
+
+  private static func segmentDigest(fromCanonicalFilename filename: String) -> String? {
+    let suffix = ".\(segmentBlobFileExtension)"
+    guard filename.hasSuffix(suffix) else { return nil }
+    let digest = String(filename.dropLast(suffix.count))
+    return SegmentedDrawingCodec.isValidSHA256Hex(digest) ? digest : nil
   }
 
   private func persistSegmentBlob(_ data: Data, digest: String, pageID: UUID) throws {

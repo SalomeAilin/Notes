@@ -535,6 +535,7 @@ struct CompatibilityContractTests {
         "NSPrivacyAccessedAPICategoryFileTimestamp": Set([
           "InkNotes/Persistence/BackupFileReader.swift",
           "InkNotes/Persistence/BaiduUploadReconciliationRepository.swift",
+          "InkNotes/Persistence/DrawingRepository.swift",
           "InkNotes/Persistence/DurableFileWriter.swift",
         ]),
         "NSPrivacyAccessedAPICategoryUserDefaults": Set([

@@ -346,7 +346,7 @@ final class LibraryStore: ObservableObject {
 
     for (pageID, data) in drawingsToSave {
       do {
-        try await repository.saveDrawing(data, pageID: pageID)
+        try await repository.saveDrawingForEditing(data, pageID: pageID)
         if unsavedDrawings[pageID] == data {
           unsavedDrawings.removeValue(forKey: pageID)
         }
@@ -412,7 +412,7 @@ final class LibraryStore: ObservableObject {
 
       if shouldSavePrevious, let previousPageID {
         do {
-          try await repository.saveDrawing(previousDrawing, pageID: previousPageID)
+          try await repository.saveDrawingForEditing(previousDrawing, pageID: previousPageID)
           if unsavedDrawings[previousPageID] == previousDrawing {
             unsavedDrawings.removeValue(forKey: previousPageID)
           }
@@ -441,7 +441,7 @@ final class LibraryStore: ObservableObject {
       do {
         try await Task.sleep(for: .milliseconds(400))
         try Task.checkCancellation()
-        try await repository.saveDrawing(data, pageID: pageID)
+        try await repository.saveDrawingForEditing(data, pageID: pageID)
         if self?.unsavedDrawings[pageID] == data {
           self?.unsavedDrawings.removeValue(forKey: pageID)
         }
