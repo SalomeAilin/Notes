@@ -9,20 +9,25 @@ notes_expected_minimum_os="17.0"
 notes_app_path=""
 notes_provenance_path=""
 notes_device_name=""
+notes_device_handoff_path=""
 
 usage() {
   cat <<'EOF'
 Usage: scripts/verify-ipad-readiness.sh --app <InkNotes.app> --provenance <json> [options]
 
-Read-only verification for a signed InkNotes development app. With
+Read-only device verification for a signed InkNotes development app. With
 --device-name, it also verifies one physical, paired, available iPad without
-printing hardware identifiers or retaining them in build evidence. It never builds, installs,
-launches, refreshes profiles, or changes signing assets.
+printing hardware identifiers or retaining them in build evidence. An optional
+private handoff writes only the verified CoreDevice selector to a caller-owned
+0600 file. It never builds, installs, launches, refreshes profiles, changes
+signing assets, or modifies the device.
 
 Options:
   --app <path>           Signed .app bundle to verify.
   --provenance <path>    provenance.json created by the signed build script.
   --device-name <name>   Exact CoreDevice user-visible name to verify.
+  --device-handoff <path>
+                         Existing empty 0600 file in a private 0700 directory.
   -h, --help             Show this help.
 EOF
 }
@@ -49,6 +54,11 @@ while (( $# > 0 )); do
       notes_device_name="$2"
       shift 2
       ;;
+    --device-handoff)
+      (( $# >= 2 )) || fail "--device-handoff requires a path"
+      notes_device_handoff_path="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -69,8 +79,30 @@ command -v rg >/dev/null || fail "ripgrep is required"
 command -v plutil >/dev/null || fail "plutil is required"
 command -v git >/dev/null || fail "git is required"
 command -v cmp >/dev/null || fail "cmp is required"
+[[ -x /usr/bin/xcrun ]] || fail "Apple xcrun is required"
+[[ -x /usr/bin/stat ]] || fail "Apple stat is required"
+[[ -x /usr/bin/id ]] || fail "Apple id is required"
 [[ -x /usr/bin/perl ]] || fail "Perl is required"
 [[ -x /usr/bin/git ]] || fail "Apple Git is required"
+
+if [[ -n "$notes_device_handoff_path" ]]; then
+  [[ -n "$notes_device_name" ]] || fail "Device handoff requires --device-name"
+  [[ "$notes_device_handoff_path" == /* ]] || fail "Device handoff path must be absolute"
+  [[ -f "$notes_device_handoff_path" && ! -L "$notes_device_handoff_path" ]] \
+    || fail "Device handoff file is missing or unsafe"
+  [[ ! -s "$notes_device_handoff_path" ]] || fail "Device handoff file must be empty"
+  notes_device_handoff_parent="${notes_device_handoff_path:h}"
+  [[ -d "$notes_device_handoff_parent" && ! -L "$notes_device_handoff_parent" ]] \
+    || fail "Device handoff directory is missing or unsafe"
+  [[ "$(/usr/bin/stat -f '%Lp' "$notes_device_handoff_path")" == "600" ]] \
+    || fail "Device handoff file permissions are unsafe"
+  [[ "$(/usr/bin/stat -f '%u' "$notes_device_handoff_path")" == "$(/usr/bin/id -u)" ]] \
+    || fail "Device handoff file owner is unsafe"
+  [[ "$(/usr/bin/stat -f '%Lp' "$notes_device_handoff_parent")" == "700" ]] \
+    || fail "Device handoff directory permissions are unsafe"
+  [[ "$(/usr/bin/stat -f '%u' "$notes_device_handoff_parent")" == "$(/usr/bin/id -u)" ]] \
+    || fail "Device handoff directory owner is unsafe"
+fi
 
 export DEVELOPER_DIR="$notes_developer_dir"
 umask 077
@@ -353,7 +385,7 @@ if [[ -n "$notes_device_name" ]]; then
   command -v jq >/dev/null || fail "jq is required for device readiness checks"
 
   if ! notes_device_snapshot="$(
-    xcrun devicectl list devices \
+    /usr/bin/xcrun devicectl list devices \
       --filter "Name = '$notes_device_name'" \
       --json-output - \
       --omit-deprecated-fields-in-json \
@@ -426,6 +458,13 @@ if [[ -n "$notes_device_name" ]]; then
   )"
   [[ "$notes_device_os" == <->(|.<->)(|.<->) ]] || fail "Requested iPad OS version is invalid"
   [[ -n "$notes_device_udid" ]] || fail "Requested iPad identifier is unavailable"
+  notes_device_selector="$(
+    print -rn -- "$notes_device_snapshot" \
+      | jq -er '.result.devices[0].identifier' 2>/dev/null || true
+  )"
+  [[ "$notes_device_selector" \
+    =~ "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$" ]] \
+    || fail "Requested iPad CoreDevice selector is invalid"
   autoload -Uz is-at-least
   is-at-least "$notes_minimum_os" "$notes_device_os" \
     || fail "Requested iPad OS is below the app minimum"
@@ -445,7 +484,20 @@ if [[ -n "$notes_device_name" ]]; then
   [[ "$notes_profile_contains_device" == true ]] \
     || fail "Embedded profile does not include the requested iPad"
 
-  unset notes_device_snapshot notes_device_udid notes_profile_device
+  if [[ -n "$notes_device_handoff_path" ]]; then
+    [[ -f "$notes_device_handoff_path" && ! -L "$notes_device_handoff_path" \
+      && ! -s "$notes_device_handoff_path" ]] \
+      || fail "Device handoff file changed during verification"
+    [[ "$(/usr/bin/stat -f '%Lp' "$notes_device_handoff_path")" == "600" \
+      && "$(/usr/bin/stat -f '%u' "$notes_device_handoff_path")" == "$(/usr/bin/id -u)" ]] \
+      || fail "Device handoff file became unsafe"
+    print -rn -- "$notes_device_selector" > "$notes_device_handoff_path" \
+      || fail "Verified device selector could not be handed off privately"
+    [[ "$(/usr/bin/stat -f '%z' "$notes_device_handoff_path")" == "36" ]] \
+      || fail "Verified device selector handoff is invalid"
+  fi
+
+  unset notes_device_snapshot notes_device_udid notes_device_selector notes_profile_device
   print -- "Device readiness passed: physical paired iPad, iPadOS $notes_device_os, connected and install-capable"
 fi
 

@@ -663,14 +663,20 @@ print "[1/5] Checking Swift format"
 xcrun swift-format lint --strict --recursive InkNotes InkNotesCoreTests Package.swift
 zsh -n scripts/build-signed-ipad-app.sh
 zsh -n scripts/verify-ipad-readiness.sh
+zsh -n scripts/install-ipad-app.sh
+zsh -n scripts/test-install-ipad-app.zsh
+zsh -n scripts/test-fixtures/ipad-installer/verify-ipad-readiness.sh
+zsh -n scripts/test-fixtures/ipad-installer/xcrun
 zsh -n scripts/internal-display-name-contract.zsh
 zsh -n scripts/materialize-exact-git-source.zsh
 scripts/build-signed-ipad-app.sh --help >/dev/null
 scripts/verify-ipad-readiness.sh --help >/dev/null
+scripts/install-ipad-app.sh --help >/dev/null
 scripts/materialize-exact-git-source.zsh --help >/dev/null
 
 print "[2/5] Running Swift compatibility tests"
 xcrun swift test
+scripts/test-install-ipad-app.zsh
 assert_oauth_release_marker_scanner_detects_chinese_encodings
 assert_retired_brand_scanner_detects_chinese_encodings
 assert_tree_has_no_retired_brand_marker "InkNotes" "Shipping source"

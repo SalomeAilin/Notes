@@ -48,11 +48,22 @@
   --app DerivedData/device-<commit>-build-3.<run>/Build/Products/Debug-iphoneos/InkNotes.app \
   --provenance DerivedData/device-<commit>-build-3.<run>/provenance.json \
   --device-name Alsay_ipad
+
+# 预检、覆盖安装并按 Bundle ID / 版本 / 构建号 / 展示名唯一回读；默认不启动
+./scripts/install-ipad-app.sh \
+  --app DerivedData/device-<commit>-build-3.<run>/Build/Products/Debug-iphoneos/InkNotes.app \
+  --provenance DerivedData/device-<commit>-build-3.<run>/provenance.json \
+  --device-name Alsay_ipad
+
+# 只有需要显式启动验收时追加 --launch
+# 若 iPad 尚未信任开发者 App，脚本会保留已验证安装并给出固定设置路径
 ```
 
 构建脚本要求工作树干净，并把签名产物绑定到当前精确 Git commit。源码快照通过临时、私有的 bare Git 元数据视图读取：禁用 replace 对象，隔离仓库、本机用户和系统 attributes，并在解包后逐文件复核 Git blob 哈希及可执行模式；缺对象、属性来源未隔离、路径碰撞、符号链接、子模块或快照脚本与提交不一致时都会停止。它不会把 Team ID 写入项目，也不会调用自动更新描述文件或自动注册设备。`provenance.json` 记录 commit、版本、SDK/Xcode、签名 CDHash 和关键文件 SHA-256，但不记录 Team ID、设备标识、描述文件 UUID 或访问凭据。描述文件不足 14 天时会明确警告；过期或不匹配时直接失败。该门禁以当前登录用户、Apple 工具链和本机签名资产为信任边界：它防止本地 Git 元数据意外或低权限改写来源语义，但不声称抵御同一账号恶意并发进程或被篡改的 Xcode。
 
 预检脚本只读取产物、描述文件和指定设备状态，不安装、不启动、不卸载应用，也不会改动设备。必须使用目标 iPad 的精确名称；零匹配会报告未找到，多个同名设备会报告不唯一，唯一目标不可用时则停止，不改装到其他设备。
+
+安装脚本先将自身绑定到同一 provenance commit，再完整调用上述预检。预检把同一台已核验 iPad 的 CoreDevice selector 只写入调用方的 `0600` 私有临时文件；随后覆盖安装、唯一回读和可选启动都固定使用该 selector，不再按可能变化的设备名称重新解析。脚本还会在设备变更前和结束后重新核对精确 Git HEAD，并只通过系统 `/usr/bin/xcrun` 调用 CoreDevice。它不会卸载应用、强制终止既有进程、自动更新签名资产、自动重试或失败回滚。CoreDevice 的 JSON、stdout 和 stderr 只进入退出时清除的私有临时目录；成功只报告技术 Bundle、版本和构建号，不输出设备标识或安装服务标识，预检中不足 14 天的描述文件到期天数则会经过白名单后继续警告。安装命令成功后仍必须按 Bundle Identifier 唯一回读，并逐字匹配版本、构建号和内部展示名；回读失败时只报告“可能已安装但尚未验证”，且禁止启动。`--launch` 为显式选项，只会在回读通过后使用本次安装返回的私有标识启动，不会先结束已运行实例。只有 CoreDevice 明确报告用户未信任 provisioning profile 时，脚本才给出“设置 → 通用 → VPN 与设备管理”的固定指引；把签名、entitlement 与信任并列的歧义错误仍按普通启动失败处理。覆盖安装仅证明流程没有主动卸载，旧沙盒数据是否保留仍须在已有可恢复备份的前提下真机核验。
 
 ## 验证命令
 
@@ -130,7 +141,7 @@ InkNotes/
 - 本地目录、元数据、笔迹与恢复 WAL 已请求“临时文件写入 → 文件 `fsync` → 原子发布 → 父目录 `fsync`”，并覆盖发布结果不确定后的重同步；主机故障注入只证明代码请求顺序，尚未在 iPadOS 27 真机做硬断电实验，不能宣称控制器级绝对掉电耐久。若只删除同批导入内容的一部分，重复导入会失败关闭；删除整批后可由用户再次显式恢复。
 - 升级前已经导入、但本机没有对应 `RestoreTransactions` 回执的历史备份，无法被可靠追认为旧导入；再次导入仍会按新副本处理。
 - 恢复 WAL 的数量检查与不可变发布位于同一协调区，使用进程内目录标识锁、POSIX 文件锁与 `RENAME_EXCL`；这只保证遵守同一协议的沙盒写入者。当前没有 App Group 或扩展进程真机验收，未来引入扩展前仍需补文件协调与多进程故障测试。
-- 当前精确 HEAD 已生成 `0.2.0 (3)`、iPad-only、arm64 的开发签名包及脱敏来源清单；目标设备已确认是 iPadOS 27.0，但连接通道仍不可用。因此本轮只证明构建、签名和静态兼容预检通过，尚未安装、启动，也未验证覆盖安装后的旧沙盒数据。
+- 精确提交 `7a482d022daf6657fc3a4dd4e6bb7d25f13ffbfe` 已生成 `0.2.0 (3)`、iPad-only、arm64 的开发签名包及脱敏来源清单；目标 iPadOS 27.0 设备的连接、配对、开发者模式、描述文件包含关系和安装能力均已通过预检，同 Bundle Identifier 覆盖安装及唯一版本回读也已成功。首次启动被 SpringBoard 以“签名无效、entitlement 不足或描述文件尚未显式信任”的歧义安全错误拒绝；本机检查虽已分别通过签名、entitlement 和 profile 一致性，仍不能仅凭该三选一文案证明唯一原因。尚未完成首次运行和旧沙盒笔记保留验收，安装成功不能冒充启动成功。
 - 尚未完成 Apple Pencil 的压感、倾斜、掌触防误触、旋转、分屏，从系统“文件”直接打开 `.notesbackup`，以及百度网盘“文件位置/分享扩展”两条路径的真机验收。
 - 百度网盘上传核心目前只完成可重复的官方 Go SDK 离线对齐门禁；真实账号门禁未通过，尚未验证服务端字段、路径冲突对账、配额、授权目录或 iPadOS 27 前后台传输行为。
 - 百度上传记录使用进程内锁、短期 POSIX 目录锁、跨网络期 BSD 上传/核验记录租约、不覆盖发布、原子交换以及文件/目录 `fsync`；macOS 门禁已覆盖同进程多实例、上传与核验互斥、子进程继承锁、崩溃释放及 v2→v3 跨重启读取，但尚未在 iPad 上做拔电式硬断电验证，也没有 App Group 容器，因此不能宣称跨扩展共享或绝对掉电耐久。v2 与 v3 会共同保守累积到 1,000 份上限，当前没有自动清理或用户解锁界面。

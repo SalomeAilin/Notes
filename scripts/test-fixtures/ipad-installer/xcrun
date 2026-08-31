@@ -1,0 +1,245 @@
+#!/bin/zsh
+set -euo pipefail
+
+notes_trace_path="${INKNOTES_FAKE_TRACE:?}"
+notes_expected_app="${INKNOTES_FAKE_APP:?}"
+notes_expected_bundle="${INKNOTES_FAKE_BUNDLE:?}"
+notes_expected_version="${INKNOTES_FAKE_VERSION:?}"
+notes_expected_build="${INKNOTES_FAKE_BUILD:?}"
+notes_expected_name="${INKNOTES_FAKE_NAME:?}"
+notes_expected_device="${INKNOTES_FAKE_SELECTOR:?}"
+notes_sensitive_sentinel="${INKNOTES_FAKE_SENSITIVE_SENTINEL:?}"
+notes_launch_identifier="fixture-launch-services-identifier"
+
+notes_option_value() {
+  local notes_target="$1"
+  shift
+  while (( $# > 0 )); do
+    if [[ "$1" == "$notes_target" ]]; then
+      (( $# >= 2 )) || exit 91
+      print -r -- "$2"
+      return 0
+    fi
+    shift
+  done
+  return 1
+}
+
+notes_has_argument() {
+  local notes_target="$1"
+  shift
+  local notes_argument
+  for notes_argument in "$@"; do
+    [[ "$notes_argument" == "$notes_target" ]] && return 0
+  done
+  return 1
+}
+
+[[ "$#" -ge 4 ]]
+notes_device="$(notes_option_value --device "$@")"
+notes_json_path="$(notes_option_value --json-output "$@")"
+[[ "$notes_device" == "$notes_expected_device" ]]
+[[ -n "$notes_json_path" && "$notes_json_path" != "-" ]]
+[[ "$*" != *"--terminate-existing"* ]]
+[[ "$(stat -f '%Lp' "${notes_json_path:h}")" == "700" ]]
+[[ "$(stat -f '%Lp' "$notes_json_path")" == "600" ]]
+
+notes_phase=""
+case "$1:$2:$3:$4" in
+  devicectl:device:install:app)
+    notes_phase="install"
+    notes_has_argument "$notes_expected_app" "$@"
+    ;;
+  devicectl:device:info:apps)
+    notes_phase="info"
+    [[ "$(notes_option_value --bundle-id "$@")" == "$notes_expected_bundle" ]]
+    ;;
+  devicectl:device:process:launch)
+    notes_phase="launch"
+    [[ "$(notes_option_value --launch-persistent-identifier "$@")" \
+      == "$notes_launch_identifier" ]]
+    notes_has_argument "$notes_expected_bundle" "$@"
+    ;;
+  *)
+    exit 92
+    ;;
+esac
+
+print -- "$notes_phase" >> "$notes_trace_path"
+print -- "$notes_sensitive_sentinel stdout $notes_phase"
+print -u2 -- "$notes_sensitive_sentinel stderr $notes_phase"
+
+case "$notes_phase" in
+  install)
+    case "${INKNOTES_FAKE_INSTALL_MODE:-success}" in
+      nonzero)
+        exit 43
+        ;;
+      malformed)
+        print -rn -- '{' > "$notes_json_path"
+        ;;
+      wrong-command)
+        jq -n \
+          --arg sentinel "$notes_sensitive_sentinel" \
+          '{info: {commandType: "wrong.install", outcome: "success", jsonVersion: 5}, private: $sentinel, result: {installedApplications: []}}' \
+          > "$notes_json_path"
+        ;;
+      success)
+        jq -n \
+          --arg bundle "$notes_expected_bundle" \
+          --arg lsid "$notes_launch_identifier" \
+          --arg sentinel "$notes_sensitive_sentinel" '
+          {
+            info: {
+              commandType: "devicectl.device.install.app",
+              outcome: "success",
+              jsonVersion: 5
+            },
+            privateDeviceIdentifier: $sentinel,
+            result: {
+              installedApplications: [
+                {bundleID: $bundle, launchServicesIdentifier: $lsid}
+              ]
+            }
+          }
+        ' > "$notes_json_path"
+        ;;
+      *)
+        exit 93
+        ;;
+    esac
+    ;;
+  info)
+    case "${INKNOTES_FAKE_READBACK_MODE:-success}" in
+      nonzero)
+        exit 44
+        ;;
+      malformed)
+        print -rn -- '{' > "$notes_json_path"
+        ;;
+      zero)
+        jq -n \
+          --arg sentinel "$notes_sensitive_sentinel" \
+          '{info: {commandType: "devicectl.device.info.apps", outcome: "success", jsonVersion: 5}, private: $sentinel, result: {apps: []}}' \
+          > "$notes_json_path"
+        ;;
+      two)
+        jq -n \
+          --arg bundle "$notes_expected_bundle" \
+          --arg version "$notes_expected_version" \
+          --arg build "$notes_expected_build" \
+          --arg name "$notes_expected_name" \
+          --arg sentinel "$notes_sensitive_sentinel" '
+          {
+            info: {
+              commandType: "devicectl.device.info.apps",
+              outcome: "success",
+              jsonVersion: 5
+            },
+            private: $sentinel,
+            result: {
+              apps: [
+                {bundleIdentifier: $bundle, version: $version, bundleVersion: $build, name: $name},
+                {bundleIdentifier: $bundle, version: $version, bundleVersion: $build, name: $name}
+              ]
+            }
+          }
+        ' > "$notes_json_path"
+        ;;
+      wrong-version)
+        jq -n \
+          --arg bundle "$notes_expected_bundle" \
+          --arg version "${notes_expected_version} " \
+          --arg build "$notes_expected_build" \
+          --arg name "$notes_expected_name" \
+          --arg sentinel "$notes_sensitive_sentinel" '
+          {
+            info: {
+              commandType: "devicectl.device.info.apps",
+              outcome: "success",
+              jsonVersion: 5
+            },
+            private: $sentinel,
+            result: {
+              apps: [
+                {bundleIdentifier: $bundle, version: $version, bundleVersion: $build, name: $name}
+              ]
+            }
+          }
+        ' > "$notes_json_path"
+        ;;
+      success)
+        jq -n \
+          --arg bundle "$notes_expected_bundle" \
+          --arg version "$notes_expected_version" \
+          --arg build "$notes_expected_build" \
+          --arg name "$notes_expected_name" \
+          --arg sentinel "$notes_sensitive_sentinel" '
+          {
+            info: {
+              commandType: "devicectl.device.info.apps",
+              outcome: "success",
+              jsonVersion: 5
+            },
+            private: $sentinel,
+            result: {
+              apps: [
+                {bundleIdentifier: $bundle, version: $version, bundleVersion: $build, name: $name}
+              ]
+            }
+          }
+        ' > "$notes_json_path"
+        ;;
+      *)
+        exit 94
+        ;;
+    esac
+    ;;
+  launch)
+    case "${INKNOTES_FAKE_LAUNCH_MODE:-success}" in
+      trust)
+        jq -n \
+          --arg sentinel "$notes_sensitive_sentinel" \
+          '{info: {commandType: "devicectl.device.process.launch", outcome: "failure", jsonVersion: 5}, error: "The user did not explicitly trust the provisioning profile.", private: $sentinel}' \
+          > "$notes_json_path"
+        print -u2 -- "The user did not explicitly trust the provisioning profile. $notes_sensitive_sentinel"
+        exit 45
+        ;;
+      generic-trust-word)
+        jq -n \
+          --arg sentinel "$notes_sensitive_sentinel" \
+          '{info: {commandType: "devicectl.device.process.launch", outcome: "failure", jsonVersion: 5}, error: "TLS certificate not trusted", private: $sentinel}' \
+          > "$notes_json_path"
+        print -u2 -- "TLS certificate not trusted $notes_sensitive_sentinel"
+        exit 46
+        ;;
+      ambiguous-signature)
+        jq -n \
+          --arg sentinel "$notes_sensitive_sentinel" \
+          '{info: {commandType: "devicectl.device.process.launch", outcome: "failure", jsonVersion: 5}, error: "invalid code signature, inadequate entitlements or its profile has not been explicitly trusted by the user.", private: $sentinel}' \
+          > "$notes_json_path"
+        print -u2 -- \
+          "invalid code signature, inadequate entitlements or its profile has not been explicitly trusted by the user. $notes_sensitive_sentinel"
+        exit 47
+        ;;
+      success)
+        jq -n \
+          --arg sentinel "$notes_sensitive_sentinel" '
+          {
+            info: {
+              commandType: "devicectl.device.process.launch",
+              outcome: "success",
+              jsonVersion: 5
+            },
+            result: {processIdentifier: $sentinel}
+          }
+        ' > "$notes_json_path"
+        ;;
+      *)
+        exit 95
+        ;;
+    esac
+    ;;
+esac
+
+chmod 600 "$notes_json_path"

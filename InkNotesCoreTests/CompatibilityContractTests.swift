@@ -747,6 +747,7 @@ struct CompatibilityContractTests {
       "scripts/verify-compatibility.sh",
       "scripts/build-signed-ipad-app.sh",
       "scripts/verify-ipad-readiness.sh",
+      "scripts/install-ipad-app.sh",
       "scripts/internal-display-name-contract.zsh",
     ]
 
@@ -928,13 +929,17 @@ struct CompatibilityContractTests {
       contentsOf: repositoryRoot.appendingPathComponent("scripts/verify-ipad-readiness.sh"),
       encoding: .utf8
     )
+    let installScript = try String(
+      contentsOf: repositoryRoot.appendingPathComponent("scripts/install-ipad-app.sh"),
+      encoding: .utf8
+    )
     let materializerScript = try String(
       contentsOf: repositoryRoot.appendingPathComponent(
         "scripts/materialize-exact-git-source.zsh"
       ),
       encoding: .utf8
     )
-    for script in [buildScript, readinessScript, materializerScript] {
+    for script in [buildScript, readinessScript, installScript, materializerScript] {
       #expect(!script.contains("-allowProvisioningUpdates"))
       #expect(!script.contains("-allowProvisioningDeviceRegistration"))
     }
@@ -965,6 +970,9 @@ struct CompatibilityContractTests {
     #expect(readinessScript.contains("notes_device_connection_state"))
     #expect(readinessScript.contains("devicectl.list.devices"))
     #expect(readinessScript.contains("com.apple.coredevice.feature.installapp"))
+    #expect(readinessScript.contains("--device-handoff"))
+    #expect(readinessScript.contains(".result.devices[0].identifier"))
+    #expect(readinessScript.contains("/usr/bin/xcrun devicectl list devices"))
     let deviceCountClassification = [
       "  case \"$notes_device_count\" in",
       "    0) fail \"No device has the exact requested name\" ;;",
@@ -985,6 +993,79 @@ struct CompatibilityContractTests {
     #expect(
       readinessScript.components(separatedBy: "xcrun devicectl list devices").count - 1 == 1
     )
+    #expect(installScript.contains("notes_should_launch=false"))
+    #expect(installScript.contains("--launch)"))
+    #expect(installScript.contains("notes_assert_clean_worktree"))
+    #expect(installScript.contains("notes_exact_head_matches_provenance"))
+    #expect(installScript.contains("cmp -s \"$notes_script_path\""))
+    #expect(installScript.contains("zsh \"$notes_readiness_script\""))
+    #expect(installScript.contains("--device-handoff \"$notes_device_handoff_path\""))
+    #expect(installScript.contains("notes_device_selector"))
+    #expect(installScript.contains("unset notes_device_name notes_device_name_lower"))
+    #expect(
+      installScript.components(separatedBy: "zsh \"$notes_readiness_script\"").count - 1
+        == 1
+    )
+    #expect(
+      installScript.components(separatedBy: "xcrun devicectl device install app").count - 1
+        == 1
+    )
+    #expect(
+      installScript.components(separatedBy: "xcrun devicectl device info apps").count - 1
+        == 1
+    )
+    #expect(
+      installScript.components(separatedBy: "xcrun devicectl device process launch").count - 1
+        == 1
+    )
+    #expect(installScript.contains(".result.installedApplications | length == 1"))
+    #expect(installScript.contains(".result.apps | length == 1"))
+    #expect(installScript.contains(".result.apps[0].bundleIdentifier == $bundle"))
+    #expect(installScript.contains(".result.apps[0].version == $version"))
+    #expect(installScript.contains(".result.apps[0].bundleVersion == $build"))
+    #expect(installScript.contains(".result.apps[0].name == $name"))
+    #expect(installScript.contains("--launch-persistent-identifier"))
+    #expect(installScript.contains("The user did not explicitly trust the provisioning profile"))
+    #expect(
+      !installScript.contains("|profile has not been explicitly trusted by the user")
+    )
+    #expect(
+      installScript.components(separatedBy: "/usr/bin/xcrun devicectl").count - 1 == 3
+    )
+    #expect(!installScript.contains("\nxcrun devicectl"))
+    #expect(
+      installScript.components(separatedBy: "--device \"$notes_device_selector\"").count - 1
+        == 3
+    )
+    #expect(
+      installScript.components(separatedBy: "notes_exact_head_matches_provenance").count - 1
+        == 4
+    )
+    #expect(installScript.contains("embedded development profile expires in"))
+    #expect(installScript.contains("exit 7"))
+    #expect(!installScript.contains("devicectl device uninstall"))
+    #expect(!installScript.contains("devicectl device process terminate"))
+    #expect(!installScript.contains("--terminate-existing"))
+    #expect(!installScript.contains("--json-output -"))
+    #expect(!installScript.contains("set -x"))
+    for sensitiveMarker in ["serialNumber", "hardware.udid", "hardware.ecid"] {
+      #expect(!installScript.contains(sensitiveMarker))
+    }
+    let readinessInvocation = try #require(
+      installScript.range(of: "zsh \"$notes_readiness_script\"")
+    )
+    let installInvocation = try #require(
+      installScript.range(of: "xcrun devicectl device install app")
+    )
+    let readbackInvocation = try #require(
+      installScript.range(of: "xcrun devicectl device info apps")
+    )
+    let launchInvocation = try #require(
+      installScript.range(of: "xcrun devicectl device process launch")
+    )
+    #expect(readinessInvocation.upperBound <= installInvocation.lowerBound)
+    #expect(installInvocation.upperBound <= readbackInvocation.lowerBound)
+    #expect(readbackInvocation.upperBound <= launchInvocation.lowerBound)
     #expect(materializerScript.contains("GIT_OBJECT_DIRECTORY=\"$notes_object_directory\""))
     #expect(materializerScript.contains("GIT_NO_REPLACE_OBJECTS=1"))
     #expect(materializerScript.contains("GIT_ATTR_NOSYSTEM=1"))
