@@ -701,6 +701,58 @@ struct CompatibilityContractTests {
     #expect(readerSource.contains("Darwin.unlink(path)"))
   }
 
+  @Test("File export and system sharing reuse one immutable backup artifact")
+  func backupExportSurfacesShareOneArtifact() throws {
+    let repositoryRoot = repositoryRootURL()
+    let transferSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent("InkNotes/Views/BackupTransferView.swift"),
+      encoding: .utf8
+    )
+
+    #expect(transferSource.contains("let artifact: BackupExportArtifact"))
+    #expect(transferSource.contains("BackupTransferItem(artifact: artifact)"))
+    #expect(
+      transferSource.contains(
+        """
+        DataRepresentation(exportedContentType: .notesBackup) { item in
+              item.artifact.data
+            }
+            .suggestedFileName { item in
+              item.artifact.filename
+            }
+        """
+      )
+    )
+    #expect(
+      transferSource.contains(
+        """
+        .fileExporter(
+              isPresented: $isExporterPresented,
+              item: preparedBackup?.transferItem,
+              contentTypes: [.notesBackup],
+              defaultFilename: preparedBackup?.artifact.filename
+        """
+      )
+    )
+    #expect(
+      transferSource.contains(
+        """
+        ShareLink(
+                  item: preparedBackup.transferItem,
+                  subject: Text("未加密的笔记备份"),
+        """
+      )
+    )
+    #expect(
+      transferSource.contains(
+        "exportedAs: BackupExportArtifact.uniformTypeIdentifier"
+      )
+    )
+    #expect(transferSource.contains("此文件未加密，包含笔记名称和原始笔迹"))
+    #expect(!transferSource.contains("BackupArchiveCodec.uniformTypeIdentifier"))
+    #expect(!transferSource.contains("private func backupFilename"))
+  }
+
   @Test("The running app version is Bundle-driven and included in both build graphs")
   func runtimeVersionIsVisible() throws {
     let repositoryRoot = repositoryRootURL()

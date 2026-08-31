@@ -15,6 +15,7 @@ let package = Package(
       sources: [
         "Models/AppBuildIdentity.swift",
         "Models/BackupArchive.swift",
+        "Models/BackupExportArtifact.swift",
         "Models/BackupImportPresentationState.swift",
         "Models/BackupImportRequest.swift",
         "Models/BaiduAccountCredential.swift",

@@ -5,30 +5,33 @@ import UniformTypeIdentifiers
 
 extension UTType {
   static let notesBackup = UTType(
-    exportedAs: BackupArchiveCodec.uniformTypeIdentifier,
+    exportedAs: BackupExportArtifact.uniformTypeIdentifier,
     conformingTo: .data
   )
 }
 
 private struct BackupTransferItem: Transferable, Sendable {
-  let data: Data
-  let filename: String
+  let artifact: BackupExportArtifact
 
   static var transferRepresentation: some TransferRepresentation {
     DataRepresentation(exportedContentType: .notesBackup) { item in
-      item.data
+      item.artifact.data
     }
     .suggestedFileName { item in
-      item.filename
+      item.artifact.filename
     }
   }
 }
 
 private struct PreparedBackup: Sendable {
-  let item: BackupTransferItem
+  let artifact: BackupExportArtifact
   let createdAt: Date
   let notebookCount: Int
   let pageCount: Int
+
+  var transferItem: BackupTransferItem {
+    BackupTransferItem(artifact: artifact)
+  }
 }
 
 private struct PendingBackupImport: Sendable {
@@ -96,9 +99,9 @@ struct BackupTransferView: View {
     }
     .fileExporter(
       isPresented: $isExporterPresented,
-      item: preparedBackup?.item,
+      item: preparedBackup?.transferItem,
       contentTypes: [.notesBackup],
-      defaultFilename: preparedBackup?.item.filename
+      defaultFilename: preparedBackup?.artifact.filename
     ) { result in
       handleExportResult(result)
     }
@@ -163,7 +166,7 @@ struct BackupTransferView: View {
           Text("\(preparedBackup.notebookCount) 个笔记本，\(preparedBackup.pageCount) 页")
         }
         LabeledContent("文件大小") {
-          Text(formatBackupByteCount(preparedBackup.item.data.count))
+          Text(formatBackupByteCount(preparedBackup.artifact.data.count))
         }
 
         Label(
@@ -181,7 +184,7 @@ struct BackupTransferView: View {
         .disabled(isBusy)
 
         ShareLink(
-          item: preparedBackup.item,
+          item: preparedBackup.transferItem,
           subject: Text("未加密的笔记备份"),
           message: Text("此文件未加密，包含笔记名称和原始笔迹，请仅保存到信任的位置。"),
           preview: SharePreview(
@@ -269,9 +272,9 @@ struct BackupTransferView: View {
     do {
       let result = try await store.makeBackup()
       preparedBackup = PreparedBackup(
-        item: BackupTransferItem(
+        artifact: BackupExportArtifact(
           data: result.data,
-          filename: backupFilename(createdAt: result.createdAt)
+          createdAt: result.createdAt
         ),
         createdAt: result.createdAt,
         notebookCount: result.notebookCount,
@@ -454,14 +457,6 @@ struct BackupTransferView: View {
       "“\(pendingImport.filename)”创建于 \(createdAt)，包含 \(contents)，\(source)。"
       + "导入会创建副本，不覆盖现有笔记。"
       + (pendingImport.inboxCleanupWarning.map { "\n\n\($0)" } ?? "")
-  }
-
-  private func backupFilename(createdAt: Date) -> String {
-    let formatter = DateFormatter()
-    formatter.locale = Locale(identifier: "zh_CN")
-    formatter.calendar = Calendar(identifier: .gregorian)
-    formatter.dateFormat = "yyyy-MM-dd-HHmmss"
-    return "笔记备份-\(formatter.string(from: createdAt)).\(BackupArchiveCodec.fileExtension)"
   }
 
   private func cleanupWarning(for url: URL, source: BackupImportSource) -> String? {
