@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "buildInputs": {
-    "InkNotes.xcodeproj/project.pbxproj": "b2eb0de17faaaec5f2eaf6f917195a4a6122033d2b9d674f4434a7e3a3c3ba82",
+    "InkNotes.xcodeproj/project.pbxproj": "6eb3590963d8ca480ea272fec9fd8ba078775fb4e94efa4ea1ba5726e9083910",
     "InkNotes/Info.plist": "ad170a9abbacacd971f456d18c832304565f058af81a02b7888348d4bd4830fd",
-    "Package.swift": "fb5a2e0e05552d4216ad4189c138eb523b7ac4b58bf385fe9beb2cda7e205a33"
+    "Package.swift": "99f9fa89d50f92222a09cb154ab4e3972fc13a96a3967af4a2c33e2e1237c07e"
   },
   "sources": {
     "InkNotes/App/InkNotesApp.swift": "1828e34b181bc011487e8ce272c76b09684de26fba01afd631597124385bad73",
@@ -13,6 +13,7 @@
     "InkNotes/Models/BackupImportPresentationState.swift": "5e350f2a27a2ec3cec3b95b4957f7cc61b5e58a32e3a0e0dffb0f27cc4ce5282",
     "InkNotes/Models/BackupImportRequest.swift": "915c70f83cfaa580591fa681cd27c4fc6114bb168b6964cb6646e9f1e1cfbf40",
     "InkNotes/Models/BaiduAccountCredential.swift": "b6bdac95c015b5da7e756db2843a71e150a3239d6d249ccba0314cf0d694e4af",
+    "InkNotes/Models/BaiduBrokerProtocolV1.swift": "558de36d0fdfc636c19bcbfe2be759291dfaf04a419483d8c2a10dc1a7abc631",
     "InkNotes/Models/BaiduNetdiskAccount.swift": "4bf01000654ba46a322b0514711e0dc3b15a9f1397fb8348f8a4b56afcc80092",
     "InkNotes/Models/BaiduNetdiskBackup.swift": "d4fb9e16a2053931533418f98910d666feb59f90be957d22688677a9b5be1f56",
     "InkNotes/Models/LibraryDocument.swift": "2d4ff2f3b90d73bc079f3a2912ef33c9fd67738f654f6ebb8a462d360cb6151b",

@@ -51,6 +51,7 @@ struct BaiduAuthSecurityContractTests {
     let rootURL = try repositoryRootURL()
     let allowedBaiduSwiftFiles = Set([
       "InkNotes/Models/BaiduAccountCredential.swift",
+      "InkNotes/Models/BaiduBrokerProtocolV1.swift",
       "InkNotes/Models/BaiduNetdiskAccount.swift",
       "InkNotes/Models/BaiduNetdiskBackup.swift",
       "InkNotes/Networking/BaiduBackupUploadCoordinator.swift",
@@ -89,6 +90,7 @@ struct BaiduAuthSecurityContractTests {
       "Darwin",
       "Foundation",
       "PencilKit",
+      "Security",
       "SwiftUI",
       "UIKit",
       "UniformTypeIdentifiers",
@@ -332,6 +334,63 @@ struct BaiduAuthSecurityContractTests {
     #expect(!credentialModel.contains("SHA256"))
     #expect(!credentialModel.contains("MD5"))
     #expect(!credentialModel.contains("struct BaiduAccountBoundCredential: Codable"))
+  }
+
+  @Test("Broker parsing remains offline and cannot issue or origin-bind shipping credentials")
+  func brokerProtocolFoundationRemainsSealed() throws {
+    let rootURL = try repositoryRootURL()
+    let protocolSource = try String(
+      contentsOf: rootURL.appendingPathComponent(
+        "InkNotes/Models/BaiduBrokerProtocolV1.swift"
+      ),
+      encoding: .utf8
+    )
+
+    #expect(protocolSource.contains("SecRandomCopyBytes"))
+    #expect(protocolSource.contains("SHA256.hash(data: verifierData)"))
+    #expect(protocolSource.contains("BaiduBrokerUntrustedParsedCallbackV1"))
+    #expect(protocolSource.contains("BaiduBrokerUntrustedParsedExchangeResponseV1"))
+    #expect(protocolSource.components(separatedBy: "private init(parsed:").count - 1 == 2)
+    #expect(!protocolSource.contains("fileprivate init(parsed:"))
+    #expect(protocolSource.contains("#if SWIFT_PACKAGE"))
+    #expect(protocolSource.contains("static func testingOnly(rawASCIIQuery:"))
+    #expect(protocolSource.contains("static func testingOnly(data: Data)"))
+    #expect(protocolSource.components(separatedBy: "Self(parsed:").count - 1 == 2)
+    #expect(protocolSource.contains("testingOnlyMonotonicNow:"))
+    #expect(protocolSource.contains("ContinuousClock.Instant"))
+    #expect(protocolSource.contains("maximumTicketFingerprintCount = 256"))
+    #expect(protocolSource.contains("maximumAttemptBindingFingerprintCount = 512"))
+    #expect(protocolSource.contains("fileprivate static let production"))
+    #expect(protocolSource.contains("replayAuthority = .production"))
+    #expect(protocolSource.contains("registerAttemptBinding("))
+    #expect(protocolSource.contains("attemptBindingDomain"))
+    #expect(protocolSource.contains("maximumObservedMonotonicInstant"))
+    #expect(protocolSource.contains("monotonicInstant >= previousMonotonic"))
+    #expect(protocolSource.contains("wallAnchor.addingTimeInterval(elapsedSeconds)"))
+    #expect(protocolSource.contains("max(max(rawWall, previousMaximum), projectedWall)"))
+    #expect(!protocolSource.contains("removeTicket"))
+    #expect(!protocolSource.contains("resetReplay"))
+    for schema in [
+      "inknotes.baidu-broker.authorization-start.v1",
+      "inknotes.baidu-broker.callback.v1",
+      "inknotes.baidu-broker.exchange-request.v1",
+      "inknotes.baidu-broker.credential-response.v1",
+      "inknotes.baidu-broker.exchange-error.v1",
+    ] {
+      #expect(protocolSource.contains(schema))
+    }
+    #expect(!protocolSource.contains("func begin(now:"))
+    #expect(!protocolSource.contains("func makeExchangeRequest(now:"))
+    #expect(protocolSource.contains("case parsedCredentialFormatAccepted"))
+    #expect(!protocolSource.contains("BaiduAccountBoundCredential"))
+    #expect(!protocolSource.contains("URLSession"))
+    #expect(!protocolSource.contains("AuthenticationServices"))
+    #expect(!protocolSource.contains("ASWebAuthenticationSession"))
+    #expect(!protocolSource.contains("Keychain"))
+    #expect(!protocolSource.contains("UserDefaults"))
+    #expect(!protocolSource.contains("FileManager"))
+    #expect(!protocolSource.contains("http://"))
+    #expect(!protocolSource.contains("https://"))
   }
 
   @Test("Every bound-credential token read is expiry-gated and WAL stays credential-free")
