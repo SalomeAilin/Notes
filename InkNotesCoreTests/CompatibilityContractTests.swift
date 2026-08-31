@@ -719,7 +719,7 @@ struct CompatibilityContractTests {
     #expect(transferSource.contains("BackupImportRequest(url: url, source: .fileImporter)"))
     #expect(
       transferSource.contains(
-        "presentFilePickerFailure(error, action: \"导出备份失败\")"
+        "presentFilePickerFailure(error, action: \"保存备份失败\")"
       )
     )
     #expect(
@@ -769,6 +769,29 @@ struct CompatibilityContractTests {
 
     #expect(transferSource.contains("let artifact: BackupExportArtifact"))
     #expect(transferSource.contains("BackupTransferItem(artifact: artifact)"))
+    #expect(transferSource.contains("Section(\"保存备份\")"))
+    #expect(!transferSource.contains("Section(\"导出备份\")"))
+    #expect(transferSource.contains("Label(\"保存最新备份\", systemImage: \"folder.badge.plus\")"))
+    #expect(transferSource.contains("await saveLatestBackup()"))
+    #expect(transferSource.contains("正在整理最新备份…"))
+    #expect(
+      transferSource.contains(
+        "再由你选择“文件”或已出现在“文件”中的网盘位置。"
+      )
+    )
+    #expect(transferSource.contains("保存位置和分享对象都由你选择"))
+    #expect(!transferSource.contains("Label(\"生成最新备份\""))
+    #expect(!transferSource.contains("未加密备份已生成"))
+    let makeBackupRange = try #require(
+      transferSource.range(of: "let result = try await store.makeBackup()")
+    )
+    let presentExporterRange = try #require(
+      transferSource.range(
+        of: "isExporterPresented = true",
+        range: makeBackupRange.upperBound..<transferSource.endIndex
+      )
+    )
+    #expect(makeBackupRange.lowerBound < presentExporterRange.lowerBound)
     #expect(
       transferSource.contains(
         """

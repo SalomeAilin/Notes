@@ -213,13 +213,13 @@ struct BackupTransferView: View {
   }
 
   private var exportSection: some View {
-    Section("导出备份") {
+    Section("保存备份") {
       Button {
         Task {
-          await prepareLatestBackup()
+          await saveLatestBackup()
         }
       } label: {
-        Label("生成最新备份", systemImage: "arrow.clockwise.icloud")
+        Label("保存最新备份", systemImage: "folder.badge.plus")
       }
       .disabled(!canStartOperation)
 
@@ -245,13 +245,6 @@ struct BackupTransferView: View {
         .font(.footnote)
         .foregroundStyle(.orange)
 
-        Button {
-          isExporterPresented = true
-        } label: {
-          Label("存储到文件", systemImage: "folder.badge.plus")
-        }
-        .disabled(isBusy)
-
         ShareLink(
           item: preparedBackup.transferItem,
           subject: Text("未加密的笔记备份"),
@@ -267,7 +260,7 @@ struct BackupTransferView: View {
         }
         .disabled(isBusy)
       } else {
-        Text("先生成一次最新备份，再选择保存位置或通过其他应用分享。")
+        Text("点击后会先整理当前全部内容，再由你选择“文件”或已出现在“文件”中的网盘位置。")
           .font(.footnote)
           .foregroundStyle(.secondary)
       }
@@ -298,7 +291,7 @@ struct BackupTransferView: View {
       .foregroundStyle(.orange)
 
       Text(
-        "应用不会主动上传笔记。导出或分享由你发起；系统设备备份（包括 iCloud 备份）是否包含应用数据，取决于你的设备设置。"
+        "应用不会主动上传笔记。保存位置和分享对象都由你选择；系统设备备份（包括 iCloud 备份）是否包含应用数据，取决于你的设备设置。"
       )
       .font(.footnote)
       .foregroundStyle(.secondary)
@@ -335,10 +328,9 @@ struct BackupTransferView: View {
   }
 
   @MainActor
-  private func prepareLatestBackup() async {
+  private func saveLatestBackup() async {
     guard canStartOperation else { return }
-    operationMessage = "正在生成最新备份…"
-    defer { operationMessage = nil }
+    operationMessage = "正在整理最新备份…"
 
     do {
       let result = try await store.makeBackup()
@@ -351,14 +343,11 @@ struct BackupTransferView: View {
         notebookCount: result.notebookCount,
         pageCount: result.pageCount
       )
-      notice = BackupTransferNotice(
-        title: "未加密备份已生成",
-        message:
-          "此文件包含笔记名称、原始笔迹和已保存的网页来源。"
-          + "请只存储到你信任的“文件”位置或应用。"
-      )
+      operationMessage = nil
+      isExporterPresented = true
     } catch {
-      presentError(error, action: "生成备份失败")
+      operationMessage = nil
+      presentError(error, action: "保存备份失败")
     }
   }
 
@@ -366,11 +355,11 @@ struct BackupTransferView: View {
     switch result {
     case .success:
       notice = BackupTransferNotice(
-        title: "备份已导出",
-        message: "未加密备份已保存到你选择的位置；该位置或第三方服务现在可以访问文件内容。"
+        title: "备份已保存",
+        message: "未加密备份已保存到你选择的位置，请确认该位置值得信任。"
       )
     case .failure(let error):
-      presentFilePickerFailure(error, action: "导出备份失败")
+      presentFilePickerFailure(error, action: "保存备份失败")
     }
   }
 
