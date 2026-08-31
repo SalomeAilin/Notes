@@ -134,8 +134,10 @@ InkNotes/
 ### 百度授权安全边界
 
 - 百度官方 SDK 当前的[授权码换 token](https://github.com/baidu-netdisk/baidu-drive-sdk-go/blob/main/baidudriver/api/auth_code2token.go)与[设备码换 token](https://github.com/baidu-netdisk/baidu-drive-sdk-go/blob/main/baidudriver/api/auth_device_token.go)都要求 `client_secret`；现有公开资料尚未确认可供 iOS public client 使用的 PKCE 流程。因此应用包、Info.plist、xcconfig、构建设置和 Keychain 都不得携带该密钥，iPad 端也不得直接执行换 token 或刷新。
+- 当前只冻结了[纯离线 broker v1 格式与状态机](docs/baidu-broker-protocol-v1-boundary-2026-08-31.html)：授权开始、回调、兑换请求、凭据响应和错误响应使用五个互不兼容的 schema；attempt、state、verifier、ticket 均为 32 字节随机值的规范无填充 base64url，challenge 是 verifier 解码后的 32 个原始字节做 SHA-256 后再编码。回调只解析不超过 1 KiB 的原始 ASCII query，响应只解析不超过 2 KiB 的全字符串 JSON；尝试总寿命 10 分钟，收到 ticket 后至响应完成的总窗口最多 60 秒。
+- 本地重放记忆只在当前进程内生效：最多保留 256 个 ticket 指纹和 512 个 attempt/state/challenge 绑定指纹，不驱逐，满后失败关闭；应用重启会清空，因此持久化防重放和原子单次消费必须由真实 broker 保证。解析结果只表示格式通过；shipping target 没有把原始输入提升为来源可信包装器的构造入口，也没有网络传输、凭据发行器、URL Scheme、授权 UI、Keychain 写入或“已连接”状态。
 - 未来允许的生产路径是：用 `ASWebAuthenticationSession` 打开真实 HTTPS OAuth broker；百度授权回调进入 broker；broker 只向应用回传短时、高熵、单次使用的 ticket，不在回调 URL 中携带 access token 或 refresh token；应用再通过同一 broker 的 HTTPS 接口兑换并验证凭据。
-- 取消、ticket 过期或重放、`state` 不匹配、回调来源不匹配、broker 响应无法验证时都必须失败关闭。真实 broker origin、正式回调身份、兑换协议、部署、用户身份绑定和真实账号门禁尚未确定，所以当前没有 URL Scheme、授权 UI、Keychain 凭据模型或“已连接”状态。
+- 取消、ticket 过期或重放、`state` 不匹配、回调来源不匹配、broker 响应无法验证时都必须失败关闭。离线 wire 格式虽已冻结，真实 HTTPS origin/路由、TLS 与响应身份验证、正式回调身份及 `ASWebAuthenticationSession` 注册、broker 端原子 ticket 消费、部署、稳定账号绑定、刷新/撤销和真实账号门禁仍未确定。
 
 ## 已知边界
 

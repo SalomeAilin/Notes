@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Notes 百度 broker v1 离线协议边界（2026-08-31）</title>
+  <style>
+    :root { color-scheme: light; --ink: #172033; --muted: #5f6b7a; --line: #d9e0e8; --panel: #f7f9fc; --warn: #8a4b08; --warn-bg: #fff6e6; --ok: #17633b; --ok-bg: #edf8f1; }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--ink); background: #eef2f7; font: 16px/1.65 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; }
+    main { width: min(960px, calc(100% - 32px)); margin: 32px auto; padding: 32px; background: white; border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 10px 30px rgba(23, 32, 51, .07); }
+    h1, h2 { line-height: 1.25; }
+    h1 { margin-top: 0; font-size: clamp(1.7rem, 4vw, 2.4rem); }
+    h2 { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+    code { padding: .12em .35em; border-radius: 5px; background: #eef2f7; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    a { color: #3157c8; overflow-wrap: anywhere; }
+    .note { padding: 16px 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+    .ok { border-color: #b8dfc6; background: var(--ok-bg); }
+    .warn { border-color: #f0cf91; background: var(--warn-bg); }
+    .muted { color: var(--muted); }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+    th, td { padding: 10px 12px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: var(--panel); }
+    ul { padding-left: 1.4rem; }
+    @media (max-width: 700px) { main { width: 100%; margin: 0; padding: 22px 16px; border: 0; border-radius: 0; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>百度 broker v1 离线协议边界</h1>
+  <p class="muted">证据时间：2026-08-31（Asia/Shanghai）｜性质：格式与状态机门禁，不是可用的百度账号连接</p>
+
+  <div class="note warn">
+    <strong>结论：</strong>仓库只新增了纯离线、休眠的 wire/state 基础。它不会发起网络请求、打开授权页面、签发生产凭据、写入 Keychain 或展示“已连接”。
+  </div>
+
+  <h2>已经冻结的合同</h2>
+  <table>
+    <thead><tr><th>项目</th><th>v1 合同</th></tr></thead>
+    <tbody>
+      <tr><td>消息类型</td><td>授权开始、回调、兑换请求、凭据响应、错误响应分别使用五个精确 schema，禁止跨阶段喂入。</td></tr>
+      <tr><td>随机绑定</td><td>attempt、state、verifier、ticket 都是 32 字节随机值的规范无填充 base64url；challenge 为 <code>base64url(SHA256(base64urlDecode(verifier)))</code>。</td></tr>
+      <tr><td>解析边界</td><td>回调只接受不超过 1 KiB 的原始 ASCII query，不做 percent/plus 宽松解码；响应只接受不超过 2 KiB、键和值均为字符串且无重复键的严格 JSON。</td></tr>
+      <tr><td>时间边界</td><td>单次尝试最多 10 分钟；收到 ticket 后至响应完成的总兑换窗口最多 60 秒。期限使用单调时钟，凭据绝对到期还采用会话内防壁钟回拨的保守时间。</td></tr>
+      <tr><td>重放边界</td><td>进程内最多保存 256 个 ticket 指纹和 512 个 attempt/state/challenge 绑定指纹；不驱逐，达到上限即失败关闭。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>明确没有实现</h2>
+  <ul>
+    <li>没有真实 HTTPS broker origin、路由、TLS/响应身份验证或服务器部署。</li>
+    <li>没有 <code>ASWebAuthenticationSession</code>、正式回调注册、URL Scheme 或把 raw query 提升为来源可信消息的 shipping 构造入口。</li>
+    <li>没有 broker 端原子 ticket 单次消费、跨重启重放存储、稳定账号绑定、refresh token 轮换、撤销授权或生产凭据发行器。</li>
+    <li>没有真实百度账号、CDN、撤销/换号、前后台传输或 iPadOS 27 端到端验收。</li>
+  </ul>
+
+  <div class="note ok">
+    <strong>为什么仍需 broker：</strong>当前检查到的百度官方 Go SDK
+    <a href="https://github.com/baidu-netdisk/baidu-drive-sdk-go/blob/main/baidudriver/api/auth_code2token.go">授权码换 token</a>
+    与
+    <a href="https://github.com/baidu-netdisk/baidu-drive-sdk-go/blob/main/baidudriver/api/auth_device_token.go">设备码换 token</a>
+    源码都需要 <code>client_secret</code>。这不证明百度服务端不存在未公开的 PKCE 能力，但不足以把密钥安全地放进 iOS public client。
+  </div>
+
+  <h2>下一道门禁</h2>
+  <p>只有确定自有 broker 的正式域名、回调身份、响应真实性方案、服务器端原子票据存储和账号生命周期后，才允许设计网络适配层；完成真实账号与 iPadOS 27 验收前，不开放用户入口。</p>
+</main>
+</body>
+</html>
