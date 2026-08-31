@@ -958,6 +958,45 @@ struct CompatibilityContractTests {
     }
   }
 
+  @Test("Brand candidates are checked locally without changing the app or claiming clearance")
+  func brandCandidatePreflightRemainsReadOnly() throws {
+    let repositoryRoot = repositoryRootURL()
+    let checkerURL = repositoryRoot.appendingPathComponent(
+      "scripts/check-brand-candidate.zsh"
+    )
+    let checkerSource = try String(contentsOf: checkerURL, encoding: .utf8)
+    let testSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent(
+        "scripts/test-brand-candidate.zsh"
+      ),
+      encoding: .utf8
+    )
+    let gateSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent(
+        "scripts/verify-compatibility.sh"
+      ),
+      encoding: .utf8
+    )
+    let attributes = try FileManager.default.attributesOfItem(atPath: checkerURL.path)
+    let permissions = try #require(attributes[.posixPermissions] as? NSNumber).intValue
+
+    #expect(permissions & 0o111 != 0)
+    #expect(checkerSource.contains("notes_validate_internal_display_name_file"))
+    #expect(checkerSource.contains("notes_read_internal_placeholder_display_name"))
+    #expect(checkerSource.contains("候选名称不能仍是当前内部占位名"))
+    #expect(checkerSource.contains("未修改工程文件、应用身份或备份身份"))
+    #expect(checkerSource.contains("不是商标、App Store 或公开市场可用性结论"))
+    #expect(!checkerSource.contains("--apply"))
+    #expect(!checkerSource.contains("plutil -replace"))
+    #expect(!checkerSource.contains("plutil -insert"))
+    #expect(!checkerSource.contains("git add"))
+    #expect(!checkerSource.contains("git commit"))
+    #expect(testSource.contains("Brand candidate read-only contract tests passed"))
+    #expect(testSource.contains("shasum -a 256"))
+    #expect(testSource.contains("cmp -s \"$notes_before\" \"$notes_after\""))
+    #expect(gateSource.contains("scripts/test-brand-candidate.zsh"))
+  }
+
   private func isValidInternalDisplayName(_ value: String) -> Bool {
     guard !value.isEmpty else { return false }
     guard value == value.trimmingCharacters(in: .whitespacesAndNewlines) else {
