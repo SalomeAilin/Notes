@@ -61,6 +61,53 @@ struct BaiduAuthSecurityContractTests {
     }
   }
 
+  @Test("Outbound data capabilities remain confined to the dormant Baidu implementation")
+  func outboundDataCapabilitiesRemainQuarantined() throws {
+    let rootURL = try repositoryRootURL()
+    let expectedFindingsByPath: [String: Set<OutboundDataFinding>] = [
+      "InkNotes/Networking/BaiduHTTPTransport.swift": [.networkPrimitive],
+      "InkNotes/Networking/BaiduNetdiskAccountResolver.swift": [.networkPrimitive],
+      "InkNotes/Networking/BaiduNetdiskBackupUploader.swift": [.networkPrimitive],
+      "InkNotes/Networking/BaiduRemoteBackupContentVerifier.swift": [.networkPrimitive],
+      "InkNotes/Networking/BaiduRemoteBackupMetadataObserver.swift": [.networkPrimitive],
+    ]
+    let expectedImportedModules = Set([
+      "Combine",
+      "CoreTransferable",
+      "CryptoKit",
+      "Darwin",
+      "Foundation",
+      "PencilKit",
+      "SwiftUI",
+      "UIKit",
+      "UniformTypeIdentifiers",
+    ])
+    let expectedForeignSymbolsByPath = [
+      "InkNotes/Persistence/BaiduUploadReconciliationRepository.swift": Set(["flock"])
+    ]
+    var findingsByPath: [String: Set<OutboundDataFinding>] = [:]
+    var importedModules = Set<String>()
+    var foreignSymbolsByPath: [String: Set<String>] = [:]
+
+    for inputURL in try productionSwiftURLs(repositoryRoot: rootURL) {
+      let path = relativePath(inputURL, repositoryRoot: rootURL)
+      let contents = try String(contentsOf: inputURL, encoding: .utf8)
+      let findings = outboundDataFindings(in: contents)
+      importedModules.formUnion(shippingImportedModules(in: contents))
+      let foreignSymbols = shippingForeignSymbolNames(in: contents)
+      if !foreignSymbols.isEmpty {
+        foreignSymbolsByPath[path] = foreignSymbols
+      }
+      if !findings.isEmpty {
+        findingsByPath[path] = findings
+      }
+    }
+
+    #expect(findingsByPath == expectedFindingsByPath)
+    #expect(importedModules == expectedImportedModules)
+    #expect(foreignSymbolsByPath == expectedForeignSymbolsByPath)
+  }
+
   @Test("Remote metadata observation remains read-only and cannot authorize reconciliation")
   func remoteMetadataObservationRemainsReadOnly() throws {
     let rootURL = try repositoryRootURL()
@@ -228,6 +275,43 @@ struct BaiduAuthSecurityContractTests {
     }
     #expect(containsBaiduIntegrationMarker(in: "https://pan.baidu.com/rest/2.0/xpan/file"))
     #expect(containsBaiduIntegrationMarker(in: "let baiduClient = service"))
+    #expect(outboundDataFindings(in: "URLSession.shared").contains(.networkPrimitive))
+    #expect(
+      outboundDataFindings(in: "SentrySDK.start()").contains(.analyticsOrTelemetrySDK)
+    )
+    #expect(outboundDataFindings(in: "socket(AF_INET, SOCK_STREAM, 0)").contains(.networkPrimitive))
+    #expect(outboundDataFindings(in: "import NIOHTTP1").contains(.networkPrimitive))
+    #expect(
+      outboundDataFindings(in: "CKContainer.default().publicCloudDatabase")
+        .contains(.developerAccessibleCloudService)
+    )
+    #expect(
+      outboundDataFindings(in: "NSUbiquitousKeyValueStore.default")
+        .contains(.developerAccessibleCloudService)
+    )
+    #expect(
+      outboundDataFindings(in: "NSClassFromString(runtimeName)")
+        .contains(.dynamicEgressReviewRequired)
+    )
+    #expect(outboundDataFindings(in: "Logger.app.info(\"local only\")").isEmpty)
+    #expect(outboundDataFindings(in: "OSLog(subsystem: \"local\")").isEmpty)
+    #expect(outboundDataFindings(in: "os_log(\"local only\")").isEmpty)
+    #expect(outboundDataFindings(in: "// URLSession.shared").isEmpty)
+    #expect(outboundDataFindings(in: "/* URLSession.shared */").isEmpty)
+    #expect(outboundDataFindings(in: #"let label = "SentrySDK""#).isEmpty)
+    #expect(
+      outboundDataFindings(in: #"let label = "\(URLSession.shared)""#)
+        .contains(.networkPrimitive)
+    )
+    #expect(shippingImportedModules(in: "import Foundation") == Set(["Foundation"]))
+    #expect(shippingImportedModules(in: "// import CloudKit").isEmpty)
+  }
+
+  private enum OutboundDataFinding: Hashable {
+    case analyticsOrTelemetrySDK
+    case developerAccessibleCloudService
+    case dynamicEgressReviewRequired
+    case networkPrimitive
   }
 
   private enum OAuthSecurityFinding: String, Hashable {
@@ -311,6 +395,132 @@ struct BaiduAuthSecurityContractTests {
       || contents.contains("已连接")
   }
 
+  private func outboundDataFindings(in contents: String) -> Set<OutboundDataFinding> {
+    let code = SwiftSourceLexicalMasker.codeOnly(contents)
+    let networkMarkers = [
+      "URLSession",
+      "URLRequest",
+      "URLProtocol",
+      "NSURLConnection",
+      "CFNetwork",
+      "NWConnection",
+      "WKWebView",
+      "ASWebAuthenticationSession",
+      "SFSafariViewController",
+      "CFReadStreamCreateForHTTPRequest",
+      "CFStreamCreatePairWithSocketToHost",
+      "import NIO",
+      "AsyncHTTPClient",
+    ]
+    let analyticsOrTelemetryMarkers = [
+      "import Sentry",
+      "SentrySDK",
+      "import Firebase",
+      "FirebaseApp",
+      "Crashlytics",
+      "Datadog",
+      "AppCenter",
+      "Mixpanel",
+      "Amplitude",
+      "import Segment",
+      "Bugsnag",
+      "Instabug",
+      "NewRelic",
+      "OpenTelemetry",
+    ]
+    let developerAccessibleCloudMarkers = [
+      "CKContainer",
+      "CKDatabase",
+      "CKRecord",
+      "NSPersistentCloudKitContainer",
+      "NSUbiquitousKeyValueStore",
+      "forUbiquityContainerIdentifier",
+      "ubiquityIdentityToken",
+      "setUbiquitous",
+      "startDownloadingUbiquitousItem",
+      "isUbiquitousItemKey",
+    ]
+    let dynamicEgressMarkers = [
+      "NSClassFromString",
+      "NSSelectorFromString",
+      "objc_msgSend",
+      "dlopen",
+      "dlsym",
+    ]
+    var findings = Set<OutboundDataFinding>()
+    if networkMarkers.contains(where: code.contains)
+      || regularExpressionMatches(
+        #"(?<![A-Za-z0-9_])(?:socket|connect|send|sendto)\s*\("#,
+        in: code
+      )
+    {
+      findings.insert(.networkPrimitive)
+    }
+    if analyticsOrTelemetryMarkers.contains(where: code.contains) {
+      findings.insert(.analyticsOrTelemetrySDK)
+    }
+    if developerAccessibleCloudMarkers.contains(where: code.contains) {
+      findings.insert(.developerAccessibleCloudService)
+    }
+    if dynamicEgressMarkers.contains(where: code.contains) {
+      findings.insert(.dynamicEgressReviewRequired)
+    }
+    return findings
+  }
+
+  private func shippingImportedModules(in contents: String) -> Set<String> {
+    let code = SwiftSourceLexicalMasker.codeOnly(contents)
+    let importPattern =
+      #"^[ \t]*(?:@[_A-Za-z][_A-Za-z0-9]*(?:\([^)]*\))?[ \t]+)*(?:(?:public|internal|private|package|fileprivate)[ \t]+)?import[ \t]+(?:(?:typealias|struct|class|enum|protocol|let|var|func)[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)(?:\.[A-Za-z_][A-Za-z0-9_]*)*[ \t]*;?[ \t]*$"#
+    guard let expression = try? NSRegularExpression(pattern: importPattern) else {
+      Issue.record("Invalid shipping import inventory expression")
+      return ["MANUAL_REVIEW_REQUIRED_FOR_IMPORT_SYNTAX"]
+    }
+
+    var modules = Set<String>()
+    for lineSlice in code.split(whereSeparator: \Character.isNewline) {
+      let line = String(lineSlice)
+      guard line.range(of: #"\bimport\b"#, options: .regularExpression) != nil else {
+        continue
+      }
+      let range = NSRange(line.startIndex..<line.endIndex, in: line)
+      guard let match = expression.firstMatch(in: line, range: range),
+        match.range == range,
+        let moduleRange = Range(match.range(at: 1), in: line)
+      else {
+        modules.insert("MANUAL_REVIEW_REQUIRED_FOR_IMPORT_SYNTAX")
+        continue
+      }
+      modules.insert(String(line[moduleRange]))
+    }
+    return modules
+  }
+
+  private func shippingForeignSymbolNames(in contents: String) -> Set<String> {
+    let pattern = #"@_silgen_name\s*\(\s*"([A-Za-z_][A-Za-z0-9_]*)"\s*\)"#
+    guard let expression = try? NSRegularExpression(pattern: pattern) else {
+      Issue.record("Invalid foreign symbol inventory expression")
+      return ["MANUAL_REVIEW_REQUIRED_FOR_FOREIGN_SYMBOL"]
+    }
+    let range = NSRange(contents.startIndex..<contents.endIndex, in: contents)
+    return Set(
+      expression.matches(in: contents, range: range).compactMap { match in
+        guard let symbolRange = Range(match.range(at: 1), in: contents) else { return nil }
+        return String(contents[symbolRange])
+      })
+  }
+
+  private func regularExpressionMatches(_ pattern: String, in contents: String) -> Bool {
+    guard let expression = try? NSRegularExpression(pattern: pattern) else {
+      Issue.record("Invalid outbound data inventory expression")
+      return false
+    }
+    return expression.firstMatch(
+      in: contents,
+      range: NSRange(contents.startIndex..<contents.endIndex, in: contents)
+    ) != nil
+  }
+
   private func repositoryRootURL() throws -> URL {
     let fileManager = FileManager.default
     var candidate = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
@@ -369,8 +579,8 @@ struct BaiduAuthSecurityContractTests {
   private func productionSwiftURLs(repositoryRoot: URL) throws -> [URL] {
     try shippingInputURLs(repositoryRoot: repositoryRoot)
       .filter {
-        $0.pathExtension.lowercased() == "swift"
-          && relativePath($0, repositoryRoot: repositoryRoot) != "Package.swift"
+        let path = relativePath($0, repositoryRoot: repositoryRoot)
+        return $0.pathExtension.lowercased() == "swift" && path.hasPrefix("InkNotes/")
       }
   }
 

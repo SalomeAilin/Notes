@@ -679,6 +679,16 @@ assert_internal_display_name_reader_rejects_localized_overrides
 assert_exact_git_source_materializer_isolated
 
 notes_source_plist="InkNotes/Info.plist"
+notes_source_privacy_manifest="InkNotes/PrivacyInfo.xcprivacy"
+[[ -f "$notes_source_privacy_manifest" ]] || {
+  print -u2 "Source privacy manifest was not found"
+  exit 1
+}
+plutil -lint "$notes_source_privacy_manifest" >/dev/null \
+  || {
+    print -u2 "Source privacy manifest is invalid"
+    exit 1
+  }
 notes_read_internal_display_name \
   "$notes_source_plist" \
   CFBundleDisplayName \
@@ -710,7 +720,7 @@ assert_plist_key_absent "$notes_source_plist" "CFBundleURLTypes" "Source callbac
 assert_plist_key_absent "$notes_source_plist" "CFBundleURLSchemes" "Source callback scheme"
 assert_plist_key_absent "$notes_source_plist" "UIBackgroundModes" "Source background transfer capability"
 assert_plist_key_absent "$notes_source_plist" "BGTaskSchedulerPermittedIdentifiers" "Source background task registration"
-print "[3/5] Source backup identity and unconfigured OAuth boundary are stable"
+print "[3/5] Source backup identity and unconfigured OAuth boundary are stable; privacy manifest is valid"
 
 for notes_configuration in Debug Release; do
   notes_settings_json="$notes_temp_dir/$notes_configuration-settings.json"
@@ -777,6 +787,27 @@ for notes_configuration in Debug Release; do
     print -u2 "$notes_configuration built Info.plist was not found"
     exit 1
   fi
+  notes_built_privacy_manifest="${notes_built_plist:h}/PrivacyInfo.xcprivacy"
+  if [[ ! -f "$notes_built_privacy_manifest" ]]; then
+    print -u2 "$notes_configuration built privacy manifest was not found"
+    exit 1
+  fi
+  plutil -lint "$notes_built_privacy_manifest" >/dev/null \
+    || {
+      print -u2 "$notes_configuration built privacy manifest is invalid"
+      exit 1
+    }
+  notes_source_privacy_normalized="$notes_temp_dir/privacy-source-$notes_configuration.binary.plist"
+  notes_built_privacy_normalized="$notes_temp_dir/privacy-built-$notes_configuration.binary.plist"
+  plutil -convert binary1 -o "$notes_source_privacy_normalized" \
+    "$notes_source_privacy_manifest"
+  plutil -convert binary1 -o "$notes_built_privacy_normalized" \
+    "$notes_built_privacy_manifest"
+  cmp -s "$notes_source_privacy_normalized" "$notes_built_privacy_normalized" \
+    || {
+      print -u2 "$notes_configuration built privacy manifest drifted from source"
+      exit 1
+    }
 
   notes_built_bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$notes_built_plist")"
   notes_read_internal_display_name \
@@ -834,5 +865,5 @@ for notes_configuration in Debug Release; do
   assert_tree_has_no_retired_brand_marker "${notes_built_plist:h}" "$notes_configuration built app"
 done
 
-print "[5/5] Debug and Release products preserve iPad presentation, app identity, backup, and fail-closed OAuth contracts"
+print "[5/5] Debug and Release products include the validated privacy manifest and preserve iPad presentation, app identity, backup, and fail-closed OAuth contracts"
 print "Compatibility gate passed"

@@ -137,6 +137,498 @@ struct CompatibilityContractTests {
     return CFGetTypeID(value as CFTypeRef) == CFBooleanGetTypeID()
   }
 
+  private func mainAppSourceRelativePaths(
+    in project: [String: Any]
+  ) throws -> [String] {
+    guard let rootObjectID = project["rootObject"] as? String,
+      let objects = project["objects"] as? [String: Any],
+      let rootProject = objects[rootObjectID] as? [String: Any],
+      rootProject["isa"] as? String == "PBXProject",
+      let targetIDs = rootProject["targets"] as? [String],
+      let mainGroupID = rootProject["mainGroup"] as? String
+    else {
+      throw PBXProjectContractError.malformedProjectGraph
+    }
+
+    let appTargets = try targetIDs.compactMap { targetID -> [String: Any]? in
+      guard let target = objects[targetID] as? [String: Any] else {
+        throw PBXProjectContractError.malformedProjectGraph
+      }
+      guard target["isa"] as? String == "PBXNativeTarget",
+        target["name"] as? String == "InkNotes",
+        target["productType"] as? String == "com.apple.product-type.application"
+      else {
+        return nil
+      }
+      return target
+    }
+    guard appTargets.count == 1, let appTarget = appTargets.first,
+      let buildPhaseIDs = appTarget["buildPhases"] as? [String]
+    else {
+      throw PBXProjectContractError.mainAppTargetCount(appTargets.count)
+    }
+
+    let sourcePhases = try buildPhaseIDs.compactMap { phaseID -> [String: Any]? in
+      guard let phase = objects[phaseID] as? [String: Any] else {
+        throw PBXProjectContractError.malformedProjectGraph
+      }
+      return phase["isa"] as? String == "PBXSourcesBuildPhase" ? phase : nil
+    }
+    guard sourcePhases.count == 1, let sourcePhase = sourcePhases.first,
+      let buildFileIDs = sourcePhase["files"] as? [String],
+      !buildFileIDs.isEmpty
+    else {
+      throw PBXProjectContractError.malformedProjectGraph
+    }
+
+    let fileReferencePaths = try fileReferenceRelativePaths(
+      objects: objects,
+      mainGroupID: mainGroupID
+    )
+    var sourcePaths = Set<String>()
+    for buildFileID in buildFileIDs {
+      guard let buildFile = objects[buildFileID] as? [String: Any],
+        buildFile["isa"] as? String == "PBXBuildFile",
+        let fileReferenceID = buildFile["fileRef"] as? String,
+        let fileReference = objects[fileReferenceID] as? [String: Any],
+        fileReference["isa"] as? String == "PBXFileReference",
+        fileReference["lastKnownFileType"] as? String == "sourcecode.swift",
+        let relativePath = fileReferencePaths[fileReferenceID],
+        relativePath.hasSuffix(".swift"),
+        sourcePaths.insert(relativePath).inserted
+      else {
+        throw PBXProjectContractError.malformedProjectGraph
+      }
+    }
+    return sourcePaths.sorted()
+  }
+
+  private func mainAppDependencyInventory(
+    in project: [String: Any]
+  ) throws -> AppDependencyInventory {
+    guard let rootObjectID = project["rootObject"] as? String,
+      let objects = project["objects"] as? [String: Any],
+      let rootProject = objects[rootObjectID] as? [String: Any],
+      rootProject["isa"] as? String == "PBXProject",
+      let targetIDs = rootProject["targets"] as? [String]
+    else {
+      throw PBXProjectContractError.malformedProjectGraph
+    }
+    let appTargets = try targetIDs.compactMap { targetID -> [String: Any]? in
+      guard let target = objects[targetID] as? [String: Any] else {
+        throw PBXProjectContractError.malformedProjectGraph
+      }
+      guard target["isa"] as? String == "PBXNativeTarget",
+        target["name"] as? String == "InkNotes",
+        target["productType"] as? String == "com.apple.product-type.application"
+      else {
+        return nil
+      }
+      return target
+    }
+    guard appTargets.count == 1, let appTarget = appTargets.first,
+      let buildPhaseIDs = appTarget["buildPhases"] as? [String]
+    else {
+      throw PBXProjectContractError.mainAppTargetCount(appTargets.count)
+    }
+
+    let buildPhases = try buildPhaseIDs.map { phaseID -> [String: Any] in
+      guard let phase = objects[phaseID] as? [String: Any],
+        phase["isa"] as? String != nil
+      else {
+        throw PBXProjectContractError.malformedProjectGraph
+      }
+      return phase
+    }
+    let frameworkPhases = buildPhases.filter {
+      $0["isa"] as? String == "PBXFrameworksBuildPhase"
+    }
+    guard frameworkPhases.count == 1,
+      let frameworkBuildFileIDs = frameworkPhases.first?["files"] as? [String]
+    else {
+      throw PBXProjectContractError.malformedProjectGraph
+    }
+
+    let remotePackageObjectCount = objects.values.reduce(into: 0) { count, value in
+      guard let object = value as? [String: Any],
+        let isa = object["isa"] as? String
+      else {
+        return
+      }
+      if isa == "XCRemoteSwiftPackageReference" || isa == "XCSwiftPackageProductDependency" {
+        count += 1
+      }
+    }
+    return AppDependencyInventory(
+      projectPackageReferenceCount: (rootProject["packageReferences"] as? [String])?.count ?? 0,
+      appPackageProductDependencyCount: (appTarget["packageProductDependencies"] as? [String])?
+        .count ?? 0,
+      appTargetDependencyCount: (appTarget["dependencies"] as? [String])?.count ?? 0,
+      frameworkBuildFileCount: frameworkBuildFileIDs.count,
+      remotePackageObjectCount: remotePackageObjectCount,
+      buildPhaseKinds: try buildPhases.map { phase in
+        guard let isa = phase["isa"] as? String else {
+          throw PBXProjectContractError.malformedProjectGraph
+        }
+        return isa
+      }.sorted()
+    )
+  }
+
+  private func fileReferenceRelativePaths(
+    objects: [String: Any],
+    mainGroupID: String
+  ) throws -> [String: String] {
+    var paths: [String: String] = [:]
+    var visitedGroups = Set<String>()
+
+    func validatedComponents(_ path: String?) throws -> [String] {
+      guard let path, !path.isEmpty else { return [] }
+      let components = path.split(separator: "/", omittingEmptySubsequences: false)
+        .map(String.init)
+      guard !path.hasPrefix("/"),
+        components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." })
+      else {
+        throw PBXProjectContractError.malformedProjectGraph
+      }
+      return components
+    }
+
+    func visitGroup(_ groupID: String, parentComponents: [String]) throws {
+      guard visitedGroups.insert(groupID).inserted,
+        let group = objects[groupID] as? [String: Any],
+        group["isa"] as? String == "PBXGroup",
+        group["sourceTree"] as? String == "<group>",
+        let childIDs = group["children"] as? [String]
+      else {
+        throw PBXProjectContractError.malformedProjectGraph
+      }
+      let groupComponents = parentComponents + (try validatedComponents(group["path"] as? String))
+
+      for childID in childIDs {
+        guard let child = objects[childID] as? [String: Any],
+          let isa = child["isa"] as? String
+        else {
+          throw PBXProjectContractError.malformedProjectGraph
+        }
+        if isa == "PBXGroup" {
+          try visitGroup(childID, parentComponents: groupComponents)
+          continue
+        }
+        guard isa == "PBXFileReference",
+          child["sourceTree"] as? String == "<group>",
+          let filePath = child["path"] as? String
+        else {
+          continue
+        }
+        let relativePath = (groupComponents + (try validatedComponents(filePath)))
+          .joined(separator: "/")
+        guard !relativePath.isEmpty, paths.updateValue(relativePath, forKey: childID) == nil else {
+          throw PBXProjectContractError.malformedProjectGraph
+        }
+      }
+    }
+
+    try visitGroup(mainGroupID, parentComponents: [])
+    return paths
+  }
+
+  private func requiredReasonAPIOccurrences(in contents: String) -> [String: Int] {
+    let code = SwiftSourceLexicalMasker.codeOnly(contents)
+    let patternsByCategory = [
+      "NSPrivacyAccessedAPICategoryFileTimestamp": [
+        #"(?<![A-Za-z0-9_])(?:Darwin\.)?(?:stat|fstat|fstatat|lstat)\s*\((?!\s*\))"#,
+        #"\b(?:creationDate|modificationDate|fileModificationDate|contentModificationDateKey|creationDateKey)\b"#,
+      ],
+      "NSPrivacyAccessedAPICategorySystemBootTime": [
+        #"\bsystemUptime\b"#,
+        #"(?<![A-Za-z0-9_])mach_absolute_time\s*\("#,
+      ],
+      "NSPrivacyAccessedAPICategoryDiskSpace": [
+        #"\b(?:volumeAvailableCapacityKey|volumeAvailableCapacityForImportantUsageKey|volumeAvailableCapacityForOpportunisticUsageKey|volumeTotalCapacityKey|systemFreeSize|systemSize)\b"#,
+        #"(?<![A-Za-z0-9_])(?:Darwin\.)?(?:statfs|statvfs|fstatfs|fstatvfs)\s*\((?!\s*\))"#,
+      ],
+      "NSPrivacyAccessedAPICategoryActiveKeyboards": [
+        #"\bactiveInputModes\b"#
+      ],
+      "NSPrivacyAccessedAPICategoryUserDefaults": [
+        #"(?:\bUserDefaults\b|@AppStorage\b|\bNSUserDefaults\b)"#
+      ],
+    ]
+
+    var result = patternsByCategory.reduce(into: [String: Int]()) { result, entry in
+      let count = entry.value.reduce(0) { partialResult, pattern in
+        partialResult + regularExpressionMatchCount(pattern, in: code)
+      }
+      if count > 0 {
+        result[entry.key] = count
+      }
+    }
+    let ambiguousFileMetadataCount = regularExpressionMatchCount(
+      #"(?<![A-Za-z0-9_])(?:getattrlist|fgetattrlist|getattrlistbulk|getattrlistat)\s*\("#,
+      in: code
+    )
+    if ambiguousFileMetadataCount > 0 {
+      result["MANUAL_REVIEW_REQUIRED_FOR_GETATTRLIST"] = ambiguousFileMetadataCount
+    }
+    return result
+  }
+
+  private func regularExpressionMatchCount(_ pattern: String, in contents: String) -> Int {
+    guard let expression = try? NSRegularExpression(pattern: pattern) else {
+      Issue.record("Invalid required-reason API inventory expression")
+      return 0
+    }
+    return expression.numberOfMatches(
+      in: contents,
+      range: NSRange(contents.startIndex..<contents.endIndex, in: contents)
+    )
+  }
+
+  @Test("Privacy manifest is structurally exact and covers current required-reason APIs")
+  func privacyManifestCoversCurrentRequiredReasonAPIs() throws {
+    let repositoryRoot = repositoryRootURL()
+    let manifestData = try Data(
+      contentsOf: repositoryRoot.appendingPathComponent("InkNotes/PrivacyInfo.xcprivacy")
+    )
+    let manifest = try #require(
+      try PropertyListSerialization.propertyList(
+        from: manifestData,
+        options: [],
+        format: nil
+      ) as? [String: Any]
+    )
+
+    #expect(
+      Set(manifest.keys)
+        == Set([
+          "NSPrivacyTracking",
+          "NSPrivacyCollectedDataTypes",
+          "NSPrivacyAccessedAPITypes",
+        ])
+    )
+    #expect(isPropertyListBoolean(manifest["NSPrivacyTracking"]))
+    #expect(manifest["NSPrivacyTracking"] as? Bool == false)
+    #expect((manifest["NSPrivacyCollectedDataTypes"] as? [Any])?.isEmpty == true)
+
+    let accessedAPITypes = try #require(
+      manifest["NSPrivacyAccessedAPITypes"] as? [[String: Any]]
+    )
+    var reasonsByAPIType: [String: Set<String>] = [:]
+    for declaration in accessedAPITypes {
+      #expect(
+        Set(declaration.keys)
+          == Set([
+            "NSPrivacyAccessedAPIType",
+            "NSPrivacyAccessedAPITypeReasons",
+          ])
+      )
+      let apiType = try #require(declaration["NSPrivacyAccessedAPIType"] as? String)
+      let reasons = try #require(
+        declaration["NSPrivacyAccessedAPITypeReasons"] as? [String]
+      )
+      #expect(reasons.count == Set(reasons).count)
+      #expect(reasonsByAPIType[apiType] == nil)
+      reasonsByAPIType[apiType] = Set(reasons)
+    }
+
+    #expect(accessedAPITypes.count == 2)
+    #expect(
+      reasonsByAPIType == [
+        "NSPrivacyAccessedAPICategoryFileTimestamp": Set(["C617.1", "3B52.1"]),
+        "NSPrivacyAccessedAPICategoryUserDefaults": Set(["CA92.1"]),
+      ]
+    )
+
+    let projectData = try Data(
+      contentsOf: repositoryRoot.appendingPathComponent("InkNotes.xcodeproj/project.pbxproj")
+    )
+    let project = try #require(
+      try PropertyListSerialization.propertyList(
+        from: projectData,
+        options: [],
+        format: nil
+      ) as? [String: Any]
+    )
+    #expect(
+      try mainAppDependencyInventory(in: project)
+        == AppDependencyInventory(
+          projectPackageReferenceCount: 0,
+          appPackageProductDependencyCount: 0,
+          appTargetDependencyCount: 0,
+          frameworkBuildFileCount: 0,
+          remotePackageObjectCount: 0,
+          buildPhaseKinds: [
+            "PBXFrameworksBuildPhase",
+            "PBXResourcesBuildPhase",
+            "PBXSourcesBuildPhase",
+          ]
+        )
+    )
+    let appSourcePaths = try mainAppSourceRelativePaths(in: project)
+    let reviewedInventoryData = try Data(
+      contentsOf: repositoryRoot.appendingPathComponent(
+        "InkNotesCoreTests/Fixtures/PrivacyReviewedSources.json"
+      )
+    )
+    let reviewedInventory = try #require(
+      try JSONSerialization.jsonObject(with: reviewedInventoryData) as? [String: Any]
+    )
+    #expect(Set(reviewedInventory.keys) == Set(["schemaVersion", "buildInputs", "sources"]))
+    #expect(reviewedInventory["schemaVersion"] as? Int == 1)
+    let reviewedBuildInputDigests = try #require(
+      reviewedInventory["buildInputs"] as? [String: String]
+    )
+    #expect(
+      Set(reviewedBuildInputDigests.keys)
+        == Set([
+          "InkNotes.xcodeproj/project.pbxproj",
+          "InkNotes/Info.plist",
+          "Package.swift",
+        ])
+    )
+    for (relativePath, reviewedDigest) in reviewedBuildInputDigests {
+      let inputURL = repositoryRoot.appendingPathComponent(relativePath).standardizedFileURL
+      let values = try inputURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+      guard values.isRegularFile == true, values.isSymbolicLink != true else {
+        Issue.record("Privacy-reviewed build input is not a regular file: \(relativePath)")
+        continue
+      }
+      #expect(
+        sha256Hex(try Data(contentsOf: inputURL)) == reviewedDigest,
+        "Build input changed without a refreshed privacy review: \(relativePath)"
+      )
+    }
+    let reviewedSourceDigests = try #require(
+      reviewedInventory["sources"] as? [String: String]
+    )
+    #expect(Set(reviewedSourceDigests.keys) == Set(appSourcePaths))
+
+    var usagePathsByCategory: [String: Set<String>] = [:]
+    for sourcePath in appSourcePaths {
+      let sourceURL = repositoryRoot.appendingPathComponent(sourcePath).standardizedFileURL
+      let resolvedSourceURL = sourceURL.resolvingSymlinksInPath()
+      guard resolvedSourceURL.path.hasPrefix(repositoryRoot.resolvingSymlinksInPath().path + "/")
+      else {
+        Issue.record("Main app source path escaped the repository: \(sourcePath)")
+        continue
+      }
+      let values = try sourceURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+      guard values.isRegularFile == true, values.isSymbolicLink != true else {
+        Issue.record("Main app source is not a regular, non-symlink file: \(sourcePath)")
+        continue
+      }
+      let sourceData = try Data(contentsOf: sourceURL)
+      #expect(
+        reviewedSourceDigests[sourcePath] == sha256Hex(sourceData),
+        "Production source changed without a refreshed privacy review: \(sourcePath)"
+      )
+      let contents = try #require(String(data: sourceData, encoding: .utf8))
+      for (category, occurrenceCount) in requiredReasonAPIOccurrences(in: contents)
+      where occurrenceCount > 0 {
+        usagePathsByCategory[category, default: []].insert(sourcePath)
+      }
+    }
+
+    #expect(
+      usagePathsByCategory == [
+        "NSPrivacyAccessedAPICategoryFileTimestamp": Set([
+          "InkNotes/Persistence/BackupFileReader.swift",
+          "InkNotes/Persistence/BaiduUploadReconciliationRepository.swift",
+          "InkNotes/Persistence/DurableFileWriter.swift",
+        ]),
+        "NSPrivacyAccessedAPICategoryUserDefaults": Set([
+          "InkNotes/Views/PageEditorView.swift"
+        ]),
+      ]
+    )
+    #expect(Set(reasonsByAPIType.keys) == Set(usagePathsByCategory.keys))
+
+    let transferSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent("InkNotes/Views/BackupTransferView.swift"),
+      encoding: .utf8
+    )
+    #expect(transferSource.contains("应用不会主动上传笔记"))
+    #expect(transferSource.contains("包括 iCloud 备份"))
+    #expect(!transferSource.contains("备份才会离开本机"))
+
+    let packageSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent("Package.swift"),
+      encoding: .utf8
+    )
+
+    #expect(packageSource.contains("\"PrivacyInfo.xcprivacy\""))
+    #expect(!packageSource.contains(".package("))
+    #expect(!packageSource.contains(".binaryTarget("))
+    #expect(!packageSource.contains(".systemLibrary("))
+  }
+
+  @Test("Required-reason API inventory recognizes every Apple category")
+  func requiredReasonAPIInventoryNegativeControls() {
+    let samples = [
+      (
+        "Darwin.fstat(descriptor, &status)",
+        "NSPrivacyAccessedAPICategoryFileTimestamp"
+      ),
+      (
+        "ProcessInfo.processInfo.systemUptime",
+        "NSPrivacyAccessedAPICategorySystemBootTime"
+      ),
+      (
+        "URLResourceKey.volumeAvailableCapacityKey",
+        "NSPrivacyAccessedAPICategoryDiskSpace"
+      ),
+      (
+        "UITextInputMode.activeInputModes",
+        "NSPrivacyAccessedAPICategoryActiveKeyboards"
+      ),
+      (
+        "@AppStorage(\"preference\") var preference = true",
+        "NSPrivacyAccessedAPICategoryUserDefaults"
+      ),
+    ]
+
+    for (source, expectedCategory) in samples {
+      #expect(requiredReasonAPIOccurrences(in: source) == [expectedCategory: 1])
+    }
+    #expect(
+      requiredReasonAPIOccurrences(in: "getattrlist(path, attributes)")
+        == ["MANUAL_REVIEW_REQUIRED_FOR_GETATTRLIST": 1]
+    )
+    #expect(requiredReasonAPIOccurrences(in: "var status = stat()").isEmpty)
+    #expect(requiredReasonAPIOccurrences(in: "// UserDefaults.standard").isEmpty)
+    #expect(requiredReasonAPIOccurrences(in: "/* UserDefaults.standard */").isEmpty)
+    #expect(
+      requiredReasonAPIOccurrences(
+        in: "/* outer /* UserDefaults.standard */ comment */"
+      ).isEmpty
+    )
+    #expect(requiredReasonAPIOccurrences(in: #"let label = "mach_absolute_time()""#).isEmpty)
+    #expect(
+      requiredReasonAPIOccurrences(
+        in: #"let label = "\(UserDefaults.standard)""#
+      ) == ["NSPrivacyAccessedAPICategoryUserDefaults": 1]
+    )
+    #expect(
+      requiredReasonAPIOccurrences(
+        in: ##"let label = #"UserDefaults.standard"#"##
+      ).isEmpty
+    )
+    #expect(
+      requiredReasonAPIOccurrences(
+        in: ##"let label = #"\#(UserDefaults.standard)"#"##
+      ) == ["NSPrivacyAccessedAPICategoryUserDefaults": 1]
+    )
+    let multilineLiteral = "let label = " + "\"\"\"" + "\nUserDefaults.standard\n" + "\"\"\""
+    let multilineInterpolation =
+      "let label = " + "\"\"\"" + "\n\\(UserDefaults.standard)\n" + "\"\"\""
+    #expect(requiredReasonAPIOccurrences(in: multilineLiteral).isEmpty)
+    #expect(
+      requiredReasonAPIOccurrences(in: multilineInterpolation)
+        == ["NSPrivacyAccessedAPICategoryUserDefaults": 1]
+    )
+  }
+
   @Test("External backup URLs route to validation before restore confirmation")
   func externalBackupRoutingRemainsPreviewOnly() throws {
     let repositoryRoot = repositoryRootURL()
@@ -293,6 +785,12 @@ struct CompatibilityContractTests {
     #expect(signedBuildSource.contains("$notes_source_root/InkNotes/Info.plist"))
     #expect(readinessSource.contains("git cat-file blob"))
     #expect(readinessSource.contains(":InkNotes/Info.plist"))
+    #expect(readinessSource.contains(":InkNotes/PrivacyInfo.xcprivacy"))
+    #expect(
+      readinessSource.contains(
+        "Built privacy manifest does not match the provenance commit"
+      )
+    )
     #expect(compatibilitySource.contains("INFOPLIST_KEY_CFBundleDisplayName"))
     #expect(compatibilitySource.contains("INFOPLIST_PREPROCESS"))
     #expect(compatibilitySource.contains("notes_assert_no_localized_display_name_override"))
@@ -709,6 +1207,15 @@ struct CompatibilityContractTests {
     let marketingVersion: String?
     let developmentTeam: String?
     let codeSignStyle: String?
+  }
+
+  private struct AppDependencyInventory: Equatable {
+    let projectPackageReferenceCount: Int
+    let appPackageProductDependencyCount: Int
+    let appTargetDependencyCount: Int
+    let frameworkBuildFileCount: Int
+    let remotePackageObjectCount: Int
+    let buildPhaseKinds: [String]
   }
 
   private enum PBXProjectContractError: Error, Equatable {

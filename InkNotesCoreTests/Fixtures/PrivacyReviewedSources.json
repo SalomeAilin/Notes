@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "buildInputs": {
+    "InkNotes.xcodeproj/project.pbxproj": "8cc46ebd2376cb198157aaa9edb15819928e2f67f14f00b92db3fb7391aa8a4b",
+    "InkNotes/Info.plist": "ad170a9abbacacd971f456d18c832304565f058af81a02b7888348d4bd4830fd",
+    "Package.swift": "b305bd99f44128aa325a04b4e2c768468ef0c541a7e3408591c6218fdff50258"
+  },
+  "sources": {
+    "InkNotes/App/InkNotesApp.swift": "1828e34b181bc011487e8ce272c76b09684de26fba01afd631597124385bad73",
+    "InkNotes/Models/AppBuildIdentity.swift": "138dcbd67891640428e9ba79a5ad0b129639f8b16bcac03e38e3210f06f7c60b",
+    "InkNotes/Models/BackupArchive.swift": "83b9417fe278233b434eef6356a84d8288f5870d12870fe99f35d208f476330b",
+    "InkNotes/Models/BackupImportPresentationState.swift": "5e350f2a27a2ec3cec3b95b4957f7cc61b5e58a32e3a0e0dffb0f27cc4ce5282",
+    "InkNotes/Models/BackupImportRequest.swift": "915c70f83cfaa580591fa681cd27c4fc6114bb168b6964cb6646e9f1e1cfbf40",
+    "InkNotes/Models/BaiduAccountCredential.swift": "89cb9357df2c9d05b22ca8efab77eeb4b44607b6524f84e7672ea35fa83a5842",
+    "InkNotes/Models/BaiduNetdiskAccount.swift": "4bf01000654ba46a322b0514711e0dc3b15a9f1397fb8348f8a4b56afcc80092",
+    "InkNotes/Models/BaiduNetdiskBackup.swift": "d4fb9e16a2053931533418f98910d666feb59f90be957d22688677a9b5be1f56",
+    "InkNotes/Models/LibraryDocument.swift": "2d4ff2f3b90d73bc079f3a2912ef33c9fd67738f654f6ebb8a462d360cb6151b",
+    "InkNotes/Networking/BaiduBackupUploadCoordinator.swift": "ea4bc94d7705706b779135f4a6c28e1fd6c367b06dabad7c3bfef502bc37bc06",
+    "InkNotes/Networking/BaiduHTTPTransport.swift": "61420d52edf7793289d8f6380df7832b319619be2dda9fd6d6df2d4c7f763b41",
+    "InkNotes/Networking/BaiduNetdiskAccountResolver.swift": "365151e72e4e6dcddde4aca87f2231b5e3afe3cdcbf035df401382f4ec44e813",
+    "InkNotes/Networking/BaiduNetdiskBackupUploader.swift": "e56ffade918f50b3cd5d18f23c827c0c08844f0ce912a69aa02aa4690c6d5ee8",
+    "InkNotes/Networking/BaiduRemoteBackupContentVerifier.swift": "297bc1375c1fc1c5dd34f23fcf361b7777aa93d968b639191faf160ee4166e17",
+    "InkNotes/Networking/BaiduRemoteBackupMetadataObserver.swift": "b4b5fbd09b988aad429ac1efad6764b4c470d4b07ffd218d0b95685c4b6c4f65",
+    "InkNotes/Persistence/BackupArchiveCodec.swift": "4209922e709e7d67ae6e0535e1ba5dc288f4a76cbb50c91b03a28db745c430b8",
+    "InkNotes/Persistence/BackupFileReader.swift": "f0f1d37bb763d962a06d6387ee52b64b2d1e624ba704bb6979dc7becbbbdaa98",
+    "InkNotes/Persistence/BackupSnapshotRepository.swift": "e1f430a592a99410cb522a1530b9bb6d33f483f4ab4f6cb3d7ff947ea64321af",
+    "InkNotes/Persistence/BaiduUploadReconciliationRepository.swift": "18ceb1eabeea8f25b179437fe2ab3e52478a95742c1474d02ab6acca38c8a9b2",
+    "InkNotes/Persistence/DrawingRepository.swift": "45264e9d118c7a17b80bcb2124e71b571a44daec21b0a0a459970ebe90a8e76f",
+    "InkNotes/Persistence/DurableFileWriter.swift": "9897949c6dcd7f58c5d8443cecda14883e61d88be66ed2ab45fb839d71b86b83",
+    "InkNotes/Stores/LibraryStore.swift": "b933b85d5200af1a0c55b29d9a32cb9e66abe8be033c4863a8516956bab5e5a8",
+    "InkNotes/Views/BackupTransferView.swift": "edd81319d77f2f562f4aa87a3d345697c79b6489f3dae5725a1abdd6907e7db2",
+    "InkNotes/Views/Canvas/PageBackgroundView.swift": "47c92fee4f6c2b6dedfbe489695605458a0346b3aeb3287d5532d8bce11cfc85",
+    "InkNotes/Views/Canvas/PencilCanvas.swift": "e0cb721f921ee183377fd50314e345eea8245cbc82604229308762b444378ce6",
+    "InkNotes/Views/LibrarySplitView.swift": "f1d43a20d10b8d0d76160f9fdd36f3b4da3cb1319718015c90b1ef619a214f65",
+    "InkNotes/Views/PageEditorView.swift": "fceb3bccd4b138a6449a368912f0ea5f5015cd17218020ead05c049a2d629c7d"
+  }
+}

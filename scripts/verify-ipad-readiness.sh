@@ -152,6 +152,18 @@ then
   fail "Source Info.plist is missing from the provenance commit"
 fi
 chmod 600 "$notes_committed_info_plist"
+
+notes_committed_privacy_manifest="$notes_committed_source_dir/PrivacyInfo.xcprivacy"
+if ! notes_repository_git cat-file blob \
+  "${notes_provenance_commit}:InkNotes/PrivacyInfo.xcprivacy" \
+  > "$notes_committed_privacy_manifest"
+then
+  fail "Privacy manifest is missing from the provenance commit"
+fi
+chmod 600 "$notes_committed_privacy_manifest"
+plutil -lint "$notes_committed_privacy_manifest" >/dev/null 2>&1 \
+  || fail "Committed privacy manifest is invalid"
+
 notes_read_internal_display_name \
   "$notes_committed_info_plist" \
   CFBundleDisplayName \
@@ -185,6 +197,20 @@ notes_project_version="$({
 codesign --verify --deep --strict "$notes_app_path"
 notes_plist_path="$notes_app_path/Info.plist"
 [[ -f "$notes_plist_path" ]] || fail "Built Info.plist is missing"
+notes_privacy_manifest_path="$notes_app_path/PrivacyInfo.xcprivacy"
+[[ -f "$notes_privacy_manifest_path" ]] || fail "Built privacy manifest is missing"
+plutil -lint "$notes_privacy_manifest_path" >/dev/null 2>&1 \
+  || fail "Built privacy manifest is invalid"
+notes_committed_privacy_normalized="$notes_temp_dir/privacy-committed.binary.plist"
+notes_built_privacy_normalized="$notes_temp_dir/privacy-built.binary.plist"
+plutil -convert binary1 -o "$notes_committed_privacy_normalized" \
+  "$notes_committed_privacy_manifest" \
+  || fail "Committed privacy manifest cannot be normalized"
+plutil -convert binary1 -o "$notes_built_privacy_normalized" \
+  "$notes_privacy_manifest_path" \
+  || fail "Built privacy manifest cannot be normalized"
+cmp -s "$notes_committed_privacy_normalized" "$notes_built_privacy_normalized" \
+  || fail "Built privacy manifest does not match the provenance commit"
 notes_bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$notes_plist_path")"
 notes_read_internal_display_name \
   "$notes_plist_path" \

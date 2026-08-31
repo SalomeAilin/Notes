@@ -223,9 +223,11 @@ struct BackupTransferView: View {
       )
       .foregroundStyle(.orange)
 
-      Text("只有在你主动选择网盘或其他应用后，备份才会离开本机，并由相应第三方服务负责存储与保护。")
-        .font(.footnote)
-        .foregroundStyle(.secondary)
+      Text(
+        "应用不会主动上传笔记。导出或分享由你发起；系统设备备份（包括 iCloud 备份）是否包含应用数据，取决于你的设备设置。"
+      )
+      .font(.footnote)
+      .foregroundStyle(.secondary)
     }
   }
 

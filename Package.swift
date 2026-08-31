@@ -11,7 +11,7 @@ let package = Package(
     .target(
       name: "InkNotesCore",
       path: "InkNotes",
-      exclude: ["App", "Assets.xcassets", "Info.plist", "Views"],
+      exclude: ["App", "Assets.xcassets", "Info.plist", "PrivacyInfo.xcprivacy", "Views"],
       sources: [
         "Models/AppBuildIdentity.swift",
         "Models/BackupArchive.swift",
