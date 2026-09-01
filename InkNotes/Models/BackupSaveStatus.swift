@@ -7,6 +7,50 @@ enum BackupSaveFreshness: Equatable, Sendable {
   case unknown(Date)
 }
 
+enum BackupSaveEntryPresentation: Equatable, Sendable {
+  case firstSaveNeeded
+  case noNewChanges
+  case saveAgainNeeded
+  case confirmationNeeded
+
+  init(freshness: BackupSaveFreshness) {
+    switch freshness {
+    case .noRecord:
+      self = .firstSaveNeeded
+    case .unchangedSinceSave:
+      self = .noNewChanges
+    case .changedSinceSave:
+      self = .saveAgainNeeded
+    case .unknown:
+      self = .confirmationNeeded
+    }
+  }
+
+  var title: String {
+    switch self {
+    case .firstSaveNeeded:
+      "备份与恢复，还没有保存备份"
+    case .noNewChanges:
+      "备份与恢复"
+    case .saveAgainNeeded:
+      "备份与恢复，有新修改"
+    case .confirmationNeeded:
+      "备份与恢复，保存状态需要确认"
+    }
+  }
+
+  var systemImage: String {
+    switch self {
+    case .firstSaveNeeded:
+      "externaldrive.badge.plus"
+    case .noNewChanges:
+      "externaldrive.badge.timemachine"
+    case .saveAgainNeeded, .confirmationNeeded:
+      "externaldrive.badge.exclamationmark"
+    }
+  }
+}
+
 struct BackupSaveStatus: Equatable, Sendable {
   private struct PersistedRecord: Codable, Equatable, Sendable {
     static let currentVersion = 1

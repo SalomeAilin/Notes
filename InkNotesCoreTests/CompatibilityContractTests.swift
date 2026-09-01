@@ -606,6 +606,7 @@ struct CompatibilityContractTests {
         ]),
         "NSPrivacyAccessedAPICategoryUserDefaults": Set([
           "InkNotes/Views/BackupTransferView.swift",
+          "InkNotes/Views/LibrarySplitView.swift",
           "InkNotes/Views/PageEditorView.swift",
         ]),
       ]
@@ -780,6 +781,10 @@ struct CompatibilityContractTests {
   @Test("File export and system sharing reuse one immutable backup artifact")
   func backupExportSurfacesShareOneArtifact() throws {
     let repositoryRoot = repositoryRootURL()
+    let libraryViewSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent("InkNotes/Views/LibrarySplitView.swift"),
+      encoding: .utf8
+    )
     let transferSource = try String(
       contentsOf: repositoryRoot.appendingPathComponent("InkNotes/Views/BackupTransferView.swift"),
       encoding: .utf8
@@ -801,6 +806,14 @@ struct CompatibilityContractTests {
     #expect(transferSource.contains("@AppStorage(BackupSaveStatus.storageKey)"))
     #expect(transferSource.contains("@AppStorage(BackupSaveStatus.legacyRecordStorageKey)"))
     #expect(transferSource.contains("@AppStorage(BackupSaveStatus.recordStorageKey)"))
+    #expect(libraryViewSource.contains("@AppStorage(BackupSaveStatus.storageKey)"))
+    #expect(libraryViewSource.contains("@AppStorage(BackupSaveStatus.legacyRecordStorageKey)"))
+    #expect(libraryViewSource.contains("@AppStorage(BackupSaveStatus.recordStorageKey)"))
+    #expect(libraryViewSource.contains("Label(backupEntryPresentation.title"))
+    #expect(libraryViewSource.contains("systemImage: backupEntryPresentation.systemImage"))
+    #expect(libraryViewSource.contains("打开后由你选择保存位置或导入备份"))
+    #expect(!libraryViewSource.contains("saveLatestBackup()"))
+    #expect(!libraryViewSource.contains("网盘已同步"))
     #expect(transferSource.contains("LabeledContent(\"上次保存\")"))
     #expect(transferSource.contains("Label(\"这里还没有保存记录\", systemImage: \"clock\")"))
     #expect(transferSource.contains("保存后没有新的修改"))

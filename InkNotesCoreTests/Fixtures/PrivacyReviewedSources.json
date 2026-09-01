@@ -12,7 +12,7 @@
     "InkNotes/Models/BackupExportArtifact.swift": "8662e2ddc75d83c45df100f4610dff7f6d02a6eea0f6e42798a857434bccd5dc",
     "InkNotes/Models/BackupImportPresentationState.swift": "5e350f2a27a2ec3cec3b95b4957f7cc61b5e58a32e3a0e0dffb0f27cc4ce5282",
     "InkNotes/Models/BackupImportRequest.swift": "915c70f83cfaa580591fa681cd27c4fc6114bb168b6964cb6646e9f1e1cfbf40",
-    "InkNotes/Models/BackupSaveStatus.swift": "2a31737dfc038c400a87b79cf9ea18e1b72fa4428c859d66e0e28292b933aee9",
+    "InkNotes/Models/BackupSaveStatus.swift": "0d70422d471a82447e9f8c1cc011ebf4f68fb20ba0efa47fcb7f34667d4645c4",
     "InkNotes/Models/BaiduAccountCredential.swift": "b6bdac95c015b5da7e756db2843a71e150a3239d6d249ccba0314cf0d694e4af",
     "InkNotes/Models/BaiduBrokerProtocolV1.swift": "558de36d0fdfc636c19bcbfe2be759291dfaf04a419483d8c2a10dc1a7abc631",
     "InkNotes/Models/BaiduNetdiskAccount.swift": "4bf01000654ba46a322b0514711e0dc3b15a9f1397fb8348f8a4b56afcc80092",
@@ -37,7 +37,7 @@
     "InkNotes/Views/BackupTransferView.swift": "962fcad5e86f86fa583c63e53f587fc057ba9e56de36174db84e90706dae44b4",
     "InkNotes/Views/Canvas/PageBackgroundView.swift": "47c92fee4f6c2b6dedfbe489695605458a0346b3aeb3287d5532d8bce11cfc85",
     "InkNotes/Views/Canvas/PencilCanvas.swift": "7649b9655cd04711cc10b27df882401c303b7ff9b1e8119a961e6faa7f8366e3",
-    "InkNotes/Views/LibrarySplitView.swift": "14eaa322c86f10e9cbc9193fd808e0ff41b1edd88d419138c8f326954081a7b6",
+    "InkNotes/Views/LibrarySplitView.swift": "0983fc09cc5bed982d6c0f39eb513b41a465dd4a978d812172917443a8449ee7",
     "InkNotes/Views/PageEditorView.swift": "5739148e630e512b963c90f1daa0ac9c666ea89c3b1523ab688a4f5ceef4b8c9",
     "InkNotes/Views/PageSourceBrowserView.swift": "61676152a12c0d67e45b80f902046a4a03db15e6f6ca13da09a8da63eb7162a4"
   }

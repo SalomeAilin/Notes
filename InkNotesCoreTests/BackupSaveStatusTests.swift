@@ -5,6 +5,47 @@ import Testing
 
 @Suite("Backup save status")
 struct BackupSaveStatusTests {
+  @Test("The main backup entry distinguishes four user-facing save states")
+  func mainEntryPresentation() {
+    let savedAt = Date(timeIntervalSince1970: 2_000_000_000)
+
+    #expect(
+      BackupSaveEntryPresentation(freshness: .noRecord) == .firstSaveNeeded
+    )
+    #expect(
+      BackupSaveEntryPresentation(freshness: .unchangedSinceSave(savedAt)) == .noNewChanges
+    )
+    #expect(
+      BackupSaveEntryPresentation(freshness: .changedSinceSave(savedAt)) == .saveAgainNeeded
+    )
+    #expect(
+      BackupSaveEntryPresentation(freshness: .unknown(savedAt)) == .confirmationNeeded
+    )
+    #expect(BackupSaveEntryPresentation.firstSaveNeeded.title == "备份与恢复，还没有保存备份")
+    #expect(BackupSaveEntryPresentation.noNewChanges.title == "备份与恢复")
+    #expect(BackupSaveEntryPresentation.saveAgainNeeded.title == "备份与恢复，有新修改")
+    #expect(
+      BackupSaveEntryPresentation.confirmationNeeded.title == "备份与恢复，保存状态需要确认"
+    )
+    #expect(
+      BackupSaveEntryPresentation.noNewChanges.systemImage
+        == "externaldrive.badge.timemachine"
+    )
+    #expect(
+      BackupSaveEntryPresentation.saveAgainNeeded.systemImage
+        == "externaldrive.badge.exclamationmark"
+    )
+    for presentation in [
+      BackupSaveEntryPresentation.firstSaveNeeded,
+      .noNewChanges,
+      .saveAgainNeeded,
+      .confirmationNeeded,
+    ] {
+      #expect(!presentation.title.contains("已同步"))
+      #expect(!presentation.title.contains("自动"))
+    }
+  }
+
   @Test("A plausible successful save time remains visible")
   func acceptsPlausibleTimestamp() throws {
     let now = Date(timeIntervalSince1970: 2_000_000_000)

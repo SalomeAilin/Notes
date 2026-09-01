@@ -3,6 +3,10 @@ import SwiftUI
 struct LibrarySplitView: View {
   @EnvironmentObject private var store: LibraryStore
   @Binding var pendingBackupImports: BackupImportQueue
+  @AppStorage(BackupSaveStatus.storageKey) private var lastSuccessfulBackupSaveTimestamp = 0.0
+  @AppStorage(BackupSaveStatus.legacyRecordStorageKey) private var legacyBackupSaveRecord = Data()
+  @AppStorage(BackupSaveStatus.recordStorageKey) private var lastSuccessfulBackupSaveRecord =
+    Data()
   @State private var columnVisibility: NavigationSplitViewVisibility = .all
   @State private var namingAction: NamingAction?
   @State private var draftTitle = ""
@@ -156,8 +160,9 @@ struct LibrarySplitView: View {
         Button {
           showingBackupTransfer = true
         } label: {
-          Label("备份与恢复", systemImage: "externaldrive.badge.timemachine")
+          Label(backupEntryPresentation.title, systemImage: backupEntryPresentation.systemImage)
         }
+        .accessibilityHint("打开后由你选择保存位置或导入备份")
         .disabled(!store.canManageBackups)
       }
       ToolbarItem(placement: .primaryAction) {
@@ -220,6 +225,17 @@ struct LibrarySplitView: View {
 
   private func selectionColor(_ isSelected: Bool) -> Color {
     isSelected ? Color.accentColor.opacity(0.14) : .clear
+  }
+
+  private var backupEntryPresentation: BackupSaveEntryPresentation {
+    BackupSaveEntryPresentation(
+      freshness: BackupSaveStatus.freshness(
+        recordData: lastSuccessfulBackupSaveRecord,
+        legacyRecordData: legacyBackupSaveRecord,
+        legacyTimestamp: lastSuccessfulBackupSaveTimestamp,
+        library: store.library
+      )
+    )
   }
 
   private func handleBackupImportPresentationEvent(_ event: BackupImportPresentationEvent) {
