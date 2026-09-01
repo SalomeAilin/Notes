@@ -50,7 +50,12 @@ private struct BackupImportConfirmationView: View {
   var body: some View {
     NavigationStack {
       List {
-        Section("这份备份") {
+        Section("检查结果") {
+          Label("文件检查完成，可以选择是否恢复。", systemImage: "checkmark.shield")
+            .foregroundStyle(.green)
+        }
+
+        Section("备份内容") {
           LabeledContent("文件") {
             Text(pendingImport.filename)
               .multilineTextAlignment(.trailing)
@@ -73,7 +78,7 @@ private struct BackupImportConfirmationView: View {
           }
         }
 
-        Section("导入后") {
+        Section("恢复方式") {
           Label("会新增一份副本，原备份文件保持不变。", systemImage: "plus.square.on.square")
           Label("现有笔记、手写内容和网页来源不会被覆盖。", systemImage: "checkmark.shield")
         }
@@ -85,14 +90,14 @@ private struct BackupImportConfirmationView: View {
           }
         }
       }
-      .navigationTitle("确认导入")
+      .navigationTitle("备份检查完成")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .cancellationAction) {
-          Button("取消", action: onCancel)
+          Button("暂不恢复", action: onCancel)
         }
         ToolbarItem(placement: .confirmationAction) {
-          Button("作为副本导入", action: onImport)
+          Button("作为副本恢复", action: onImport)
             .disabled(!canImport)
         }
       }
@@ -192,7 +197,7 @@ struct BackupTransferView: View {
           },
           onImport: {
             guard canStartOperation else { return }
-            operationMessage = "正在作为副本导入…"
+            operationMessage = "正在作为副本恢复…"
             self.pendingImport = nil
             Task {
               await restoreBackup(pendingImport)
@@ -278,15 +283,15 @@ struct BackupTransferView: View {
   }
 
   private var importSection: some View {
-    Section("导入备份") {
+    Section("检查或恢复备份") {
       Button {
         isImporterPresented = true
       } label: {
-        Label("选择备份文件", systemImage: "square.and.arrow.down")
+        Label("选择并检查备份", systemImage: "square.and.arrow.down")
       }
       .disabled(!canStartOperation)
 
-      Text("文件会先经过格式、大小、完整性和笔迹校验；确认后以副本导入，不覆盖现有笔记。")
+      Text("选择后只会检查文件，不会立即修改笔记。检查通过后，再由你决定是否作为副本恢复。")
         .font(.footnote)
         .foregroundStyle(.secondary)
     }
@@ -467,7 +472,7 @@ struct BackupTransferView: View {
       }
       importQueue.enqueue(request)
     case .failure(let error):
-      presentFilePickerFailure(error, action: "读取备份失败")
+      presentFilePickerFailure(error, action: "检查备份失败")
     }
   }
 
@@ -480,13 +485,13 @@ struct BackupTransferView: View {
           if canReportReadOnlyImportFailure {
             let cleanupWarning = cleanupWarning(for: request.url, source: request.source)
             let message = [
-              "应用处于只读保护状态，未读取或导入这份备份。",
+              "应用处于只读保护状态，未检查或恢复这份备份。",
               cleanupWarning,
             ]
             .compactMap { $0 }
             .joined(separator: "\n\n")
             notice = BackupTransferNotice(
-              title: "无法校验备份",
+              title: "无法检查备份",
               message: message
             )
             clearQueuedImportRequest(ifMatching: request.id)
@@ -504,7 +509,7 @@ struct BackupTransferView: View {
     } catch is CancellationError {
       return
     } catch {
-      presentError(error, action: "读取备份失败")
+      presentError(error, action: "检查备份失败")
       clearQueuedImportRequest(ifMatching: request.id)
     }
   }
@@ -524,7 +529,7 @@ struct BackupTransferView: View {
     source: BackupImportSource
   ) async throws -> BackupInspectionOutcome {
     guard canInspectNewBackup else { return .notStarted }
-    operationMessage = "正在读取并校验备份…"
+    operationMessage = "正在读取并检查备份…"
     defer { operationMessage = nil }
 
     do {
@@ -543,7 +548,7 @@ struct BackupTransferView: View {
     } catch {
       presentError(
         error,
-        action: "备份校验失败",
+        action: "备份检查失败",
         additionalMessage: cleanupWarning(for: url, source: source)
       )
       return .consumed
@@ -563,7 +568,7 @@ struct BackupTransferView: View {
           "已新增 \(result.importedNotebookCount) 个笔记本、"
           + "\(result.importedPageCount) 页；原有笔记未被覆盖。"
         notice = BackupTransferNotice(
-          title: "导入完成",
+          title: "恢复完成",
           message: appendingInboxCleanupWarning(to: message, pendingImport: pendingImport)
         )
       case .alreadyImported:
@@ -583,16 +588,16 @@ struct BackupTransferView: View {
             message:
               appendingInboxCleanupWarning(
                 to:
-                  "这份备份此前已导入；本次补回 \(repairedDescription)，"
+                  "这份备份此前已恢复；本次补回 \(repairedDescription)，"
                   + "未新增笔记本或页面，也未覆盖已有内容。",
                 pendingImport: pendingImport
               )
           )
         } else {
           notice = BackupTransferNotice(
-            title: "无需重复导入",
+            title: "无需重复恢复",
             message: appendingInboxCleanupWarning(
-              to: "这份备份此前已导入，本次未新增笔记本或页面，也未覆盖已有内容。",
+              to: "这份备份此前已恢复，本次未新增笔记本或页面，也未覆盖已有内容。",
               pendingImport: pendingImport
             )
           )
@@ -601,7 +606,7 @@ struct BackupTransferView: View {
     } catch {
       presentError(
         error,
-        action: "导入备份失败",
+        action: "恢复备份失败",
         additionalMessage: pendingImport.inboxCleanupWarning
       )
     }

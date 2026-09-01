@@ -34,7 +34,7 @@
     "InkNotes/Persistence/DurableFileWriter.swift": "24b0fa801165c82139730b589666ee6bc34b69dc9fe514060146ab7c65f0c542",
     "InkNotes/Persistence/SegmentedDrawingCodec.swift": "b98a03bd6ce754c2600fda60f7fa4b22c594e78641e2679ca785ccd59af4103b",
     "InkNotes/Stores/LibraryStore.swift": "a83a74c70157c3b4734615ec2b6f629e2976f04dae500cc69fc13c8681ac1176",
-    "InkNotes/Views/BackupTransferView.swift": "962fcad5e86f86fa583c63e53f587fc057ba9e56de36174db84e90706dae44b4",
+    "InkNotes/Views/BackupTransferView.swift": "b59e401ab8be5591361481d0bcfe54a24480ec3de80ef9772adb625824a43278",
     "InkNotes/Views/Canvas/PageBackgroundView.swift": "47c92fee4f6c2b6dedfbe489695605458a0346b3aeb3287d5532d8bce11cfc85",
     "InkNotes/Views/Canvas/PencilCanvas.swift": "7649b9655cd04711cc10b27df882401c303b7ff9b1e8119a961e6faa7f8366e3",
     "InkNotes/Views/LibrarySplitView.swift": "0983fc09cc5bed982d6c0f39eb513b41a465dd4a978d812172917443a8449ee7",

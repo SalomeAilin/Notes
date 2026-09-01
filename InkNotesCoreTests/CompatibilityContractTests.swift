@@ -698,7 +698,7 @@ struct CompatibilityContractTests {
     )
   }
 
-  @Test("External backup URLs route to validation before restore confirmation")
+  @Test("Backup files are checked before the user chooses whether to restore")
   func externalBackupRoutingRemainsPreviewOnly() throws {
     let repositoryRoot = repositoryRootURL()
     let appSource = try String(
@@ -743,7 +743,7 @@ struct CompatibilityContractTests {
     )
     #expect(
       transferSource.contains(
-        "presentFilePickerFailure(error, action: \"读取备份失败\")"
+        "presentFilePickerFailure(error, action: \"检查备份失败\")"
       )
     )
     #expect(
@@ -764,12 +764,21 @@ struct CompatibilityContractTests {
     #expect(transferSource.contains("BackupInboxCopyCleaner().removeIfInboxCopy"))
     #expect(transferSource.contains(".sheet(isPresented: importConfirmationIsPresented)"))
     #expect(transferSource.contains("BackupImportConfirmationView("))
-    #expect(transferSource.contains("Button(\"作为副本导入\", action: onImport)"))
-    #expect(transferSource.contains("Section(\"这份备份\")"))
+    #expect(transferSource.contains("Section(\"检查或恢复备份\")"))
+    #expect(transferSource.contains("Label(\"选择并检查备份\""))
+    #expect(transferSource.contains("选择后只会检查文件，不会立即修改笔记。"))
+    #expect(transferSource.contains(".navigationTitle(\"备份检查完成\")"))
+    #expect(transferSource.contains("Button(\"暂不恢复\", action: onCancel)"))
+    #expect(transferSource.contains("Button(\"作为副本恢复\", action: onImport)"))
+    #expect(transferSource.contains("Section(\"检查结果\")"))
+    #expect(transferSource.contains("文件检查完成，可以选择是否恢复。"))
+    #expect(transferSource.contains("Section(\"备份内容\")"))
     #expect(transferSource.contains("LabeledContent(\"网页来源\")"))
-    #expect(transferSource.contains("Section(\"导入后\")"))
+    #expect(transferSource.contains("Section(\"恢复方式\")"))
     #expect(transferSource.contains("会新增一份副本，原备份文件保持不变。"))
     #expect(transferSource.contains("现有笔记、手写内容和网页来源不会被覆盖。"))
+    #expect(!transferSource.contains(".navigationTitle(\"确认导入\")"))
+    #expect(!transferSource.contains("Button(\"作为副本导入\", action: onImport)"))
     #expect(!transferSource.contains("preview.sourceAppVersion"))
     #expect(!transferSource.contains("preview.sourceBuild"))
     #expect(transferSource.contains(".interactiveDismissDisabled(isBusy)"))
