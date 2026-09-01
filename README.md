@@ -168,6 +168,14 @@ InkNotes/
 - 未来允许的生产路径是：用 `ASWebAuthenticationSession` 打开真实 HTTPS OAuth broker；百度授权回调进入 broker；broker 只向应用回传短时、高熵、单次使用的 ticket，不在回调 URL 中携带 access token 或 refresh token；应用再通过同一 broker 的 HTTPS 接口兑换并验证凭据。
 - 取消、ticket 过期或重放、`state` 不匹配、回调来源不匹配、broker 响应无法验证时都必须失败关闭。离线 wire 格式虽已冻结，真实 HTTPS origin/路由、TLS 与响应身份验证、正式回调身份及 `ASWebAuthenticationSession` 注册、broker 端原子 ticket 消费、部署、稳定账号绑定、刷新/撤销和真实账号门禁仍未确定。
 
+正式域名候选可以先运行纯本地预检：
+
+```bash
+./scripts/check-baidu-broker-origin.zsh --origin "https://broker.domain-you-control.com"
+```
+
+请把示例替换为你实际控制的小写 ASCII 域名。预检不允许账号、端口、路径、查询、片段、本机/IP/保留测试地址、视觉混淆编码或百度官方域名。命令不联网、不修改工程、不写入配置，也不注册回调或授权入口；通过只代表最小地址格式符合当前边界，不能证明域名所有权、TLS、服务部署或百度授权可用。正式接入仍须验证域名控制权、证书与响应身份、回调、服务端单次票据、账号撤销和真实账号流程。
+
 ## 已知边界
 
 - 当前 Mac 没有安装 iOS Simulator runtime，因此本次已完成源码检查、核心测试和 generic iOS 构建，尚未做模拟器启动。

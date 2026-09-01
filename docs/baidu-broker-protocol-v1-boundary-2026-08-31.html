@@ -28,7 +28,7 @@
 <body>
 <main>
   <h1>百度 broker v1 离线协议边界</h1>
-  <p class="muted">证据时间：2026-08-31（Asia/Shanghai）｜性质：格式与状态机门禁，不是可用的百度账号连接</p>
+  <p class="muted">首次冻结：2026-08-31｜候选域名预检补充：2026-09-01（Asia/Shanghai）｜性质：格式与状态机门禁，不是可用的百度账号连接</p>
 
   <div class="note warn">
     <strong>结论：</strong>仓库只新增了纯离线、休眠的 wire/state 基础。它不会发起网络请求、打开授权页面、签发生产凭据、写入 Keychain 或展示“已连接”。
@@ -60,6 +60,14 @@
     与
     <a href="https://github.com/baidu-netdisk/baidu-drive-sdk-go/blob/main/baidudriver/api/auth_device_token.go">设备码换 token</a>
     源码都需要 <code>client_secret</code>。这不证明百度服务端不存在未公开的 PKCE 能力，但不足以把密钥安全地放进 iOS public client。
+  </div>
+
+  <h2>候选域名本地预检</h2>
+  <p>正式域名尚未写入工程前，可以运行：</p>
+  <div class="note"><code>./scripts/check-baidu-broker-origin.zsh --origin "https://broker.domain-you-control.com"</code></div>
+  <p>请把示例替换为你实际控制的小写 ASCII 域名。该命令拒绝账号、端口、路径、参数、片段、本机/IP/保留测试地址、视觉混淆编码和百度官方域名。它不联网、不修改工程、不写配置，也不注册回调或授权入口。</p>
+  <div class="note warn">
+    <strong>边界：</strong>通过只说明地址满足当前最小格式规则，不证明域名所有权、TLS、服务部署、响应身份或百度授权可用。正式接入仍须完成这些验证以及回调、单次票据、撤销和真实账号验收。
   </div>
 
   <h2>下一道门禁</h2>
