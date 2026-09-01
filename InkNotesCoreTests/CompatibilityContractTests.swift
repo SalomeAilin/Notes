@@ -769,14 +769,23 @@ struct CompatibilityContractTests {
     #expect(transferSource.contains("选择后只会检查文件，不会立即修改笔记。"))
     #expect(transferSource.contains(".navigationTitle(\"备份检查完成\")"))
     #expect(transferSource.contains("Button(\"暂不恢复\", action: onCancel)"))
-    #expect(transferSource.contains("Button(\"作为副本恢复\", action: onImport)"))
+    #expect(transferSource.contains("Button(confirmationButtonTitle, action: onImport)"))
+    #expect(transferSource.contains("pendingImport.preview.restoreReadiness.canProceed"))
     #expect(transferSource.contains("Section(\"检查结果\")"))
-    #expect(transferSource.contains("文件检查完成，可以选择是否恢复。"))
+    #expect(transferSource.contains("备份完整，可以安全新增副本。"))
+    #expect(transferSource.contains("这份备份以前已经恢复过。"))
+    #expect(transferSource.contains("备份文件完整，但当前暂时无法安全恢复。"))
     #expect(transferSource.contains("Section(\"备份内容\")"))
     #expect(transferSource.contains("LabeledContent(\"网页来源\")"))
     #expect(transferSource.contains("Section(\"恢复方式\")"))
     #expect(transferSource.contains("会新增一份副本，原备份文件保持不变。"))
     #expect(transferSource.contains("现有笔记、手写内容和网页来源不会被覆盖。"))
+    #expect(transferSource.contains("Section(\"再次检查\")"))
+    #expect(transferSource.contains("不会新增重复副本。"))
+    #expect(transferSource.contains("Section(\"暂时无法恢复\")"))
+    #expect(transferSource.contains("当前无法恢复"))
+    #expect(transferSource.contains("请先保存最新备份"))
+    #expect(transferSource.contains("暂时不要重复恢复"))
     #expect(!transferSource.contains(".navigationTitle(\"确认导入\")"))
     #expect(!transferSource.contains("Button(\"作为副本导入\", action: onImport)"))
     #expect(!transferSource.contains("preview.sourceAppVersion"))
@@ -1557,9 +1566,13 @@ struct CompatibilityContractTests {
     let currentLibrary = LibraryDocument(notebooks: [currentNotebook])
     let currentDrawing = PKDrawing().dataRepresentation()
 
-    let preview = try await repository.inspectBackup(archive)
+    let preview = try await repository.inspectBackup(
+      archive,
+      currentLibrary: LibraryDocument.starter()
+    )
     #expect(preview.notebookCount == 1)
     #expect(preview.pageCount == 3)
+    #expect(preview.restoreReadiness == .readyToAddCopy)
     let restoreResult = try await repository.restoreBackupAsCopy(
       archive,
       currentLibrary: currentLibrary,

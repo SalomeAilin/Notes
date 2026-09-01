@@ -52,8 +52,7 @@ private struct BackupImportConfirmationView: View {
     NavigationStack {
       List {
         Section("检查结果") {
-          Label("文件检查完成，可以选择是否恢复。", systemImage: "checkmark.shield")
-            .foregroundStyle(.green)
+          inspectionResultLabel
         }
 
         Section("备份内容") {
@@ -79,10 +78,7 @@ private struct BackupImportConfirmationView: View {
           }
         }
 
-        Section("恢复方式") {
-          Label("会新增一份副本，原备份文件保持不变。", systemImage: "plus.square.on.square")
-          Label("现有笔记、手写内容和网页来源不会被覆盖。", systemImage: "checkmark.shield")
-        }
+        restoreGuidanceSection
 
         if let warning = pendingImport.inboxCleanupWarning {
           Section("需要注意") {
@@ -98,10 +94,70 @@ private struct BackupImportConfirmationView: View {
           Button("暂不恢复", action: onCancel)
         }
         ToolbarItem(placement: .confirmationAction) {
-          Button("作为副本恢复", action: onImport)
-            .disabled(!canImport)
+          Button(confirmationButtonTitle, action: onImport)
+            .disabled(!canImport || !pendingImport.preview.restoreReadiness.canProceed)
         }
       }
+    }
+  }
+
+  @ViewBuilder
+  private var inspectionResultLabel: some View {
+    switch pendingImport.preview.restoreReadiness {
+    case .readyToAddCopy:
+      Label("备份完整，可以安全新增副本。", systemImage: "checkmark.shield")
+        .foregroundStyle(.green)
+    case .alreadyRestored:
+      Label("这份备份以前已经恢复过。", systemImage: "checkmark.circle")
+        .foregroundStyle(.blue)
+    case .blocked:
+      Label("备份文件完整，但当前暂时无法安全恢复。", systemImage: "exclamationmark.shield")
+        .foregroundStyle(.orange)
+    }
+  }
+
+  @ViewBuilder
+  private var restoreGuidanceSection: some View {
+    switch pendingImport.preview.restoreReadiness {
+    case .readyToAddCopy:
+      Section("恢复方式") {
+        Label("会新增一份副本，原备份文件保持不变。", systemImage: "plus.square.on.square")
+        Label("现有笔记、手写内容和网页来源不会被覆盖。", systemImage: "checkmark.shield")
+      }
+    case .alreadyRestored:
+      Section("再次检查") {
+        Label("不会新增重复副本。", systemImage: "checkmark.circle")
+        Label("若已有副本缺少笔迹或网页来源，会补回缺失内容；不会覆盖已有内容。", systemImage: "wrench.and.screwdriver")
+      }
+    case .blocked(let reason):
+      Section("暂时无法恢复") {
+        Label(blockedRestoreMessage(reason), systemImage: "exclamationmark.triangle")
+          .foregroundStyle(.orange)
+      }
+    }
+  }
+
+  private var confirmationButtonTitle: String {
+    switch pendingImport.preview.restoreReadiness {
+    case .readyToAddCopy:
+      "作为副本恢复"
+    case .alreadyRestored:
+      "检查已有副本"
+    case .blocked:
+      "当前无法恢复"
+    }
+  }
+
+  private func blockedRestoreMessage(_ reason: BackupRestoreBlockReason) -> String {
+    switch reason {
+    case .notebookLimit:
+      "当前笔记本较多，加入这份备份后会超过应用目前可安全处理的数量。请先保存最新备份，再整理不需要的笔记本后重试。"
+    case .pageLimit:
+      "当前页面较多，加入这份备份后会超过应用目前可安全处理的数量。请先保存最新备份，再整理不需要的页面后重试。"
+    case .librarySizeLimit:
+      "当前笔记目录较大，加入这份备份后会超过应用目前可安全处理的范围。请先保存最新备份，再整理不需要的内容后重试。"
+    case .incompletePreviousRestore:
+      "这份备份以前的恢复没有完整结束，应用无法安全确认哪些内容已经加入。现有笔记没有改动；请保留备份文件，暂时不要重复恢复。"
     }
   }
 
@@ -199,7 +255,9 @@ struct BackupTransferView: View {
             self.pendingImport = nil
           },
           onImport: {
-            guard canStartOperation else { return }
+            guard canStartOperation, pendingImport.preview.restoreReadiness.canProceed else {
+              return
+            }
             operationMessage = "正在作为副本恢复…"
             self.pendingImport = nil
             Task {

@@ -474,7 +474,7 @@ final class LibraryStore: ObservableObject {
   func inspectBackup(_ data: Data) async throws -> BackupArchivePreview {
     try beginBackupTransfer()
     defer { finishBackupTransfer() }
-    return try await repository.inspectBackup(data)
+    return try await repository.inspectBackup(data, currentLibrary: library)
   }
 
   func importBackupAsCopy(_ data: Data) async throws -> BackupRestoreResult {

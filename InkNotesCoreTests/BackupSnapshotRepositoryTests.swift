@@ -75,6 +75,12 @@ struct BackupSnapshotRepositoryTests {
     #expect(persistedCurrentDrawing == currentDrawing)
     #expect(persistedImportedDrawing == sourceDrawing)
     expectSameLibraryContent(persistedLibrary, result.library)
+
+    let repeatedPreview = try await fixture.repository.inspectBackup(
+      archive,
+      currentLibrary: result.library
+    )
+    #expect(repeatedPreview.restoreReadiness == .alreadyRestored)
   }
 
   @Test("A v2 backup restores as a copy without replacing current notes")
@@ -146,10 +152,14 @@ struct BackupSnapshotRepositoryTests {
       try BackupArchiveCodec.decode(archive).formatVersion
         == BackupArchiveCodec.pageSourceFormatVersion
     )
-    let preview = try await sourceFixture.repository.inspectBackup(archive)
+    let preview = try await sourceFixture.repository.inspectBackup(
+      archive,
+      currentLibrary: LibraryDocument.starter()
+    )
     #expect(preview.notebookCount == 1)
     #expect(preview.pageCount == 1)
     #expect(preview.sourceCount == 1)
+    #expect(preview.restoreReadiness == .readyToAddCopy)
 
     let currentLibrary = LibraryDocument.starter()
     let currentPageID = try #require(currentLibrary.notebooks.first?.pages.first?.id)
@@ -228,6 +238,33 @@ struct BackupSnapshotRepositoryTests {
     )
   }
 
+  @Test("Inspection admits an exact-limit restore without writing local state")
+  func restorePreflightAcceptsExactLimitWithoutWrites() async throws {
+    let fixture = makeRepository()
+    defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+    let sourceLibrary = makePageLibrary(pageCount: 1)
+    let sourcePageID = try #require(sourceLibrary.notebooks.first?.pages.first?.id)
+    let archive = try BackupArchiveCodec.encode(
+      library: sourceLibrary,
+      drawings: [sourcePageID: Data()],
+      createdAt: Date(timeIntervalSince1970: 1_700_060_000),
+      backupID: UUID(uuidString: "E5000000-0000-0000-0000-000000000020")!
+    )
+    let currentLibrary = makePageLibrary(
+      pageCount: BackupArchiveLimits.maximumPageCount - 1
+    )
+
+    #expect(!FileManager.default.fileExists(atPath: fixture.rootURL.path))
+    let preview = try await fixture.repository.inspectBackup(
+      archive,
+      currentLibrary: currentLibrary
+    )
+
+    #expect(preview.restoreReadiness == .readyToAddCopy)
+    #expect(!FileManager.default.fileExists(atPath: fixture.rootURL.path))
+  }
+
   @Test("Notebook overflow is rejected before any restore WAL is created")
   func notebookOverflowDoesNotConsumeRestoreTransactions() async throws {
     let fixture = makeRepository()
@@ -257,6 +294,12 @@ struct BackupSnapshotRepositoryTests {
         createdAt: Date(timeIntervalSince1970: 1_700_010_000),
         backupID: backupID
       )
+
+      let preview = try await fixture.repository.inspectBackup(
+        archive,
+        currentLibrary: currentLibrary
+      )
+      #expect(preview.restoreReadiness == .blocked(.notebookLimit))
 
       await #expect(
         throws: BackupArchiveError.tooManyNotebooks(
@@ -308,6 +351,12 @@ struct BackupSnapshotRepositoryTests {
       backupID: UUID(uuidString: "E5000000-0000-0000-0000-000000000010")!
     )
 
+    let preview = try await fixture.repository.inspectBackup(
+      archive,
+      currentLibrary: currentLibrary
+    )
+    #expect(preview.restoreReadiness == .blocked(.pageLimit))
+
     await #expect(
       throws: BackupArchiveError.tooManyPages(
         actual: BackupArchiveLimits.maximumPageCount + 1,
@@ -331,6 +380,61 @@ struct BackupSnapshotRepositoryTests {
     #expect(
       try Set(FileManager.default.contentsOfDirectory(atPath: drawingsURL.path))
         == drawingsBefore
+    )
+  }
+
+  @Test("An existing restore plan cannot bypass notebook capacity after the library changes")
+  func existingRestorePlanRechecksNotebookCapacity() async throws {
+    let fixture = makeRepository()
+    defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+    let sourceLibrary = makeNotebookLibrary(notebookCount: 1)
+    let sourcePageID = try #require(sourceLibrary.notebooks.first?.pages.first?.id)
+    let backupID = UUID(uuidString: "E5000000-0000-0000-0000-000000000021")!
+    let archive = try BackupArchiveCodec.encode(
+      library: sourceLibrary,
+      drawings: [sourcePageID: Data()],
+      createdAt: Date(timeIntervalSince1970: 1_700_060_100),
+      backupID: backupID
+    )
+    _ = try await fixture.repository.restoreBackupAsCopy(
+      archive,
+      currentLibrary: LibraryDocument.starter(),
+      currentDrawingOverrides: [:]
+    )
+    let transactionBefore = try #require(
+      try await fixture.repository.loadRestoreTransaction(backupID: backupID)
+    )
+
+    let currentLibrary = makeNotebookLibrary(
+      notebookCount: BackupArchiveLimits.maximumNotebookCount
+    )
+    try await fixture.repository.saveLibrary(currentLibrary)
+    let libraryURL = fixture.rootURL.appendingPathComponent(DrawingRepository.libraryFilename)
+    let libraryBefore = try Data(contentsOf: libraryURL)
+
+    let preview = try await fixture.repository.inspectBackup(
+      archive,
+      currentLibrary: currentLibrary
+    )
+    #expect(preview.restoreReadiness == .blocked(.notebookLimit))
+    await #expect(
+      throws: BackupArchiveError.tooManyNotebooks(
+        actual: BackupArchiveLimits.maximumNotebookCount + 1,
+        maximum: BackupArchiveLimits.maximumNotebookCount
+      )
+    ) {
+      try await fixture.repository.restoreBackupAsCopy(
+        archive,
+        currentLibrary: currentLibrary,
+        currentDrawingOverrides: [:]
+      )
+    }
+
+    #expect(try Data(contentsOf: libraryURL) == libraryBefore)
+    #expect(
+      try await fixture.repository.loadRestoreTransaction(backupID: backupID)
+        == transactionBefore
     )
   }
 
@@ -371,6 +475,12 @@ struct BackupSnapshotRepositoryTests {
       createdAt: Date(timeIntervalSince1970: 1_700_040_000),
       backupID: backupID
     )
+
+    let preview = try await fixture.repository.inspectBackup(
+      archive,
+      currentLibrary: currentLibrary
+    )
+    #expect(preview.restoreReadiness == .blocked(.librarySizeLimit))
 
     do {
       _ = try await fixture.repository.restoreBackupAsCopy(
@@ -833,6 +943,12 @@ struct BackupSnapshotRepositoryTests {
     try await fixture.repository.saveLibrary(partialLibrary)
     let drawingsURL = fixture.rootURL.appendingPathComponent("Drawings", isDirectory: true)
     let filesBefore = try Set(FileManager.default.contentsOfDirectory(atPath: drawingsURL.path))
+
+    let preview = try await fixture.repository.inspectBackup(
+      archive,
+      currentLibrary: partialLibrary
+    )
+    #expect(preview.restoreReadiness == .blocked(.incompletePreviousRestore))
 
     await #expect(throws: BackupSnapshotError.partialPreviousImport) {
       try await fixture.repository.restoreBackupAsCopy(

@@ -8,6 +8,29 @@ struct BackupArchivePreview: Equatable, Sendable {
   let notebookCount: Int
   let pageCount: Int
   let sourceCount: Int
+  let restoreReadiness: BackupRestoreReadiness
+}
+
+enum BackupRestoreReadiness: Equatable, Sendable {
+  case readyToAddCopy
+  case alreadyRestored
+  case blocked(BackupRestoreBlockReason)
+
+  var canProceed: Bool {
+    switch self {
+    case .readyToAddCopy, .alreadyRestored:
+      true
+    case .blocked:
+      false
+    }
+  }
+}
+
+enum BackupRestoreBlockReason: Equatable, Sendable {
+  case notebookLimit
+  case pageLimit
+  case librarySizeLimit
+  case incompletePreviousRestore
 }
 
 enum BackupRestoreDisposition: Equatable, Sendable {
@@ -103,15 +126,25 @@ extension DrawingRepository {
     )
   }
 
-  func inspectBackup(_ data: Data) throws -> BackupArchivePreview {
+  func inspectBackup(
+    _ data: Data,
+    currentLibrary: LibraryDocument
+  ) throws -> BackupArchivePreview {
     let backup = try decodeAndValidateDrawings(data)
+    let currentPageIDs = try BackupArchiveCodec.validateLibrary(currentLibrary)
+    let restoreReadiness = try restoreReadiness(
+      for: backup,
+      currentLibrary: currentLibrary,
+      currentPageIDs: currentPageIDs
+    )
     return BackupArchivePreview(
       createdAt: backup.createdAt,
       sourceAppVersion: backup.sourceAppVersion,
       sourceBuild: backup.sourceBuild,
       notebookCount: backup.library.notebooks.count,
       pageCount: backup.library.notebooks.reduce(0) { $0 + $1.pages.count },
-      sourceCount: backup.pageSources.values.reduce(0) { $0 + $1.count }
+      sourceCount: backup.pageSources.values.reduce(0) { $0 + $1.count },
+      restoreReadiness: restoreReadiness
     )
   }
 
@@ -184,6 +217,10 @@ extension DrawingRepository {
     case .partial:
       throw BackupSnapshotError.partialPreviousImport
     case .none:
+      try Self.validateNewRestoreCapacity(
+        currentLibrary: currentLibrary,
+        backupLibrary: LibraryDocument(notebooks: transaction.copiedNotebooks)
+      )
       break
     }
 
@@ -300,6 +337,86 @@ extension DrawingRepository {
       pageCount = nextPageCount
     }
     return pageCount
+  }
+
+  private func restoreReadiness(
+    for backup: ValidatedBackupArchive,
+    currentLibrary: LibraryDocument,
+    currentPageIDs: Set<UUID>
+  ) throws -> BackupRestoreReadiness {
+    if let transaction = try loadRestoreTransaction(backupID: backup.backupID) {
+      try validateRestoreTransaction(transaction, backup: backup)
+      switch restorePresence(transaction, in: currentLibrary) {
+      case .all:
+        return .alreadyRestored
+      case .partial:
+        return .blocked(.incompletePreviousRestore)
+      case .none:
+        return try projectedRestoreReadiness(
+          currentLibrary: currentLibrary,
+          copiedNotebooks: transaction.copiedNotebooks
+        )
+      }
+    }
+
+    do {
+      try Self.validateNewRestoreCapacity(
+        currentLibrary: currentLibrary,
+        backupLibrary: backup.library
+      )
+      let transaction = try makeRestoreTransaction(
+        backup: backup,
+        currentLibrary: currentLibrary,
+        currentPageIDs: currentPageIDs,
+        importedAt: Date()
+      )
+      return try projectedRestoreReadiness(
+        currentLibrary: currentLibrary,
+        copiedNotebooks: transaction.copiedNotebooks
+      )
+    } catch let error as BackupArchiveError {
+      if let reason = Self.restoreBlockReason(for: error) {
+        return .blocked(reason)
+      }
+      throw error
+    }
+  }
+
+  private func projectedRestoreReadiness(
+    currentLibrary: LibraryDocument,
+    copiedNotebooks: [Notebook]
+  ) throws -> BackupRestoreReadiness {
+    do {
+      let copiedLibrary = LibraryDocument(notebooks: copiedNotebooks)
+      try Self.validateNewRestoreCapacity(
+        currentLibrary: currentLibrary,
+        backupLibrary: copiedLibrary
+      )
+      var projectedLibrary = currentLibrary
+      projectedLibrary.notebooks.append(contentsOf: copiedNotebooks)
+      try BackupArchiveCodec.validateProjectedManifestBudget(projectedLibrary)
+      return .readyToAddCopy
+    } catch let error as BackupArchiveError {
+      if let reason = Self.restoreBlockReason(for: error) {
+        return .blocked(reason)
+      }
+      throw error
+    }
+  }
+
+  private static func restoreBlockReason(
+    for error: BackupArchiveError
+  ) -> BackupRestoreBlockReason? {
+    switch error {
+    case .tooManyNotebooks:
+      .notebookLimit
+    case .tooManyPages:
+      .pageLimit
+    case .manifestTooLarge:
+      .librarySizeLimit
+    default:
+      nil
+    }
   }
 
   private func makeRestoreTransaction(
