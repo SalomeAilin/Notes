@@ -128,6 +128,8 @@ struct BackupTransferView: View {
   @EnvironmentObject private var store: LibraryStore
   @Binding var importQueue: BackupImportQueue
   @AppStorage(BackupSaveStatus.storageKey) private var lastSuccessfulBackupSaveTimestamp = 0.0
+  @AppStorage(BackupSaveStatus.recordStorageKey) private var lastSuccessfulBackupSaveRecord =
+    Data()
 
   @State private var preparedBackup: PreparedBackup?
   @State private var pendingImport: PendingBackupImport?
@@ -224,19 +226,9 @@ struct BackupTransferView: View {
       }
       .disabled(!canStartOperation)
 
-      if let lastSuccessfulBackupSaveDate {
-        LabeledContent("上次保存") {
-          Text(
-            lastSuccessfulBackupSaveDate,
-            format: .dateTime.year().month().day().hour().minute()
-          )
-        }
-      } else {
-        Label("这里还没有保存记录", systemImage: "clock")
-          .foregroundStyle(.secondary)
-      }
+      backupSaveStatusContent
 
-      Text("这里只记录完成保存的时间，不记录位置；如果选择网盘，请以网盘中的文件为准。")
+      Text("这里只记录保存时间和当时的笔记本、页数，不记录内容、名称或位置；如果选择网盘，请以网盘中的文件为准。")
         .font(.footnote)
         .foregroundStyle(.secondary)
 
@@ -337,8 +329,39 @@ struct BackupTransferView: View {
     canStartOperation && pendingImport == nil && notice == nil
   }
 
-  private var lastSuccessfulBackupSaveDate: Date? {
-    BackupSaveStatus.savedAt(timestamp: lastSuccessfulBackupSaveTimestamp)
+  private var backupSaveFreshness: BackupSaveFreshness {
+    BackupSaveStatus.freshness(
+      recordData: lastSuccessfulBackupSaveRecord,
+      legacyTimestamp: lastSuccessfulBackupSaveTimestamp,
+      library: store.library
+    )
+  }
+
+  @ViewBuilder
+  private var backupSaveStatusContent: some View {
+    switch backupSaveFreshness {
+    case .noRecord:
+      Label("这里还没有保存记录", systemImage: "clock")
+        .foregroundStyle(.secondary)
+    case .unchangedSinceSave(let savedAt):
+      Label("保存后没有新的修改", systemImage: "checkmark.circle")
+        .foregroundStyle(.green)
+      backupSaveDateRow(savedAt)
+    case .changedSinceSave(let savedAt):
+      Label("保存后有新的修改，建议再次保存", systemImage: "exclamationmark.circle")
+        .foregroundStyle(.orange)
+      backupSaveDateRow(savedAt)
+    case .unknown(let savedAt):
+      Label("建议重新保存一次，以确认当前内容", systemImage: "arrow.clockwise.circle")
+        .foregroundStyle(.orange)
+      backupSaveDateRow(savedAt)
+    }
+  }
+
+  private func backupSaveDateRow(_ date: Date) -> some View {
+    LabeledContent("上次保存") {
+      Text(date, format: .dateTime.year().month().day().hour().minute())
+    }
   }
 
   private var importConfirmationIsPresented: Binding<Bool> {
@@ -375,7 +398,15 @@ struct BackupTransferView: View {
   private func handleExportResult(_ result: Result<URL, Error>) {
     switch result {
     case .success:
-      lastSuccessfulBackupSaveTimestamp = Date().timeIntervalSince1970
+      if let preparedBackup,
+        let record = BackupSaveStatus.recordData(
+          savedAt: Date(),
+          notebookCount: preparedBackup.notebookCount,
+          pageCount: preparedBackup.pageCount
+        )
+      {
+        lastSuccessfulBackupSaveRecord = record
+      }
       notice = BackupTransferNotice(
         title: "备份已保存",
         message: "未加密备份已保存到你选择的位置，请确认该位置值得信任。"

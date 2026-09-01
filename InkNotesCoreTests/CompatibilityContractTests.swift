@@ -782,13 +782,19 @@ struct CompatibilityContractTests {
     )
     #expect(transferSource.contains("保存位置和分享对象都由你选择"))
     #expect(transferSource.contains("@AppStorage(BackupSaveStatus.storageKey)"))
+    #expect(transferSource.contains("@AppStorage(BackupSaveStatus.recordStorageKey)"))
     #expect(transferSource.contains("LabeledContent(\"上次保存\")"))
     #expect(transferSource.contains("Label(\"这里还没有保存记录\", systemImage: \"clock\")"))
+    #expect(transferSource.contains("保存后没有新的修改"))
+    #expect(transferSource.contains("保存后有新的修改，建议再次保存"))
+    #expect(transferSource.contains("建议重新保存一次，以确认当前内容"))
     #expect(
       transferSource.contains(
-        "这里只记录完成保存的时间，不记录位置；如果选择网盘，请以网盘中的文件为准。"
+        "这里只记录保存时间和当时的笔记本、页数，不记录内容、名称或位置；"
       )
     )
+    #expect(!transferSource.contains("当前内容已备份"))
+    #expect(!transferSource.contains("网盘已同步"))
     #expect(!transferSource.contains("Label(\"生成最新备份\""))
     #expect(!transferSource.contains("未加密备份已生成"))
     let makeBackupRange = try #require(
@@ -806,15 +812,18 @@ struct CompatibilityContractTests {
     )
     let successfulSaveRange = try #require(
       transferSource.range(
-        of: "lastSuccessfulBackupSaveTimestamp = Date().timeIntervalSince1970",
+        of: "lastSuccessfulBackupSaveRecord = record",
         range: exportResultRange.upperBound..<transferSource.endIndex
       )
     )
     #expect(
       transferSource.components(
-        separatedBy: "lastSuccessfulBackupSaveTimestamp = Date().timeIntervalSince1970"
+        separatedBy: "lastSuccessfulBackupSaveRecord = record"
       ).count == 2
     )
+    #expect(transferSource.contains("notebookCount: preparedBackup.notebookCount"))
+    #expect(transferSource.contains("pageCount: preparedBackup.pageCount"))
+    #expect(!transferSource.contains("lastSuccessfulBackupSaveTimestamp = Date()"))
     let failedSaveRange = try #require(
       transferSource.range(
         of: "case .failure(let error):",
