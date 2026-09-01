@@ -12,7 +12,7 @@
     "InkNotes/Models/BackupExportArtifact.swift": "8662e2ddc75d83c45df100f4610dff7f6d02a6eea0f6e42798a857434bccd5dc",
     "InkNotes/Models/BackupImportPresentationState.swift": "5e350f2a27a2ec3cec3b95b4957f7cc61b5e58a32e3a0e0dffb0f27cc4ce5282",
     "InkNotes/Models/BackupImportRequest.swift": "915c70f83cfaa580591fa681cd27c4fc6114bb168b6964cb6646e9f1e1cfbf40",
-    "InkNotes/Models/BackupSaveStatus.swift": "0d70422d471a82447e9f8c1cc011ebf4f68fb20ba0efa47fcb7f34667d4645c4",
+    "InkNotes/Models/BackupSaveStatus.swift": "c8c4adc8657b7109e6cb101b8ad4a265996b01a50cc9a606c3643c948cabe119",
     "InkNotes/Models/BaiduAccountCredential.swift": "b6bdac95c015b5da7e756db2843a71e150a3239d6d249ccba0314cf0d694e4af",
     "InkNotes/Models/BaiduBrokerProtocolV1.swift": "558de36d0fdfc636c19bcbfe2be759291dfaf04a419483d8c2a10dc1a7abc631",
     "InkNotes/Models/BaiduNetdiskAccount.swift": "4bf01000654ba46a322b0514711e0dc3b15a9f1397fb8348f8a4b56afcc80092",
@@ -33,11 +33,11 @@
     "InkNotes/Persistence/DrawingRepository.swift": "ac83bf87dc166d1d7d8fdf1e55bf723386f7917cd08105803fe377f3aea4ed30",
     "InkNotes/Persistence/DurableFileWriter.swift": "24b0fa801165c82139730b589666ee6bc34b69dc9fe514060146ab7c65f0c542",
     "InkNotes/Persistence/SegmentedDrawingCodec.swift": "b98a03bd6ce754c2600fda60f7fa4b22c594e78641e2679ca785ccd59af4103b",
-    "InkNotes/Stores/LibraryStore.swift": "a83a74c70157c3b4734615ec2b6f629e2976f04dae500cc69fc13c8681ac1176",
-    "InkNotes/Views/BackupTransferView.swift": "b59e401ab8be5591361481d0bcfe54a24480ec3de80ef9772adb625824a43278",
+    "InkNotes/Stores/LibraryStore.swift": "93caa81158ff01ac7805e3335ca84fa323df4a86f78db14b4f22f089b7c3a57b",
+    "InkNotes/Views/BackupTransferView.swift": "4e0e02a8c1e751263136b480003e21affe212a94f3402c1cd6d7a6ac288ce369",
     "InkNotes/Views/Canvas/PageBackgroundView.swift": "47c92fee4f6c2b6dedfbe489695605458a0346b3aeb3287d5532d8bce11cfc85",
     "InkNotes/Views/Canvas/PencilCanvas.swift": "7649b9655cd04711cc10b27df882401c303b7ff9b1e8119a961e6faa7f8366e3",
-    "InkNotes/Views/LibrarySplitView.swift": "0983fc09cc5bed982d6c0f39eb513b41a465dd4a978d812172917443a8449ee7",
+    "InkNotes/Views/LibrarySplitView.swift": "7db3e8231c99ed5d8fff15c62c12a5c997a2a8139cdf3e7f56555a1a99e40b83",
     "InkNotes/Views/PageEditorView.swift": "5739148e630e512b963c90f1daa0ac9c666ea89c3b1523ab688a4f5ceef4b8c9",
     "InkNotes/Views/PageSourceBrowserView.swift": "61676152a12c0d67e45b80f902046a4a03db15e6f6ca13da09a8da63eb7162a4"
   }

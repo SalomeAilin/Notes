@@ -5,6 +5,8 @@ struct LibrarySplitView: View {
   @Binding var pendingBackupImports: BackupImportQueue
   @AppStorage(BackupSaveStatus.storageKey) private var lastSuccessfulBackupSaveTimestamp = 0.0
   @AppStorage(BackupSaveStatus.legacyRecordStorageKey) private var legacyBackupSaveRecord = Data()
+  @AppStorage(BackupSaveStatus.previousVerifiedRecordStorageKey) private
+    var previousVerifiedBackupSaveRecord = Data()
   @AppStorage(BackupSaveStatus.recordStorageKey) private var lastSuccessfulBackupSaveRecord =
     Data()
   @State private var columnVisibility: NavigationSplitViewVisibility = .all
@@ -231,6 +233,7 @@ struct LibrarySplitView: View {
     BackupSaveEntryPresentation(
       freshness: BackupSaveStatus.freshness(
         recordData: lastSuccessfulBackupSaveRecord,
+        previousVerifiedRecordData: previousVerifiedBackupSaveRecord,
         legacyRecordData: legacyBackupSaveRecord,
         legacyTimestamp: lastSuccessfulBackupSaveTimestamp,
         library: store.library

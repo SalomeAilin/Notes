@@ -28,6 +28,7 @@ private struct PreparedBackup: Sendable {
   let createdAt: Date
   let notebookCount: Int
   let pageCount: Int
+  let libraryRevisionSHA256: String
 
   var transferItem: BackupTransferItem {
     BackupTransferItem(artifact: artifact)
@@ -134,6 +135,8 @@ struct BackupTransferView: View {
   @Binding var importQueue: BackupImportQueue
   @AppStorage(BackupSaveStatus.storageKey) private var lastSuccessfulBackupSaveTimestamp = 0.0
   @AppStorage(BackupSaveStatus.legacyRecordStorageKey) private var legacyBackupSaveRecord = Data()
+  @AppStorage(BackupSaveStatus.previousVerifiedRecordStorageKey) private
+    var previousVerifiedBackupSaveRecord = Data()
   @AppStorage(BackupSaveStatus.recordStorageKey) private var lastSuccessfulBackupSaveRecord =
     Data()
 
@@ -234,9 +237,11 @@ struct BackupTransferView: View {
 
       backupSaveStatusContent
 
-      Text("状态只在刚保存的文件能够完整读回且内容一致时更新；只记录保存时间和当时的笔记本、页数，不记录内容、名称或位置。如果选择网盘，长期同步情况请以网盘中的文件为准。")
-        .font(.footnote)
-        .foregroundStyle(.secondary)
+      Text(
+        "状态只在刚保存的文件能够完整读回且内容一致时更新；只记录保存时间、当时的笔记本和页数，以及不含内容的修订标记，不记录内容、名称或位置。如果选择网盘，长期同步情况请以网盘中的文件为准。"
+      )
+      .font(.footnote)
+      .foregroundStyle(.secondary)
 
       if let preparedBackup {
         LabeledContent("生成时间") {
@@ -338,6 +343,7 @@ struct BackupTransferView: View {
   private var backupSaveFreshness: BackupSaveFreshness {
     BackupSaveStatus.freshness(
       recordData: lastSuccessfulBackupSaveRecord,
+      previousVerifiedRecordData: previousVerifiedBackupSaveRecord,
       legacyRecordData: legacyBackupSaveRecord,
       legacyTimestamp: lastSuccessfulBackupSaveTimestamp,
       library: store.library
@@ -392,7 +398,8 @@ struct BackupTransferView: View {
         ),
         createdAt: result.createdAt,
         notebookCount: result.notebookCount,
-        pageCount: result.pageCount
+        pageCount: result.pageCount,
+        libraryRevisionSHA256: result.libraryRevisionSHA256
       )
       operationMessage = nil
       isExporterPresented = true
@@ -436,7 +443,8 @@ struct BackupTransferView: View {
         if let record = BackupSaveStatus.recordData(
           savedAt: Date(),
           notebookCount: preparedBackup.notebookCount,
-          pageCount: preparedBackup.pageCount
+          pageCount: preparedBackup.pageCount,
+          libraryRevisionSHA256: preparedBackup.libraryRevisionSHA256
         ) {
           lastSuccessfulBackupSaveRecord = record
         }

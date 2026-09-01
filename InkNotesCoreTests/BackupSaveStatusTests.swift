@@ -5,6 +5,13 @@ import Testing
 
 @Suite("Backup save status")
 struct BackupSaveStatusTests {
+  private struct PreviousRecord: Codable {
+    let version: Int
+    let savedAt: Date
+    let notebookCount: Int
+    let pageCount: Int
+  }
+
   @Test("The main backup entry distinguishes four user-facing save states")
   func mainEntryPresentation() {
     let savedAt = Date(timeIntervalSince1970: 2_000_000_000)
@@ -66,7 +73,11 @@ struct BackupSaveStatusTests {
     )
     #expect(BackupSaveStatus.storageKey == "backup.last-successful-save-timestamp.v1")
     #expect(BackupSaveStatus.legacyRecordStorageKey == "backup.last-successful-save-record.v2")
-    #expect(BackupSaveStatus.recordStorageKey == "backup.last-verified-save-record.v3")
+    #expect(
+      BackupSaveStatus.previousVerifiedRecordStorageKey
+        == "backup.last-verified-save-record.v3"
+    )
+    #expect(BackupSaveStatus.recordStorageKey == "backup.last-verified-save-record.v4")
   }
 
   @Test("Missing, corrupt, and implausibly future save times stay hidden")
@@ -88,16 +99,12 @@ struct BackupSaveStatusTests {
     )
   }
 
-  @Test("Matching counts and timestamps show no changes since save")
+  @Test("An exact library revision shows no changes since save")
   func unchangedSinceSave() throws {
     let savedAt = Date(timeIntervalSince1970: 2_000_000_000)
     let library = makeLibrary(updatedAt: savedAt.addingTimeInterval(-1))
     let record = try #require(
-      BackupSaveStatus.recordData(
-        savedAt: savedAt,
-        notebookCount: 1,
-        pageCount: 1
-      )
+      BackupSaveStatus.recordData(savedAt: savedAt, library: library)
     )
 
     #expect(
@@ -110,67 +117,106 @@ struct BackupSaveStatusTests {
     )
   }
 
-  @Test("The saved record contains only time and aggregate counts")
+  @Test("The saved record contains only time, counts, and an opaque revision")
   func recordIsPrivacyMinimal() throws {
     let savedAt = Date(timeIntervalSince1970: 2_000_000_000)
+    let library = makeLibrary(updatedAt: savedAt.addingTimeInterval(-1), pageCount: 5)
     let record = try #require(
-      BackupSaveStatus.recordData(
-        savedAt: savedAt,
-        notebookCount: 2,
-        pageCount: 5
-      )
+      BackupSaveStatus.recordData(savedAt: savedAt, library: library)
     )
     let object = try #require(
       try JSONSerialization.jsonObject(with: record) as? [String: Any]
     )
+    let digest = try #require(object["libraryRevisionSHA256"] as? String)
+    let recordText = try #require(String(data: record, encoding: .utf8))
 
-    #expect(Set(object.keys) == Set(["version", "savedAt", "notebookCount", "pageCount"]))
-    #expect(object["version"] as? Int == 1)
-    #expect(object["notebookCount"] as? Int == 2)
+    #expect(
+      Set(object.keys)
+        == Set([
+          "version", "savedAt", "notebookCount", "pageCount", "libraryRevisionSHA256",
+        ])
+    )
+    #expect(object["version"] as? Int == 2)
+    #expect(object["notebookCount"] as? Int == 1)
     #expect(object["pageCount"] as? Int == 5)
+    #expect(digest.count == 64)
+    #expect(digest.allSatisfy { $0.isNumber || ("a"..."f").contains(String($0)) })
+    #expect(!recordText.contains("笔记本"))
+    #expect(!recordText.contains("页面"))
   }
 
-  @Test("Invalid times and aggregate counts are never persisted")
+  @Test("Titles are excluded while structural revision fields remain covered")
+  func revisionPrivacyAndCoverage() throws {
+    let updatedAt = Date(timeIntervalSince1970: 2_000_000_000)
+    let library = makeLibrary(updatedAt: updatedAt, pageCount: 2)
+    let originalDigest = try #require(BackupSaveStatus.libraryRevisionSHA256(for: library))
+
+    var renamed = library
+    renamed.notebooks[0].title = "完全不同的笔记本名称"
+    renamed.notebooks[0].pages[0].title = "完全不同的页面名称"
+    #expect(BackupSaveStatus.libraryRevisionSHA256(for: renamed) == originalDigest)
+
+    var reordered = library
+    reordered.notebooks[0].pages.swapAt(0, 1)
+    #expect(BackupSaveStatus.libraryRevisionSHA256(for: reordered) != originalDigest)
+
+    var changedBackground = library
+    changedBackground.notebooks[0].pages[0].background = .grid
+    #expect(BackupSaveStatus.libraryRevisionSHA256(for: changedBackground) != originalDigest)
+  }
+
+  @Test("Invalid times, counts, and digests are never persisted")
   func rejectsInvalidRecordInputs() {
     let savedAt = Date(timeIntervalSince1970: 2_000_000_000)
+    let digest = String(repeating: "a", count: 64)
 
     #expect(
       BackupSaveStatus.recordData(
         savedAt: Date(timeIntervalSince1970: .nan),
         notebookCount: 1,
-        pageCount: 1
+        pageCount: 1,
+        libraryRevisionSHA256: digest
       ) == nil
     )
     #expect(
       BackupSaveStatus.recordData(
         savedAt: savedAt,
         notebookCount: 0,
-        pageCount: 1
+        pageCount: 1,
+        libraryRevisionSHA256: digest
       ) == nil
     )
     #expect(
       BackupSaveStatus.recordData(
         savedAt: savedAt,
         notebookCount: 2,
-        pageCount: 1
+        pageCount: 1,
+        libraryRevisionSHA256: digest
+      ) == nil
+    )
+    #expect(
+      BackupSaveStatus.recordData(
+        savedAt: savedAt,
+        notebookCount: 1,
+        pageCount: 1,
+        libraryRevisionSHA256: String(repeating: "A", count: 64)
       ) == nil
     )
   }
 
-  @Test("Newer content or changed counts ask the user to save again")
+  @Test("Any different revision or aggregate count asks the user to save again")
   func changesSinceSave() throws {
     let savedAt = Date(timeIntervalSince1970: 2_000_000_000)
+    let library = makeLibrary(updatedAt: savedAt.addingTimeInterval(-1))
     let record = try #require(
-      BackupSaveStatus.recordData(
-        savedAt: savedAt,
-        notebookCount: 1,
-        pageCount: 1
-      )
+      BackupSaveStatus.recordData(savedAt: savedAt, library: library)
     )
-    let newerLibrary = makeLibrary(updatedAt: savedAt.addingTimeInterval(1))
-    let twoPageLibrary = makeLibrary(
-      updatedAt: savedAt.addingTimeInterval(-1),
-      pageCount: 2
+    var newerLibrary = library
+    newerLibrary.notebooks[0].updatedAt = savedAt.addingTimeInterval(1)
+    newerLibrary.notebooks[0].pages[0].updatedAt = savedAt.addingTimeInterval(1)
+    var twoPageLibrary = library
+    twoPageLibrary.notebooks[0].pages.append(
+      NotePage(title: "新增页面", createdAt: savedAt, updatedAt: savedAt)
     )
 
     #expect(
@@ -191,22 +237,47 @@ struct BackupSaveStatusTests {
     )
   }
 
-  @Test("Legacy and invalid records never claim that current content was saved")
+  @Test("Clock rollback cannot hide a later edit")
+  func clockRollbackStillShowsChanges() throws {
+    let savedAt = Date(timeIntervalSince1970: 2_000_000_000)
+    let library = makeLibrary(updatedAt: savedAt.addingTimeInterval(-1))
+    let record = try #require(
+      BackupSaveStatus.recordData(savedAt: savedAt, library: library)
+    )
+    var editedAfterClockRollback = library
+    editedAfterClockRollback.notebooks[0].updatedAt = savedAt.addingTimeInterval(-3_600)
+    editedAfterClockRollback.notebooks[0].pages[0].updatedAt =
+      savedAt.addingTimeInterval(-3_600)
+
+    #expect(
+      BackupSaveStatus.freshness(
+        recordData: record,
+        legacyTimestamp: 0,
+        library: editedAfterClockRollback,
+        now: savedAt
+      ) == .changedSinceSave(savedAt)
+    )
+  }
+
+  @Test("Previous and legacy records never claim that current content was saved")
   func unknownAndMissingRecords() throws {
     let savedAt = Date(timeIntervalSince1970: 2_000_000_000)
     let library = makeLibrary(updatedAt: savedAt.addingTimeInterval(-1))
-    let legacyRecord = try #require(
-      BackupSaveStatus.recordData(
-        savedAt: savedAt,
-        notebookCount: 1,
-        pageCount: 1
-      )
-    )
+    let previousRecord = try previousRecordData(savedAt: savedAt)
 
     #expect(
       BackupSaveStatus.freshness(
         recordData: Data(),
-        legacyRecordData: legacyRecord,
+        previousVerifiedRecordData: previousRecord,
+        legacyTimestamp: 0,
+        library: library,
+        now: savedAt
+      ) == .unknown(savedAt)
+    )
+    #expect(
+      BackupSaveStatus.freshness(
+        recordData: Data(),
+        legacyRecordData: previousRecord,
         legacyTimestamp: 0,
         library: library,
         now: savedAt
@@ -241,13 +312,8 @@ struct BackupSaveStatusTests {
   @Test("Invalid libraries keep an otherwise valid save record uncertain")
   func invalidLibraryIsUnknown() throws {
     let savedAt = Date(timeIntervalSince1970: 2_000_000_000)
-    let pageID = UUID()
-    let page = NotePage(
-      id: pageID,
-      title: "页面",
-      createdAt: savedAt.addingTimeInterval(-2),
-      updatedAt: savedAt.addingTimeInterval(-1)
-    )
+    let validLibrary = makeLibrary(updatedAt: savedAt.addingTimeInterval(-1))
+    let page = validLibrary.notebooks[0].pages[0]
     let invalidLibrary = LibraryDocument(
       notebooks: [
         Notebook(
@@ -259,11 +325,7 @@ struct BackupSaveStatusTests {
       ]
     )
     let record = try #require(
-      BackupSaveStatus.recordData(
-        savedAt: savedAt,
-        notebookCount: 1,
-        pageCount: 2
-      )
+      BackupSaveStatus.recordData(savedAt: savedAt, library: validLibrary)
     )
 
     #expect(
@@ -273,6 +335,20 @@ struct BackupSaveStatusTests {
         library: invalidLibrary,
         now: savedAt
       ) == .unknown(savedAt)
+    )
+  }
+
+  private func previousRecordData(savedAt: Date) throws -> Data {
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .secondsSince1970
+    encoder.outputFormatting = [.sortedKeys]
+    return try encoder.encode(
+      PreviousRecord(
+        version: 1,
+        savedAt: savedAt,
+        notebookCount: 1,
+        pageCount: 1
+      )
     )
   }
 

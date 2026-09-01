@@ -814,9 +814,17 @@ struct CompatibilityContractTests {
     #expect(transferSource.contains("保存位置和分享对象都由你选择"))
     #expect(transferSource.contains("@AppStorage(BackupSaveStatus.storageKey)"))
     #expect(transferSource.contains("@AppStorage(BackupSaveStatus.legacyRecordStorageKey)"))
+    #expect(
+      transferSource.contains("@AppStorage(BackupSaveStatus.previousVerifiedRecordStorageKey)")
+    )
     #expect(transferSource.contains("@AppStorage(BackupSaveStatus.recordStorageKey)"))
     #expect(libraryViewSource.contains("@AppStorage(BackupSaveStatus.storageKey)"))
     #expect(libraryViewSource.contains("@AppStorage(BackupSaveStatus.legacyRecordStorageKey)"))
+    #expect(
+      libraryViewSource.contains(
+        "@AppStorage(BackupSaveStatus.previousVerifiedRecordStorageKey)"
+      )
+    )
     #expect(libraryViewSource.contains("@AppStorage(BackupSaveStatus.recordStorageKey)"))
     #expect(libraryViewSource.contains("Label(backupEntryPresentation.title"))
     #expect(libraryViewSource.contains("systemImage: backupEntryPresentation.systemImage"))
@@ -871,6 +879,13 @@ struct CompatibilityContractTests {
     #expect(transferSource.contains("expectedData: preparedBackup.artifact.data"))
     #expect(transferSource.contains("notebookCount: preparedBackup.notebookCount"))
     #expect(transferSource.contains("pageCount: preparedBackup.pageCount"))
+    #expect(
+      transferSource.contains(
+        "libraryRevisionSHA256: preparedBackup.libraryRevisionSHA256"
+      )
+    )
+    #expect(transferSource.contains("previousVerifiedRecordData:"))
+    #expect(libraryViewSource.contains("previousVerifiedRecordData:"))
     #expect(!transferSource.contains("lastSuccessfulBackupSaveTimestamp = Date()"))
     let mismatchedSaveRange = try #require(
       transferSource.range(

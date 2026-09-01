@@ -27,6 +27,7 @@ struct BackupExportResult: Equatable, Sendable {
   let createdAt: Date
   let notebookCount: Int
   let pageCount: Int
+  let libraryRevisionSHA256: String
 }
 
 private struct PendingLibraryDeletionUndo: Sendable {
@@ -449,6 +450,9 @@ final class LibraryStore: ObservableObject {
     let snapshot = library
     let drawingOverrides = drawingOverridesForBackupSnapshot()
     let createdAt = Date()
+    guard let libraryRevisionSHA256 = BackupSaveStatus.libraryRevisionSHA256(for: snapshot) else {
+      throw LibraryStoreError.backupUnavailable
+    }
     let data = try await repository.makeBackup(
       library: snapshot,
       drawingOverrides: drawingOverrides,
@@ -462,7 +466,8 @@ final class LibraryStore: ObservableObject {
       data: data,
       createdAt: createdAt,
       notebookCount: snapshot.notebooks.count,
-      pageCount: snapshot.notebooks.reduce(0) { $0 + $1.pages.count }
+      pageCount: snapshot.notebooks.reduce(0) { $0 + $1.pages.count },
+      libraryRevisionSHA256: libraryRevisionSHA256
     )
   }
 
