@@ -86,8 +86,25 @@ struct CompatibilityContractTests {
       contentsOf: repositoryRoot.appendingPathComponent("InkNotes/Views/LibrarySplitView.swift"),
       encoding: .utf8
     )
+    let editorSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent("InkNotes/Views/PageEditorView.swift"),
+      encoding: .utf8
+    )
     #expect(!storeSource.contains("名称过长：最多允许"))
     #expect(!libraryViewSource.contains("应用沙盒"))
+    #expect(!libraryViewSource.contains("删除后暂时无法在应用内恢复"))
+    #expect(libraryViewSource.contains("删除后可以立即撤销一次"))
+    #expect(libraryViewSource.contains("Text(\"撤销删除\")"))
+    #expect(libraryViewSource.contains("你仍可以从此前保存的备份导入"))
+    #expect(storeSource.contains("func undoLastDeletion() async -> Bool"))
+    #expect(storeSource.contains("library == undo.afterLibrary"))
+    #expect(
+      storeSource.contains(
+        "try await repository.saveDrawingForEditing(undo.selectedDrawingBefore, pageID: pageID)"
+      )
+    )
+    #expect(storeSource.contains("try await repository.saveLibrary(undo.beforeLibrary)"))
+    #expect(editorSource.contains("isEditable: store.canManageBackups"))
   }
 
   @Test("Repository writes the historical directory and filename layout")

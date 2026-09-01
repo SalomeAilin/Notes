@@ -7,6 +7,7 @@ struct LibrarySplitView: View {
   @State private var namingAction: NamingAction?
   @State private var draftTitle = ""
   @State private var deletionTarget: DeletionTarget?
+  @State private var deletionNotice: DeletionNotice?
   @State private var showingBackupTransfer = false
   @State private var backupImportPresentationCoordinator =
     BackupImportPresentationCoordinator()
@@ -59,7 +60,34 @@ struct LibrarySplitView: View {
         deletionTarget = nil
       }
     } message: {
-      Text("删除后暂时无法在应用内恢复。请确认不再需要这项内容。")
+      Text("删除后可以立即撤销一次。关闭撤销提示后，如需找回，请从此前保存的备份导入。")
+    }
+    .alert(item: $deletionNotice) { notice in
+      switch notice {
+      case .undoAvailable(let target):
+        Alert(
+          title: Text("已删除\(target.kindName)“\(target.itemTitle)”"),
+          message: Text("如果删错了，现在可以撤销。关闭这个提示后，如需找回，请从备份导入。"),
+          primaryButton: .default(Text("撤销删除")) {
+            undoDeletion(target)
+          },
+          secondaryButton: .cancel(Text("完成")) {
+            store.discardLastDeletionUndo()
+          }
+        )
+      case .restored(let target):
+        Alert(
+          title: Text("已撤销删除"),
+          message: Text("\(target.kindName)“\(target.itemTitle)”已恢复到原来的位置。"),
+          dismissButton: .default(Text("知道了"))
+        )
+      case .failed:
+        Alert(
+          title: Text("暂时无法撤销"),
+          message: Text("为避免覆盖后来的修改，没有恢复这次删除。你仍可以从此前保存的备份导入。"),
+          dismissButton: .default(Text("知道了"))
+        )
+      }
     }
     .alert("本地数据提示", isPresented: persistenceAlertIsPresented) {
       Button("知道了") {
@@ -119,7 +147,7 @@ struct LibrarySplitView: View {
             }
           }
         }
-        .disabled(store.isDrawingLoading || store.isBackupTransferInProgress)
+        .disabled(!store.canManageBackups)
       }
     }
     .navigationTitle("笔记本")
@@ -172,7 +200,7 @@ struct LibrarySplitView: View {
             }
           }
         }
-        .disabled(store.isDrawingLoading || store.isBackupTransferInProgress)
+        .disabled(!store.canManageBackups)
       } else {
         ContentUnavailableView("没有页面", systemImage: "doc")
       }
@@ -210,7 +238,7 @@ struct LibrarySplitView: View {
       isLibraryLoading: store.isLoading,
       isDrawingLoading: store.isDrawingLoading,
       hasNamingAlert: namingAction != nil,
-      hasDeletionDialog: deletionTarget != nil,
+      hasDeletionDialog: deletionTarget != nil || deletionNotice != nil,
       hasPersistenceAlert: store.persistenceError != nil
     )
   }
@@ -260,13 +288,27 @@ struct LibrarySplitView: View {
 
   private func performDeletion() {
     guard let target = deletionTarget else { return }
+    let didDelete: Bool
     switch target {
     case .notebook(let id, _):
-      store.deleteNotebook(id: id)
+      didDelete = store.deleteNotebook(id: id)
     case .page(let id, _):
-      store.deletePage(id: id)
+      didDelete = store.deletePage(id: id)
     }
     deletionTarget = nil
+    if didDelete {
+      deletionNotice = .undoAvailable(target)
+    }
+  }
+
+  private func undoDeletion(_ target: DeletionTarget) {
+    Task {
+      if await store.undoLastDeletion() {
+        deletionNotice = .restored(target)
+      } else {
+        deletionNotice = .failed
+      }
+    }
   }
 }
 
@@ -301,6 +343,33 @@ private enum DeletionTarget {
     switch self {
     case .notebook(_, let title): "删除笔记本“\(title)”？"
     case .page(_, let title): "删除页面“\(title)”？"
+    }
+  }
+
+  var kindName: String {
+    switch self {
+    case .notebook: "笔记本"
+    case .page: "页面"
+    }
+  }
+
+  var itemTitle: String {
+    switch self {
+    case .notebook(_, let title), .page(_, let title): title
+    }
+  }
+}
+
+private enum DeletionNotice: Identifiable {
+  case undoAvailable(DeletionTarget)
+  case restored(DeletionTarget)
+  case failed
+
+  var id: String {
+    switch self {
+    case .undoAvailable(let target): "undo-\(target.itemTitle)"
+    case .restored(let target): "restored-\(target.itemTitle)"
+    case .failed: "failed"
     }
   }
 }

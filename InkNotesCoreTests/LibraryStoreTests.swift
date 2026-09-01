@@ -451,6 +451,115 @@ struct LibraryStoreTests {
     #expect(store.persistenceError?.contains("名称太长") == true)
   }
 
+  @Test("Undoing a selected-page deletion durably restores its content and selection")
+  @MainActor
+  func selectedPageDeletionCanBeUndone() async throws {
+    let rootURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+
+    let repository = DrawingRepository(rootURL: rootURL)
+    let store = LibraryStore(repository: repository)
+    try await waitUntil { !store.isLoading }
+    let pageID = try #require(store.selectedPageID)
+    let drawing = try serializedStrokeDrawing()
+    let source = PageSourceExcerpt(
+      title: "撤销来源",
+      excerpt: "这段内容应随刚删除的页面一起恢复。",
+      sourceURL: URL(string: "https://example.com/undo")!,
+      capturedAt: Date(timeIntervalSince1970: 1_700_000_100)
+    )
+    store.updateCurrentDrawing(drawing)
+    try await store.savePageSource(source, to: pageID)
+    let libraryBeforeDeletion = store.library
+    let notebookIDBeforeDeletion = store.selectedNotebookID
+
+    #expect(store.deletePage(id: pageID))
+    #expect(store.selectedPageID != pageID)
+    #expect(await store.undoLastDeletion())
+
+    #expect(store.library == libraryBeforeDeletion)
+    #expect(store.selectedNotebookID == notebookIDBeforeDeletion)
+    #expect(store.selectedPageID == pageID)
+    #expect(store.currentDrawingData == drawing)
+    #expect(store.currentPageSources == [source])
+    await store.flush()
+    let persistedLibrary = try #require(try await repository.loadLibrary())
+    #expect(persistedLibrary.schemaVersion == libraryBeforeDeletion.schemaVersion)
+    #expect(persistedLibrary.notebooks.map(\.id) == libraryBeforeDeletion.notebooks.map(\.id))
+    #expect(persistedLibrary.notebooks.map(\.title) == libraryBeforeDeletion.notebooks.map(\.title))
+    #expect(
+      persistedLibrary.notebooks.flatMap(\.pages).map(\.id)
+        == libraryBeforeDeletion.notebooks.flatMap(\.pages).map(\.id)
+    )
+    #expect(
+      persistedLibrary.notebooks.flatMap(\.pages).map(\.background)
+        == libraryBeforeDeletion.notebooks.flatMap(\.pages).map(\.background)
+    )
+    let persistedPage = try #require(persistedLibrary.notebooks.first?.pages.first)
+    let originalPage = try #require(libraryBeforeDeletion.notebooks.first?.pages.first)
+    #expect(abs(persistedPage.updatedAt.timeIntervalSince(originalPage.updatedAt)) < 0.001)
+    #expect(try await repository.loadDrawing(pageID: pageID) == drawing)
+    #expect(try await repository.loadPageSources(pageID: pageID) == [source])
+  }
+
+  @Test("Undoing a nonselected notebook deletion restores its original order")
+  @MainActor
+  func nonselectedNotebookDeletionCanBeUndone() async throws {
+    let rootURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+
+    let firstPage = NotePage(title: "当前页")
+    let secondPage = NotePage(title: "另一页")
+    let firstNotebook = Notebook(title: "当前笔记本", pages: [firstPage])
+    let secondNotebook = Notebook(title: "待删除笔记本", pages: [secondPage])
+    let library = LibraryDocument(notebooks: [firstNotebook, secondNotebook])
+    let repository = DrawingRepository(rootURL: rootURL)
+    try await repository.saveLibrary(library)
+    let store = LibraryStore(repository: repository)
+    try await waitUntil { !store.isLoading }
+    let libraryBeforeDeletion = store.library
+
+    #expect(store.deleteNotebook(id: secondNotebook.id))
+    #expect(store.notebooks.map(\.id) == [firstNotebook.id])
+    #expect(await store.undoLastDeletion())
+
+    #expect(store.library == libraryBeforeDeletion)
+    #expect(store.notebooks.map(\.id) == [firstNotebook.id, secondNotebook.id])
+    #expect(store.selectedNotebookID == firstNotebook.id)
+    #expect(store.selectedPageID == firstPage.id)
+    await store.flush()
+    let persistedLibrary = try #require(try await repository.loadLibrary())
+    #expect(persistedLibrary == libraryBeforeDeletion)
+  }
+
+  @Test("Undoing deletion fails closed after a later directory edit")
+  @MainActor
+  func staleDeletionUndoDoesNotOverwriteLaterEdit() async throws {
+    let rootURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: rootURL) }
+
+    let firstPage = NotePage(title: "保留页")
+    let secondPage = NotePage(title: "删除页")
+    let notebook = Notebook(title: "测试笔记本", pages: [firstPage, secondPage])
+    let repository = DrawingRepository(rootURL: rootURL)
+    try await repository.saveLibrary(LibraryDocument(notebooks: [notebook]))
+    let store = LibraryStore(repository: repository)
+    try await waitUntil { !store.isLoading }
+
+    #expect(store.deletePage(id: secondPage.id))
+    store.renamePage(id: firstPage.id, title: "删除后的新名称")
+    #expect(!(await store.undoLastDeletion()))
+
+    #expect(store.selectedPage?.title == "删除后的新名称")
+    #expect(store.selectedNotebook?.pages.contains(where: { $0.id == secondPage.id }) == false)
+    await store.flush()
+    let persisted = try #require(try await repository.loadLibrary())
+    #expect(persisted.notebooks[0].pages.map(\.title) == ["删除后的新名称"])
+  }
+
   @Test("A page that would exceed the v1 manifest budget leaves store state unchanged")
   @MainActor
   func manifestOverflowPageIsRejectedAtomically() async throws {

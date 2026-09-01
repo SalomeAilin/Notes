@@ -29,6 +29,18 @@ struct BackupExportResult: Equatable, Sendable {
   let pageCount: Int
 }
 
+private struct PendingLibraryDeletionUndo: Sendable {
+  let beforeLibrary: LibraryDocument
+  let afterLibrary: LibraryDocument
+  let selectedNotebookIDBefore: UUID?
+  let selectedPageIDBefore: UUID?
+  let selectedDrawingBefore: Data
+  let selectedSourcesBefore: [PageSourceExcerpt]
+  let selectedNotebookIDAfter: UUID?
+  let selectedPageIDAfter: UUID?
+  let restoresSelectedContent: Bool
+}
+
 @MainActor
 final class LibraryStore: ObservableObject {
   @Published private(set) var library = LibraryDocument.starter()
@@ -41,6 +53,7 @@ final class LibraryStore: ObservableObject {
   @Published private(set) var isReadOnly = false
   @Published private(set) var isBackupTransferInProgress = false
   @Published private(set) var isPageSourceSaveInProgress = false
+  @Published private(set) var isDeletionUndoInProgress = false
   @Published private(set) var persistenceError: String?
 
   private let repository: DrawingRepository
@@ -49,6 +62,7 @@ final class LibraryStore: ObservableObject {
   private var drawingTransitionTask: Task<Void, Never>?
   private var backupTransferWaiters: [CheckedContinuation<Void, Never>] = []
   private var unsavedDrawings: [UUID: Data] = [:]
+  private var pendingDeletionUndo: PendingLibraryDeletionUndo?
 
   init(repository: DrawingRepository = DrawingRepository()) {
     self.repository = repository
@@ -69,13 +83,11 @@ final class LibraryStore: ObservableObject {
 
   var canManageBackups: Bool {
     !isLoading && !isDrawingLoading && !isReadOnly && !isBackupTransferInProgress
-      && !isPageSourceSaveInProgress
+      && !isPageSourceSaveInProgress && !isDeletionUndoInProgress
   }
 
   func selectNotebook(_ id: UUID) {
-    guard !isLoading, !isDrawingLoading, !isBackupTransferInProgress,
-      !isPageSourceSaveInProgress,
-      id != selectedNotebookID
+    guard canEdit, id != selectedNotebookID
     else { return }
     guard let notebook = library.notebooks.first(where: { $0.id == id }),
       let page = notebook.pages.first
@@ -93,9 +105,7 @@ final class LibraryStore: ObservableObject {
   }
 
   func selectPage(_ id: UUID) {
-    guard !isLoading, !isDrawingLoading, !isBackupTransferInProgress,
-      !isPageSourceSaveInProgress,
-      id != selectedPageID
+    guard canEdit, id != selectedPageID
     else { return }
     guard selectedNotebook?.pages.contains(where: { $0.id == id }) == true else { return }
 
@@ -198,11 +208,17 @@ final class LibraryStore: ObservableObject {
     scheduleLibrarySave()
   }
 
-  func deleteNotebook(id: UUID) {
+  @discardableResult
+  func deleteNotebook(id: UUID) -> Bool {
     guard canEdit,
       let index = library.notebooks.firstIndex(where: { $0.id == id })
-    else { return }
+    else { return false }
 
+    let beforeLibrary = library
+    let selectedNotebookIDBefore = selectedNotebookID
+    let selectedPageIDBefore = selectedPageID
+    let selectedDrawingBefore = currentDrawingData
+    let selectedSourcesBefore = currentPageSources
     let deletingSelection = selectedNotebookID == id
     let previousPageID = deletingSelection ? selectedPageID : nil
     let previousDrawing = deletingSelection ? currentDrawingData : Data()
@@ -212,7 +228,7 @@ final class LibraryStore: ObservableObject {
     if candidate.notebooks.isEmpty {
       candidate = .starter()
     }
-    guard acceptManifestCandidate(candidate, allowNonGrowingOverLimit: true) else { return }
+    guard acceptManifestCandidate(candidate, allowNonGrowingOverLimit: true) else { return false }
 
     if deletingSelection,
       let notebook = library.notebooks.first,
@@ -226,12 +242,30 @@ final class LibraryStore: ObservableObject {
         to: page.id
       )
     }
+    pendingDeletionUndo = PendingLibraryDeletionUndo(
+      beforeLibrary: beforeLibrary,
+      afterLibrary: library,
+      selectedNotebookIDBefore: selectedNotebookIDBefore,
+      selectedPageIDBefore: selectedPageIDBefore,
+      selectedDrawingBefore: selectedDrawingBefore,
+      selectedSourcesBefore: selectedSourcesBefore,
+      selectedNotebookIDAfter: selectedNotebookID,
+      selectedPageIDAfter: selectedPageID,
+      restoresSelectedContent: deletingSelection
+    )
     scheduleLibrarySave()
+    return true
   }
 
-  func deletePage(id: UUID) {
-    guard canEdit, let location = pageLocation(id: id) else { return }
+  @discardableResult
+  func deletePage(id: UUID) -> Bool {
+    guard canEdit, let location = pageLocation(id: id) else { return false }
 
+    let beforeLibrary = library
+    let selectedNotebookIDBefore = selectedNotebookID
+    let selectedPageIDBefore = selectedPageID
+    let selectedDrawingBefore = currentDrawingData
+    let selectedSourcesBefore = currentPageSources
     let deletingSelection = selectedPageID == id
     let previousDrawing = deletingSelection ? currentDrawingData : Data()
     var candidate = library
@@ -241,7 +275,7 @@ final class LibraryStore: ObservableObject {
       candidate.notebooks[location.notebook].pages = [NotePage(title: "第 1 页")]
     }
     candidate.notebooks[location.notebook].updatedAt = Date()
-    guard acceptManifestCandidate(candidate, allowNonGrowingOverLimit: true) else { return }
+    guard acceptManifestCandidate(candidate, allowNonGrowingOverLimit: true) else { return false }
 
     if deletingSelection,
       let page = library.notebooks[location.notebook].pages.first
@@ -253,7 +287,70 @@ final class LibraryStore: ObservableObject {
         to: page.id
       )
     }
+    pendingDeletionUndo = PendingLibraryDeletionUndo(
+      beforeLibrary: beforeLibrary,
+      afterLibrary: library,
+      selectedNotebookIDBefore: selectedNotebookIDBefore,
+      selectedPageIDBefore: selectedPageIDBefore,
+      selectedDrawingBefore: selectedDrawingBefore,
+      selectedSourcesBefore: selectedSourcesBefore,
+      selectedNotebookIDAfter: selectedNotebookID,
+      selectedPageIDAfter: selectedPageID,
+      restoresSelectedContent: deletingSelection
+    )
     scheduleLibrarySave()
+    return true
+  }
+
+  func undoLastDeletion() async -> Bool {
+    guard !isDeletionUndoInProgress, let undo = pendingDeletionUndo else { return false }
+    guard library == undo.afterLibrary,
+      selectedNotebookID == undo.selectedNotebookIDAfter,
+      selectedPageID == undo.selectedPageIDAfter
+    else {
+      pendingDeletionUndo = nil
+      return false
+    }
+    pendingDeletionUndo = nil
+    isDeletionUndoInProgress = true
+    defer { isDeletionUndoInProgress = false }
+
+    await finishScheduledPersistence()
+    guard !isLoading, !isDrawingLoading, !isReadOnly, !isBackupTransferInProgress,
+      !isPageSourceSaveInProgress,
+      library == undo.afterLibrary,
+      selectedNotebookID == undo.selectedNotebookIDAfter,
+      selectedPageID == undo.selectedPageIDAfter
+    else { return false }
+
+    do {
+      if undo.restoresSelectedContent, let pageID = undo.selectedPageIDBefore {
+        try await repository.saveDrawingForEditing(undo.selectedDrawingBefore, pageID: pageID)
+      }
+      try await repository.saveLibrary(undo.beforeLibrary)
+    } catch {
+      report(error, prefix: "撤销删除失败")
+      return false
+    }
+
+    library = undo.beforeLibrary
+    selectedNotebookID = undo.selectedNotebookIDBefore
+    selectedPageID = undo.selectedPageIDBefore
+    if undo.restoresSelectedContent {
+      currentDrawingData = undo.selectedDrawingBefore
+      currentPageSources = undo.selectedSourcesBefore
+      if let pageID = undo.selectedPageIDBefore,
+        unsavedDrawings[pageID] == undo.selectedDrawingBefore
+      {
+        unsavedDrawings.removeValue(forKey: pageID)
+      }
+    }
+    persistenceError = nil
+    return true
+  }
+
+  func discardLastDeletionUndo() {
+    pendingDeletionUndo = nil
   }
 
   func updateCurrentDrawing(_ data: Data) {
