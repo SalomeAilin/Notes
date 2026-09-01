@@ -264,6 +264,74 @@ enum BaiduBrokerExchangeFixedErrorV1: String, Sendable {
   case temporarilyUnavailable = "temporarily_unavailable"
 }
 
+/// A small, stable set of outcomes that future UI can explain without exposing protocol details.
+/// Suggested actions are labels only; this type never retries or starts a connection by itself.
+enum BaiduConnectionFailureV1: Equatable, Sendable {
+  case notAuthorized
+  case connectionExpired
+  case temporarilyUnavailable
+  case connectionFailed
+
+  init(authorizationError: BaiduBrokerAuthorizationFixedErrorV1) {
+    switch authorizationError {
+    case .authorizationDenied:
+      self = .notAuthorized
+    case .temporarilyUnavailable:
+      self = .temporarilyUnavailable
+    case .serverError:
+      self = .connectionFailed
+    }
+  }
+
+  init(exchangeError: BaiduBrokerExchangeFixedErrorV1) {
+    switch exchangeError {
+    case .ticketInvalid, .ticketExpired, .ticketReplayed, .stateMismatch:
+      self = .connectionExpired
+    case .authorizationDenied:
+      self = .notAuthorized
+    case .temporarilyUnavailable:
+      self = .temporarilyUnavailable
+    case .serverError:
+      self = .connectionFailed
+    }
+  }
+
+  var title: String {
+    switch self {
+    case .notAuthorized:
+      "没有连接百度网盘"
+    case .connectionExpired:
+      "连接已过期"
+    case .temporarilyUnavailable:
+      "暂时无法连接"
+    case .connectionFailed:
+      "连接没有完成"
+    }
+  }
+
+  var message: String {
+    switch self {
+    case .notAuthorized:
+      "这次没有完成连接，笔记没有上传。需要时可以重新连接。"
+    case .connectionExpired:
+      "这次连接已经失效，笔记没有上传。请重新连接后再试。"
+    case .temporarilyUnavailable:
+      "百度网盘当前暂时不可用，笔记没有上传。请稍后再试。"
+    case .connectionFailed:
+      "这次连接没有完成，笔记没有上传。请稍后再试。"
+    }
+  }
+
+  var suggestedActionTitle: String {
+    switch self {
+    case .notAuthorized, .connectionExpired:
+      "重新连接"
+    case .temporarilyUnavailable, .connectionFailed:
+      "稍后再试"
+    }
+  }
+}
+
 /// A syntax-only callback parse. Parsing does not establish broker identity or message origin.
 struct BaiduBrokerUntrustedParsedCallbackV1: Sendable, CustomStringConvertible,
   CustomDebugStringConvertible, CustomReflectable
@@ -825,8 +893,8 @@ enum BaiduBrokerAuthorizationTerminalV1: Equatable, Sendable {
   case cancelled
   case attemptExpired
   case exchangeWindowExpired
-  case authorizationFixedError
-  case exchangeFixedError
+  case authorizationFixedError(BaiduConnectionFailureV1)
+  case exchangeFixedError(BaiduConnectionFailureV1)
   /// The payload passed local format checks only; broker authenticity remains out of scope.
   case parsedCredentialFormatAccepted
   case protocolFailure
@@ -840,13 +908,13 @@ struct BaiduBrokerAuthorizationSnapshotV1: Equatable, Sendable {
 
 enum BaiduBrokerCallbackAcceptanceV1: Equatable, Sendable {
   case exchangeReady
-  case endedWithFixedError
+  case endedWithFixedError(BaiduConnectionFailureV1)
 }
 
 enum BaiduBrokerExchangeAcceptanceV1: Equatable, Sendable {
   /// The payload passed local format checks only; broker authenticity remains out of scope.
   case parsedCredentialFormatAccepted
-  case endedWithFixedError
+  case endedWithFixedError(BaiduConnectionFailureV1)
 }
 
 /// Process-wide replay memory. It never evicts: reaching either bound fails closed.
@@ -1073,10 +1141,11 @@ actor BaiduBrokerAuthorizationSessionV1 {
         dispatched: false
       )
       return .exchangeReady
-    case .fixedError:
+    case .fixedError(let error):
+      let failure = BaiduConnectionFailureV1(authorizationError: error)
       active = nil
-      terminal = .authorizationFixedError
-      return .endedWithFixedError
+      terminal = .authorizationFixedError(failure)
+      return .endedWithFixedError(failure)
     }
   }
 
@@ -1152,10 +1221,10 @@ actor BaiduBrokerAuthorizationSessionV1 {
       terminal = .parsedCredentialFormatAccepted
       return .parsedCredentialFormatAccepted
     case .fixedError(let payload):
-      _ = payload.error
+      let failure = BaiduConnectionFailureV1(exchangeError: payload.error)
       active = nil
-      terminal = .exchangeFixedError
-      return .endedWithFixedError
+      terminal = .exchangeFixedError(failure)
+      return .endedWithFixedError(failure)
     }
   }
 
@@ -1285,7 +1354,7 @@ actor BaiduBrokerAuthorizationSessionV1 {
     case .cancelled: .cancelled
     case .attemptExpired: .attemptExpired
     case .exchangeWindowExpired: .exchangeWindowExpired
-    case .authorizationFixedError, .exchangeFixedError, .parsedCredentialFormatAccepted,
+    case .authorizationFixedError(_), .exchangeFixedError(_), .parsedCredentialFormatAccepted,
       .protocolFailure:
       .lateResponse
     }

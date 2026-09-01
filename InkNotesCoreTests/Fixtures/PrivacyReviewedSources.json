@@ -14,7 +14,7 @@
     "InkNotes/Models/BackupImportRequest.swift": "915c70f83cfaa580591fa681cd27c4fc6114bb168b6964cb6646e9f1e1cfbf40",
     "InkNotes/Models/BackupSaveStatus.swift": "c8c4adc8657b7109e6cb101b8ad4a265996b01a50cc9a606c3643c948cabe119",
     "InkNotes/Models/BaiduAccountCredential.swift": "b6bdac95c015b5da7e756db2843a71e150a3239d6d249ccba0314cf0d694e4af",
-    "InkNotes/Models/BaiduBrokerProtocolV1.swift": "558de36d0fdfc636c19bcbfe2be759291dfaf04a419483d8c2a10dc1a7abc631",
+    "InkNotes/Models/BaiduBrokerProtocolV1.swift": "9d639d7fd1c89cd8aae1430b281c1016e9403bb7c98ce3abe2876bcd92da753c",
     "InkNotes/Models/BaiduNetdiskAccount.swift": "4bf01000654ba46a322b0514711e0dc3b15a9f1397fb8348f8a4b56afcc80092",
     "InkNotes/Models/BaiduNetdiskBackup.swift": "d4fb9e16a2053931533418f98910d666feb59f90be957d22688677a9b5be1f56",
     "InkNotes/Models/ContinuousCanvasGeometry.swift": "09ca5d28348ff9177ee4303ec319e9bb98c85282d58694307b75f135496f2233",

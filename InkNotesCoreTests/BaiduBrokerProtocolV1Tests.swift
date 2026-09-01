@@ -548,7 +548,12 @@ struct BaiduBrokerProtocolV1Tests {
 
   @Test("Authorization fixed errors terminate without opening exchange")
   func authorizationFixedErrorsTerminate() async throws {
-    for error in ["authorization_denied", "temporarily_unavailable", "server_error"] {
+    let cases: [(String, BaiduConnectionFailureV1)] = [
+      ("authorization_denied", .notAuthorized),
+      ("temporarily_unavailable", .temporarilyUnavailable),
+      ("server_error", .connectionFailed),
+    ]
+    for (error, expectedFailure) in cases {
       let environment = BrokerTestEnvironment(wallNow: Self.now)
       let session = environment.session()
       let attempt = try await session.begin()
@@ -559,11 +564,35 @@ struct BaiduBrokerProtocolV1Tests {
           error: error
         )
       )
-      #expect(try await session.acceptOriginBoundCallback(callback) == .endedWithFixedError)
-      #expect(await session.snapshot().terminal == .authorizationFixedError)
+      #expect(
+        try await session.acceptOriginBoundCallback(callback)
+          == .endedWithFixedError(expectedFailure)
+      )
+      #expect(
+        await session.snapshot().terminal == .authorizationFixedError(expectedFailure)
+      )
       await #expect(throws: BaiduBrokerProtocolV1Error.lateResponse) {
         try await session.acceptOriginBoundCallback(callback)
       }
+    }
+  }
+
+  @Test("Connection failures give plain next steps and never imply an upload")
+  func userFacingFailureGuidance() {
+    let cases: [(BaiduConnectionFailureV1, String)] = [
+      (.notAuthorized, "重新连接"),
+      (.connectionExpired, "重新连接"),
+      (.temporarilyUnavailable, "稍后再试"),
+      (.connectionFailed, "稍后再试"),
+    ]
+    let forbiddenTerms = ["oauth", "broker", "ticket", "token", "state", "error", "错误码"]
+
+    for (failure, expectedAction) in cases {
+      let text = "\(failure.title) \(failure.message) \(failure.suggestedActionTitle)"
+      #expect(!failure.title.isEmpty)
+      #expect(failure.message.contains("笔记没有上传"))
+      #expect(failure.suggestedActionTitle == expectedAction)
+      #expect(forbiddenTerms.allSatisfy { !text.lowercased().contains($0) })
     }
   }
 
@@ -715,11 +744,16 @@ struct BaiduBrokerProtocolV1Tests {
 
   @Test("All seven frozen exchange errors parse and terminate without credential output")
   func frozenExchangeErrors() async throws {
-    let errors = [
-      "ticket_invalid", "ticket_expired", "ticket_replayed", "state_mismatch",
-      "authorization_denied", "temporarily_unavailable", "server_error",
+    let cases: [(String, BaiduConnectionFailureV1)] = [
+      ("ticket_invalid", .connectionExpired),
+      ("ticket_expired", .connectionExpired),
+      ("ticket_replayed", .connectionExpired),
+      ("state_mismatch", .connectionExpired),
+      ("authorization_denied", .notAuthorized),
+      ("temporarily_unavailable", .temporarilyUnavailable),
+      ("server_error", .connectionFailed),
     ]
-    for error in errors {
+    for (error, expectedFailure) in cases {
       let environment = BrokerTestEnvironment(wallNow: Self.now)
       let session = environment.session()
       let attempt = try await Self.advanceToExchange(session)
@@ -727,9 +761,12 @@ struct BaiduBrokerProtocolV1Tests {
         data: Self.exchangeErrorResponse(for: attempt, error: error)
       )
       #expect(
-        try await session.acceptOriginBoundExchangeResponse(response) == .endedWithFixedError
+        try await session.acceptOriginBoundExchangeResponse(response)
+          == .endedWithFixedError(expectedFailure)
       )
-      #expect(await session.snapshot().terminal == .exchangeFixedError)
+      #expect(
+        await session.snapshot().terminal == .exchangeFixedError(expectedFailure)
+      )
     }
     let environment = BrokerTestEnvironment(wallNow: Self.now)
     let attempt = try await environment.session().begin()
