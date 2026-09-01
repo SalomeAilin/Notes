@@ -128,6 +128,7 @@ struct BackupTransferView: View {
   @EnvironmentObject private var store: LibraryStore
   @Binding var importQueue: BackupImportQueue
   @AppStorage(BackupSaveStatus.storageKey) private var lastSuccessfulBackupSaveTimestamp = 0.0
+  @AppStorage(BackupSaveStatus.legacyRecordStorageKey) private var legacyBackupSaveRecord = Data()
   @AppStorage(BackupSaveStatus.recordStorageKey) private var lastSuccessfulBackupSaveRecord =
     Data()
 
@@ -228,7 +229,7 @@ struct BackupTransferView: View {
 
       backupSaveStatusContent
 
-      Text("这里只记录保存时间和当时的笔记本、页数，不记录内容、名称或位置；如果选择网盘，请以网盘中的文件为准。")
+      Text("状态只在刚保存的文件能够完整读回且内容一致时更新；只记录保存时间和当时的笔记本、页数，不记录内容、名称或位置。如果选择网盘，长期同步情况请以网盘中的文件为准。")
         .font(.footnote)
         .foregroundStyle(.secondary)
 
@@ -332,6 +333,7 @@ struct BackupTransferView: View {
   private var backupSaveFreshness: BackupSaveFreshness {
     BackupSaveStatus.freshness(
       recordData: lastSuccessfulBackupSaveRecord,
+      legacyRecordData: legacyBackupSaveRecord,
       legacyTimestamp: lastSuccessfulBackupSaveTimestamp,
       library: store.library
     )
@@ -397,22 +399,62 @@ struct BackupTransferView: View {
 
   private func handleExportResult(_ result: Result<URL, Error>) {
     switch result {
-    case .success:
-      if let preparedBackup,
-        let record = BackupSaveStatus.recordData(
+    case .success(let url):
+      Task {
+        await verifySavedBackup(at: url)
+      }
+    case .failure(let error):
+      presentFilePickerFailure(error, action: "保存备份失败")
+    }
+  }
+
+  @MainActor
+  private func verifySavedBackup(at url: URL) async {
+    guard let preparedBackup else {
+      notice = BackupTransferNotice(
+        title: "备份可能已保存",
+        message: "系统已完成保存，但应用没有找到本次备份用于核对；保存状态未更新。请在所选位置检查文件，必要时重新保存。"
+      )
+      return
+    }
+
+    operationMessage = "正在确认刚保存的备份…"
+    defer { operationMessage = nil }
+
+    do {
+      let verification = try await BackupSavedFileVerifier().verify(
+        fileURL: url,
+        expectedData: preparedBackup.artifact.data
+      )
+      switch verification {
+      case .verified:
+        if let record = BackupSaveStatus.recordData(
           savedAt: Date(),
           notebookCount: preparedBackup.notebookCount,
           pageCount: preparedBackup.pageCount
+        ) {
+          lastSuccessfulBackupSaveRecord = record
+        }
+        notice = BackupTransferNotice(
+          title: "备份已保存并确认",
+          message: "已确认刚保存的文件与本次备份一致。若选择了网盘，长期同步情况仍以网盘中的实际文件为准。"
         )
-      {
-        lastSuccessfulBackupSaveRecord = record
+      case .contentMismatch:
+        notice = BackupTransferNotice(
+          title: "保存结果需要检查",
+          message: "重新读取的文件与刚生成的备份不一致，保存状态未更新。请换一个位置重新保存。"
+        )
       }
+    } catch is CancellationError {
       notice = BackupTransferNotice(
-        title: "备份已保存",
-        message: "未加密备份已保存到你选择的位置，请确认该位置值得信任。"
+        title: "未完成保存确认",
+        message: "没有完成刚保存文件的读取核对，保存状态未更新。请在所选位置检查文件，必要时重新保存。"
       )
-    case .failure(let error):
-      presentFilePickerFailure(error, action: "保存备份失败")
+    } catch {
+      notice = BackupTransferNotice(
+        title: "备份可能已保存",
+        message: "系统已完成保存，但应用暂时无法重新读取确认，保存状态未更新。请在所选位置检查文件，必要时重新保存。"
+      )
     }
   }
 

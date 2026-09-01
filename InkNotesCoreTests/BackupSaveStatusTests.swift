@@ -24,7 +24,8 @@ struct BackupSaveStatusTests {
       ) == allowedFutureTime
     )
     #expect(BackupSaveStatus.storageKey == "backup.last-successful-save-timestamp.v1")
-    #expect(BackupSaveStatus.recordStorageKey == "backup.last-successful-save-record.v2")
+    #expect(BackupSaveStatus.legacyRecordStorageKey == "backup.last-successful-save-record.v2")
+    #expect(BackupSaveStatus.recordStorageKey == "backup.last-verified-save-record.v3")
   }
 
   @Test("Missing, corrupt, and implausibly future save times stay hidden")
@@ -150,10 +151,26 @@ struct BackupSaveStatusTests {
   }
 
   @Test("Legacy and invalid records never claim that current content was saved")
-  func unknownAndMissingRecords() {
+  func unknownAndMissingRecords() throws {
     let savedAt = Date(timeIntervalSince1970: 2_000_000_000)
     let library = makeLibrary(updatedAt: savedAt.addingTimeInterval(-1))
+    let legacyRecord = try #require(
+      BackupSaveStatus.recordData(
+        savedAt: savedAt,
+        notebookCount: 1,
+        pageCount: 1
+      )
+    )
 
+    #expect(
+      BackupSaveStatus.freshness(
+        recordData: Data(),
+        legacyRecordData: legacyRecord,
+        legacyTimestamp: 0,
+        library: library,
+        now: savedAt
+      ) == .unknown(savedAt)
+    )
     #expect(
       BackupSaveStatus.freshness(
         recordData: Data(),

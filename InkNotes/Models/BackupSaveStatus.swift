@@ -18,7 +18,8 @@ struct BackupSaveStatus: Equatable, Sendable {
   }
 
   static let storageKey = "backup.last-successful-save-timestamp.v1"
-  static let recordStorageKey = "backup.last-successful-save-record.v2"
+  static let legacyRecordStorageKey = "backup.last-successful-save-record.v2"
+  static let recordStorageKey = "backup.last-verified-save-record.v3"
   static let maximumFutureClockSkew: TimeInterval = 24 * 60 * 60
 
   static func savedAt(
@@ -57,11 +58,15 @@ struct BackupSaveStatus: Equatable, Sendable {
 
   static func freshness(
     recordData: Data,
+    legacyRecordData: Data = Data(),
     legacyTimestamp: Double,
     library: LibraryDocument,
     now: Date = Date()
   ) -> BackupSaveFreshness {
     guard let record = validatedRecord(from: recordData, now: now) else {
+      if let legacyRecord = validatedRecord(from: legacyRecordData, now: now) {
+        return .unknown(legacyRecord.savedAt)
+      }
       guard let legacySavedAt = savedAt(timestamp: legacyTimestamp, now: now) else {
         return .noRecord
       }

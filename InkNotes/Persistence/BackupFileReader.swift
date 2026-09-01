@@ -163,6 +163,35 @@ struct BackupFileReader: Sendable {
   }
 }
 
+enum BackupSavedFileVerification: Equatable, Sendable {
+  case verified
+  case contentMismatch
+}
+
+struct BackupSavedFileVerifier: Sendable {
+  private let read: @Sendable (URL) async throws -> Data
+
+  init(reader: BackupFileReader = BackupFileReader()) {
+    read = { url in
+      try await reader.read(from: url)
+    }
+  }
+
+  init(read: @escaping @Sendable (URL) async throws -> Data) {
+    self.read = read
+  }
+
+  func verify(
+    fileURL: URL,
+    expectedData: Data
+  ) async throws -> BackupSavedFileVerification {
+    try Task.checkCancellation()
+    let savedData = try await read(fileURL)
+    try Task.checkCancellation()
+    return savedData == expectedData ? .verified : .contentMismatch
+  }
+}
+
 struct BackupInboxCopyCleaner: Sendable {
   private let inboxURL: URL
 

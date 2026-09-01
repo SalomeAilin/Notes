@@ -70,6 +70,52 @@ struct BackupFileReaderTests {
     }
   }
 
+  @Test("A saved backup is verified only when every byte matches")
+  func savedBackupExactReadback() async throws {
+    let fileURL = URL(fileURLWithPath: "/unused/backup.notesbackup")
+    let expected = Data([0x49, 0x4E, 0x4B])
+    let exactVerifier = BackupSavedFileVerifier { _ in expected }
+    let mismatchVerifier = BackupSavedFileVerifier { _ in Data([0x4E, 0x4F, 0x54, 0x45]) }
+
+    #expect(
+      try await exactVerifier.verify(
+        fileURL: fileURL,
+        expectedData: expected
+      ) == .verified
+    )
+    #expect(
+      try await mismatchVerifier.verify(
+        fileURL: fileURL,
+        expectedData: expected
+      ) == .contentMismatch
+    )
+  }
+
+  @Test("Read errors and cancellation never become verified results")
+  func savedBackupVerificationFailureBoundaries() async throws {
+    let fileURL = URL(fileURLWithPath: "/unused/backup.notesbackup")
+    let failingVerifier = BackupSavedFileVerifier { _ in
+      throw BackupSavedFileVerifierTestError.readFailed
+    }
+
+    await #expect(throws: BackupSavedFileVerifierTestError.readFailed) {
+      try await failingVerifier.verify(fileURL: fileURL, expectedData: Data())
+    }
+
+    let gate = BackupFileReaderStartGate()
+    let cancelledVerifier = BackupSavedFileVerifier { _ in Data() }
+    let task = Task {
+      await gate.waitUntilOpened()
+      return try await cancelledVerifier.verify(fileURL: fileURL, expectedData: Data())
+    }
+    task.cancel()
+    await gate.open()
+
+    await #expect(throws: CancellationError.self) {
+      try await task.value
+    }
+  }
+
   @Test("Only a direct system Inbox copy is removed after external-open reading")
   func inboxCopyCleanupBoundary() throws {
     let fileManager = FileManager.default
@@ -115,6 +161,10 @@ struct BackupFileReaderTests {
     defer { try? fileManager.removeItem(at: rootURL) }
     return try await operation(rootURL)
   }
+}
+
+private enum BackupSavedFileVerifierTestError: Error {
+  case readFailed
 }
 
 private actor BackupFileReaderStartGate {

@@ -782,6 +782,7 @@ struct CompatibilityContractTests {
     )
     #expect(transferSource.contains("保存位置和分享对象都由你选择"))
     #expect(transferSource.contains("@AppStorage(BackupSaveStatus.storageKey)"))
+    #expect(transferSource.contains("@AppStorage(BackupSaveStatus.legacyRecordStorageKey)"))
     #expect(transferSource.contains("@AppStorage(BackupSaveStatus.recordStorageKey)"))
     #expect(transferSource.contains("LabeledContent(\"上次保存\")"))
     #expect(transferSource.contains("Label(\"这里还没有保存记录\", systemImage: \"clock\")"))
@@ -790,7 +791,7 @@ struct CompatibilityContractTests {
     #expect(transferSource.contains("建议重新保存一次，以确认当前内容"))
     #expect(
       transferSource.contains(
-        "这里只记录保存时间和当时的笔记本、页数，不记录内容、名称或位置；"
+        "状态只在刚保存的文件能够完整读回且内容一致时更新；"
       )
     )
     #expect(!transferSource.contains("当前内容已备份"))
@@ -816,21 +817,32 @@ struct CompatibilityContractTests {
         range: exportResultRange.upperBound..<transferSource.endIndex
       )
     )
+    let verifyReadbackRange = try #require(
+      transferSource.range(
+        of: "BackupSavedFileVerifier().verify",
+        range: exportResultRange.upperBound..<successfulSaveRange.lowerBound
+      )
+    )
+    #expect(verifyReadbackRange.lowerBound < successfulSaveRange.lowerBound)
     #expect(
       transferSource.components(
         separatedBy: "lastSuccessfulBackupSaveRecord = record"
       ).count == 2
     )
+    #expect(transferSource.contains("expectedData: preparedBackup.artifact.data"))
     #expect(transferSource.contains("notebookCount: preparedBackup.notebookCount"))
     #expect(transferSource.contains("pageCount: preparedBackup.pageCount"))
     #expect(!transferSource.contains("lastSuccessfulBackupSaveTimestamp = Date()"))
-    let failedSaveRange = try #require(
+    let mismatchedSaveRange = try #require(
       transferSource.range(
-        of: "case .failure(let error):",
+        of: "case .contentMismatch:",
         range: successfulSaveRange.upperBound..<transferSource.endIndex
       )
     )
-    #expect(successfulSaveRange.lowerBound < failedSaveRange.lowerBound)
+    #expect(successfulSaveRange.lowerBound < mismatchedSaveRange.lowerBound)
+    #expect(transferSource.contains("备份已保存并确认"))
+    #expect(transferSource.contains("保存状态未更新"))
+    #expect(transferSource.contains("应用暂时无法重新读取确认"))
     #expect(
       transferSource.contains(
         """
