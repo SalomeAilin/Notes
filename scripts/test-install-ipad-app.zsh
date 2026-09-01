@@ -125,6 +125,7 @@ plutil -insert CFBundleVersion -string "$notes_app_build" "$notes_app_path/Info.
 plutil -create xml1 "$notes_provenance_path"
 plutil -insert schemaVersion -integer 2 "$notes_provenance_path"
 plutil -insert gitCommit -string "$notes_fixture_commit" "$notes_provenance_path"
+plutil -insert displayName -string "$notes_display_name" "$notes_provenance_path"
 chmod 600 "$notes_provenance_path"
 
 notes_installer="$notes_fixture_scripts/install-ipad-app.sh"
@@ -315,5 +316,15 @@ notes_install_output="$notes_temp_dir/output-install-only"
   "Warning: embedded development profile expires in 6 day(s)" \
   "$notes_install_output" \
   || notes_fail "Sanitized provisioning-profile warning was not relayed"
+
+notes_source_display_name="$notes_display_name"
+notes_display_name="候选名称"
+plutil -replace CFBundleDisplayName -string "$notes_display_name" "$notes_app_path/Info.plist"
+plutil -replace schemaVersion -integer 3 "$notes_provenance_path"
+plutil -replace displayName -string "$notes_display_name" "$notes_provenance_path"
+plutil -insert brandPreview -bool true "$notes_provenance_path"
+plutil -insert sourceDisplayName -string "$notes_source_display_name" "$notes_provenance_path"
+notes_run_scenario \
+  brand-preview-install 0 $'readiness\ninstall\ninfo' 0 success success success false
 
 print -- "iPad installer offline contract tests passed"

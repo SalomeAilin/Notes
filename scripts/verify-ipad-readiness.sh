@@ -143,7 +143,22 @@ notes_assert_clean_worktree() {
 notes_provenance_schema="$(plutil -extract schemaVersion raw -o - "$notes_provenance_path" 2>/dev/null || true)"
 notes_provenance_commit="$(plutil -extract gitCommit raw -o - "$notes_provenance_path" 2>/dev/null || true)"
 notes_provenance_clean="$(plutil -extract gitTreeClean raw -o - "$notes_provenance_path" 2>/dev/null || true)"
-[[ "$notes_provenance_schema" == "2" ]] || fail "Unsupported provenance schema"
+notes_provenance_brand_preview="$({
+  plutil -extract brandPreview raw -o - "$notes_provenance_path" 2>/dev/null
+} || true)"
+case "$notes_provenance_schema" in
+  2)
+    [[ -z "$notes_provenance_brand_preview" ]] \
+      || fail "Standard provenance cannot claim a brand preview"
+    notes_brand_preview=false
+    ;;
+  3)
+    [[ "$notes_provenance_brand_preview" == "true" ]] \
+      || fail "Brand preview provenance is incomplete"
+    notes_brand_preview=true
+    ;;
+  *) fail "Unsupported provenance schema" ;;
+esac
 notes_exact_head="$(notes_repository_git rev-parse --verify 'HEAD^{commit}')" \
   || fail "Unable to resolve exact Git HEAD without replacement objects"
 [[ "$notes_provenance_commit" == "$notes_exact_head" ]] \
@@ -205,6 +220,19 @@ notes_read_internal_placeholder_display_name \
   "Source internal display name" \
   "$notes_expected_bundle_id" \
   || fail "Source internal display name is invalid"
+if [[ "$notes_brand_preview" == true ]]; then
+  notes_read_internal_placeholder_display_name \
+    "$notes_provenance_path" \
+    sourceDisplayName \
+    "$notes_temp_dir" \
+    notes_provenance_source_display_name \
+    notes_provenance_source_display_name_raw \
+    "Provenance source display name" \
+    "$notes_expected_bundle_id" \
+    || fail "Brand preview source display name is invalid"
+  cmp -s "$notes_expected_display_name_raw" "$notes_provenance_source_display_name_raw" \
+    || fail "Brand preview source display name does not match the exact commit"
+fi
 
 notes_project_file="$notes_committed_source_dir/project.pbxproj"
 if ! notes_repository_git cat-file blob \
@@ -245,15 +273,30 @@ plutil -convert binary1 -o "$notes_built_privacy_normalized" \
 cmp -s "$notes_committed_privacy_normalized" "$notes_built_privacy_normalized" \
   || fail "Built privacy manifest does not match the provenance commit"
 notes_bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$notes_plist_path")"
-notes_read_internal_placeholder_display_name \
-  "$notes_plist_path" \
-  CFBundleDisplayName \
-  "$notes_temp_dir" \
-  notes_display_name \
-  notes_display_name_raw \
-  "Built internal display name" \
-  "$notes_expected_bundle_id" \
-  || fail "Built internal display name is invalid"
+if [[ "$notes_brand_preview" == true ]]; then
+  notes_read_validated_display_name \
+    "$notes_plist_path" \
+    CFBundleDisplayName \
+    "$notes_temp_dir" \
+    notes_display_name \
+    notes_display_name_raw \
+    "Built brand preview display name" \
+    || fail "Built brand preview display name is invalid"
+  [[ "$notes_display_name" != "$notes_expected_display_name" ]] \
+    || fail "Brand preview cannot use the internal placeholder"
+else
+  notes_read_internal_placeholder_display_name \
+    "$notes_plist_path" \
+    CFBundleDisplayName \
+    "$notes_temp_dir" \
+    notes_display_name \
+    notes_display_name_raw \
+    "Built internal display name" \
+    "$notes_expected_bundle_id" \
+    || fail "Built internal display name is invalid"
+  cmp -s "$notes_display_name_raw" "$notes_expected_display_name_raw" \
+    || fail "Display name does not match the exact source commit"
+fi
 notes_app_version="$(plutil -extract CFBundleShortVersionString raw -o - "$notes_plist_path")"
 notes_app_build="$(plutil -extract CFBundleVersion raw -o - "$notes_plist_path")"
 notes_minimum_os="$(plutil -extract MinimumOSVersion raw -o - "$notes_plist_path")"
@@ -264,8 +307,6 @@ notes_executable_name="$(plutil -extract CFBundleExecutable raw -o - "$notes_pli
 notes_executable_path="$notes_app_path/$notes_executable_name"
 
 [[ "$notes_bundle_id" == "$notes_expected_bundle_id" ]] || fail "Bundle identifier mismatch"
-cmp -s "$notes_display_name_raw" "$notes_expected_display_name_raw" \
-  || fail "Display name does not match the provenance commit"
 notes_assert_no_localized_display_name_override "$notes_app_path" "$notes_temp_dir" "Built app" \
   || fail "Built app display-name localization contract failed"
 [[ "$notes_app_version" == "$notes_project_version" ]] || fail "App marketing version does not match the project"
@@ -297,15 +338,28 @@ assert_provenance_equal() {
 }
 
 assert_provenance_equal bundleIdentifier "$notes_bundle_id"
-notes_read_internal_placeholder_display_name \
-  "$notes_provenance_path" \
-  displayName \
-  "$notes_temp_dir" \
-  notes_provenance_display_name \
-  notes_provenance_display_name_raw \
-  "Provenance display name" \
-  "$notes_expected_bundle_id" \
-  || fail "Provenance display name is invalid"
+if [[ "$notes_brand_preview" == true ]]; then
+  notes_read_validated_display_name \
+    "$notes_provenance_path" \
+    displayName \
+    "$notes_temp_dir" \
+    notes_provenance_display_name \
+    notes_provenance_display_name_raw \
+    "Provenance brand preview display name" \
+    || fail "Provenance brand preview display name is invalid"
+  [[ "$notes_provenance_display_name" != "$notes_expected_display_name" ]] \
+    || fail "Provenance brand preview cannot use the internal placeholder"
+else
+  notes_read_internal_placeholder_display_name \
+    "$notes_provenance_path" \
+    displayName \
+    "$notes_temp_dir" \
+    notes_provenance_display_name \
+    notes_provenance_display_name_raw \
+    "Provenance display name" \
+    "$notes_expected_bundle_id" \
+    || fail "Provenance display name is invalid"
+fi
 cmp -s "$notes_display_name_raw" "$notes_provenance_display_name_raw" \
   || fail "Provenance display name does not match the app"
 assert_provenance_equal appVersion "$notes_app_version"
@@ -506,4 +560,8 @@ fi
 
 cmp -s "$notes_script_path" "$notes_committed_readiness_script" \
   || fail "Running iPad readiness script changed during verification"
-print -- "Artifact readiness passed: $notes_app_version ($notes_app_build), exact HEAD, signed arm64 iPad app"
+if [[ "$notes_brand_preview" == true ]]; then
+  print -- "Artifact readiness passed: $notes_app_version ($notes_app_build), exact HEAD plus declared brand preview, signed arm64 iPad app"
+else
+  print -- "Artifact readiness passed: $notes_app_version ($notes_app_build), exact HEAD, signed arm64 iPad app"
+fi

@@ -13,9 +13,12 @@ notes_validate_internal_display_name_file() {
       1;
     } or exit 1;
     exit 1 if length($value) == 0;
+    exit 1 if length($value) > 30;
+    exit 1 if length(Encode::encode("UTF-8", $value)) > 96;
     exit 1 if $value =~ /\A\p{White_Space}*\z/u;
     exit 1 if $value =~ /\A\p{White_Space}|\p{White_Space}\z/u;
     exit 1 if $value =~ /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+    exit 1 unless $value =~ /[\p{L}\p{N}]/u;
     exit 1 if index($value, "\$(") >= 0 || index($value, "\${") >= 0;
     for my $retired_name ("墨记", "墨記", "墨计", "墨計") {
       exit 1 if index($value, $retired_name) >= 0;

@@ -10,6 +10,8 @@ notes_expected_minimum_os="17.0"
 notes_configuration="Debug"
 notes_profile_override=""
 notes_output_dir=""
+notes_brand_preview_requested=false
+notes_brand_preview_name=""
 
 usage() {
   cat <<'EOF'
@@ -22,6 +24,8 @@ it never writes a Team ID to the repository and never updates signing assets.
 Options:
   --output-dir <path>  New DerivedData/device-* direct child for build evidence.
   --profile <path>     Use one specific local .mobileprovision file.
+  --brand-preview-name <name>
+                       Build a temporary display-name preview without editing Git source.
   -h, --help           Show this help.
 EOF
 }
@@ -41,6 +45,12 @@ while (( $# > 0 )); do
     --profile)
       (( $# >= 2 )) || fail "--profile requires a path"
       notes_profile_override="$2"
+      shift 2
+      ;;
+    --brand-preview-name)
+      (( $# >= 2 )) || fail "--brand-preview-name requires a value"
+      notes_brand_preview_requested=true
+      notes_brand_preview_name="$2"
       shift 2
       ;;
     -h|--help)
@@ -169,7 +179,6 @@ if rg 'sourceTree = "?<absolute>"?|path = /|/Users/' \
 then
   fail "Absolute external Xcode source paths are not supported by the signed source snapshot"
 fi
-chmod -R a-w "$notes_source_root"
 
 notes_display_name_contract="$notes_source_root/scripts/internal-display-name-contract.zsh"
 [[ -f "$notes_display_name_contract" && ! -L "$notes_display_name_contract" ]] \
@@ -184,6 +193,38 @@ notes_read_internal_placeholder_display_name \
   "Source internal display name" \
   "$notes_expected_bundle_id" \
   || fail "Source internal display name is invalid"
+
+notes_expected_built_display_name="$notes_expected_display_name"
+notes_expected_built_display_name_raw="$notes_expected_display_name_raw"
+notes_brand_preview=false
+if [[ "$notes_brand_preview_requested" == true ]]; then
+  notes_brand_preview_candidate_raw="$notes_temp_dir/brand-preview-name.raw"
+  print -rn -- "$notes_brand_preview_name" > "$notes_brand_preview_candidate_raw"
+  chmod 600 "$notes_brand_preview_candidate_raw"
+  notes_validate_internal_display_name_file \
+    "$notes_brand_preview_candidate_raw" \
+    "Brand preview name" \
+    || fail "Brand preview name violates the display-name contract"
+  [[ "$notes_brand_preview_name" != "$notes_expected_display_name" ]] \
+    || fail "Brand preview name cannot be the internal placeholder"
+
+  notes_preview_plist="$notes_source_root/InkNotes/Info.plist"
+  chmod u+w "$notes_preview_plist"
+  plutil -replace CFBundleDisplayName -string "$notes_brand_preview_name" \
+    "$notes_preview_plist" \
+    || fail "Unable to apply the private brand preview overlay"
+  chmod a-w "$notes_preview_plist"
+  notes_read_validated_display_name \
+    "$notes_preview_plist" \
+    CFBundleDisplayName \
+    "$notes_temp_dir" \
+    notes_expected_built_display_name \
+    notes_expected_built_display_name_raw \
+    "Brand preview display name" \
+    || fail "Private brand preview overlay is invalid"
+  notes_brand_preview=true
+fi
+chmod -R a-w "$notes_source_root"
 
 notes_project_file="$notes_source_root/InkNotes.xcodeproj/project.pbxproj"
 notes_project_build="$({
@@ -342,15 +383,14 @@ notes_assert_clean_worktree final
 
 codesign --verify --deep --strict "$notes_app_path"
 notes_built_bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$notes_app_path/Info.plist")"
-notes_read_internal_placeholder_display_name \
+notes_read_validated_display_name \
   "$notes_app_path/Info.plist" \
   CFBundleDisplayName \
   "$notes_temp_dir" \
   notes_built_display_name \
   notes_built_display_name_raw \
-  "Built internal display name" \
-  "$notes_expected_bundle_id" \
-  || fail "Built internal display name is invalid"
+  "Built display name" \
+  || fail "Built display name is invalid"
 notes_app_version="$(plutil -extract CFBundleShortVersionString raw -o - "$notes_app_path/Info.plist")"
 notes_app_build="$(plutil -extract CFBundleVersion raw -o - "$notes_app_path/Info.plist")"
 notes_minimum_os="$(plutil -extract MinimumOSVersion raw -o - "$notes_app_path/Info.plist")"
@@ -361,8 +401,8 @@ notes_executable_name="$(plutil -extract CFBundleExecutable raw -o - "$notes_app
 notes_executable_path="$notes_app_path/$notes_executable_name"
 
 [[ "$notes_built_bundle_id" == "$notes_expected_bundle_id" ]] || fail "Built bundle identifier drifted"
-cmp -s "$notes_built_display_name_raw" "$notes_expected_display_name_raw" \
-  || fail "Built display name drifted from the exact source snapshot"
+cmp -s "$notes_built_display_name_raw" "$notes_expected_built_display_name_raw" \
+  || fail "Built display name drifted from the permitted source or preview overlay"
 notes_assert_no_localized_display_name_override "$notes_app_path" "$notes_temp_dir" "Built app" \
   || fail "Built app display-name localization contract failed"
 [[ "$notes_app_version" == "$notes_project_version" ]] || fail "Built marketing version drifted"
@@ -427,7 +467,14 @@ notes_provenance_path="$notes_output_dir/provenance.json"
 notes_provenance_plist="$notes_temp_dir/provenance.plist"
 notes_provenance_json="$notes_temp_dir/provenance.json"
 plutil -create xml1 "$notes_provenance_plist"
-plutil -insert schemaVersion -integer 2 "$notes_provenance_plist"
+if [[ "$notes_brand_preview" == true ]]; then
+  plutil -insert schemaVersion -integer 3 "$notes_provenance_plist"
+  plutil -insert brandPreview -bool true "$notes_provenance_plist"
+  plutil -insert sourceDisplayName -string "$notes_expected_display_name" \
+    "$notes_provenance_plist"
+else
+  plutil -insert schemaVersion -integer 2 "$notes_provenance_plist"
+fi
 plutil -insert gitCommit -string "$notes_source_commit" "$notes_provenance_plist"
 plutil -insert gitTreeClean -bool true "$notes_provenance_plist"
 plutil -insert bundleIdentifier -string "$notes_built_bundle_id" "$notes_provenance_plist"
@@ -458,5 +505,10 @@ INKNOTES_READINESS_REPOSITORY_ROOT="$notes_repository_root" \
     --app "$notes_app_path" \
     --provenance "$notes_provenance_path"
 
+if [[ "$notes_brand_preview" == true ]]; then
+  print -- "Brand preview only: display name '$notes_built_display_name'"
+  print -- "Git source, app identity, data container, and backup identity were not renamed."
+  print -- "This is not trademark, App Store, or public-release clearance."
+fi
 print -- "Signed iPad app ready: $notes_app_path"
 print -- "Provenance ready: $notes_provenance_path"

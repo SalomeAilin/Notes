@@ -1081,6 +1081,8 @@ struct CompatibilityContractTests {
       "Valid\u{200B}Internal Name",
       "Valid\u{202E}Internal Name",
       "Valid\u{2066}Internal Name",
+      "!!!",
+      String(repeating: "候选", count: 16),
       "$(",
       "${",
       "$(PRODUCT_NAME)",
@@ -1114,6 +1116,30 @@ struct CompatibilityContractTests {
       ),
       encoding: .utf8
     )
+    let signedBuildSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent(
+        "scripts/build-signed-ipad-app.sh"
+      ),
+      encoding: .utf8
+    )
+    let readinessSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent(
+        "scripts/verify-ipad-readiness.sh"
+      ),
+      encoding: .utf8
+    )
+    let installerSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent(
+        "scripts/install-ipad-app.sh"
+      ),
+      encoding: .utf8
+    )
+    let installerTestSource = try String(
+      contentsOf: repositoryRoot.appendingPathComponent(
+        "scripts/test-install-ipad-app.zsh"
+      ),
+      encoding: .utf8
+    )
     let attributes = try FileManager.default.attributesOfItem(atPath: checkerURL.path)
     let permissions = try #require(attributes[.posixPermissions] as? NSNumber).intValue
 
@@ -1132,10 +1158,23 @@ struct CompatibilityContractTests {
     #expect(testSource.contains("shasum -a 256"))
     #expect(testSource.contains("cmp -s \"$notes_before\" \"$notes_after\""))
     #expect(gateSource.contains("scripts/test-brand-candidate.zsh"))
+    #expect(signedBuildSource.contains("--brand-preview-name"))
+    #expect(signedBuildSource.contains("notes_validate_internal_display_name_file"))
+    #expect(signedBuildSource.contains("$notes_source_root/InkNotes/Info.plist"))
+    #expect(signedBuildSource.contains("Brand preview only"))
+    #expect(signedBuildSource.contains("brandPreview -bool true"))
+    #expect(signedBuildSource.contains("sourceDisplayName"))
+    #expect(readinessSource.contains("notes_provenance_schema"))
+    #expect(readinessSource.contains("notes_brand_preview=true"))
+    #expect(readinessSource.contains("declared brand preview"))
+    #expect(installerSource.contains("notes_brand_preview=true"))
+    #expect(installerSource.contains("notes_provenance_display_name_raw"))
+    #expect(installerTestSource.contains("brand-preview-install"))
   }
 
   private func isValidInternalDisplayName(_ value: String) -> Bool {
     guard !value.isEmpty else { return false }
+    guard value.count <= 30, value.utf8.count <= 96 else { return false }
     guard value == value.trimmingCharacters(in: .whitespacesAndNewlines) else {
       return false
     }
@@ -1146,6 +1185,8 @@ struct CompatibilityContractTests {
     else {
       return false
     }
+    guard value.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) })
+    else { return false }
     guard !value.contains("$("), !value.contains("${") else { return false }
     return ["墨记", "墨記", "墨计", "墨計"].allSatisfy { !value.contains($0) }
   }

@@ -44,6 +44,8 @@ notes_invalid_names=(
   $'候选\n名称'
   $'候选\t名称'
   $'候选\u200B名称'
+  "!!!"
+  "$(printf '候选%.0s' {1..16})"
   '$('
   '${'
   '$(PRODUCT_NAME)'

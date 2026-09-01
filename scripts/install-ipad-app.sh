@@ -183,8 +183,27 @@ notes_exact_head_matches_provenance() {
 notes_provenance_commit="$(
   plutil -extract gitCommit raw -o - "$notes_provenance_path" 2>/dev/null || true
 )"
+notes_provenance_schema="$(
+  plutil -extract schemaVersion raw -o - "$notes_provenance_path" 2>/dev/null || true
+)"
+notes_provenance_brand_preview="$({
+  plutil -extract brandPreview raw -o - "$notes_provenance_path" 2>/dev/null
+} || true)"
 [[ "$notes_provenance_commit" =~ "^[0-9a-f]{40}$" ]] \
   || fail_readiness "Provenance Git commit is invalid; install was not attempted"
+case "$notes_provenance_schema" in
+  2)
+    [[ -z "$notes_provenance_brand_preview" ]] \
+      || fail_readiness "Standard provenance is invalid; install was not attempted"
+    notes_brand_preview=false
+    ;;
+  3)
+    [[ "$notes_provenance_brand_preview" == "true" ]] \
+      || fail_readiness "Brand preview provenance is invalid; install was not attempted"
+    notes_brand_preview=true
+    ;;
+  *) fail_readiness "Provenance schema is unsupported; install was not attempted" ;;
+esac
 notes_exact_head_matches_provenance \
   || fail_readiness "App provenance does not match exact Git HEAD; install was not attempted"
 notes_assert_clean_worktree \
@@ -236,6 +255,14 @@ notes_assert_clean_worktree \
   || fail_readiness "Worktree changed during readiness; install was not attempted"
 notes_exact_head_matches_provenance \
   || fail_readiness "Git HEAD changed during readiness; install was not attempted"
+[[ "$(plutil -extract schemaVersion raw -o - "$notes_provenance_path" 2>/dev/null || true)" \
+  == "$notes_provenance_schema" ]] \
+  || fail_readiness "Provenance mode changed during readiness; install was not attempted"
+notes_provenance_brand_preview_after="$({
+  plutil -extract brandPreview raw -o - "$notes_provenance_path" 2>/dev/null
+} || true)"
+[[ "$notes_provenance_brand_preview_after" == "$notes_provenance_brand_preview" ]] \
+  || fail_readiness "Provenance mode changed during readiness; install was not attempted"
 cmp -s "$notes_script_path" "$notes_committed_install_script" \
   || fail_readiness "Installer changed during readiness; install was not attempted"
 [[ -f "$notes_device_handoff_path" && ! -L "$notes_device_handoff_path" \
@@ -275,15 +302,36 @@ notes_app_build="$(
   && "$notes_app_version" == <->.<->.<-> \
   && "$notes_app_build" == <-> ]] \
   || fail_readiness "Verified app identity changed; install was not attempted"
-notes_read_internal_placeholder_display_name \
-  "$notes_info_plist" \
-  CFBundleDisplayName \
+if [[ "$notes_brand_preview" == true ]]; then
+  notes_read_validated_display_name \
+    "$notes_info_plist" \
+    CFBundleDisplayName \
+    "$notes_temp_dir" \
+    notes_display_name \
+    notes_display_name_raw \
+    "Installed-app expected brand preview name" \
+    || fail_readiness "Brand preview name is invalid; install was not attempted"
+else
+  notes_read_internal_placeholder_display_name \
+    "$notes_info_plist" \
+    CFBundleDisplayName \
+    "$notes_temp_dir" \
+    notes_display_name \
+    notes_display_name_raw \
+    "Installed-app expected display name" \
+    "$notes_expected_bundle_id" \
+    || fail_readiness "App display name is invalid; install was not attempted"
+fi
+notes_read_validated_display_name \
+  "$notes_provenance_path" \
+  displayName \
   "$notes_temp_dir" \
-  notes_display_name \
-  notes_display_name_raw \
-  "Installed-app expected display name" \
-  "$notes_expected_bundle_id" \
-  || fail_readiness "App display name is invalid; install was not attempted"
+  notes_provenance_display_name \
+  notes_provenance_display_name_raw \
+  "Provenance display name" \
+  || fail_readiness "Provenance display name is invalid; install was not attempted"
+cmp -s "$notes_display_name_raw" "$notes_provenance_display_name_raw" \
+  || fail_readiness "App display name changed after readiness; install was not attempted"
 
 notes_install_json="$notes_temp_dir/install-result.json"
 notes_install_output="$notes_temp_dir/install-output"
