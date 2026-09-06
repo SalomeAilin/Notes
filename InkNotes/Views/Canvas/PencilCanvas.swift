@@ -17,6 +17,7 @@ enum CanvasInputPolicy: String, CaseIterable {
 private struct CanvasViewport {
   let contentOffset: CGPoint
   let zoomScale: CGFloat
+  let contentHeight: CGFloat
 }
 
 @MainActor
@@ -243,7 +244,8 @@ final class ExpandablePencilCanvasView: UIView, UIScrollViewDelegate {
   fileprivate var currentViewport: CanvasViewport {
     CanvasViewport(
       contentOffset: scrollView.contentOffset,
-      zoomScale: scrollView.zoomScale
+      zoomScale: scrollView.zoomScale,
+      contentHeight: contentHeight
     )
   }
 
@@ -331,6 +333,15 @@ final class ExpandablePencilCanvasView: UIView, UIScrollViewDelegate {
   private func applyPendingViewportIfPossible() {
     guard hasCompletedInitialLayout, let viewport = pendingViewport else { return }
     pendingViewport = nil
+    contentHeight = max(
+      contentHeight,
+      ContinuousCanvasGeometry.requiredContentHeight(
+        drawingMaximumY: canvasView.drawing.bounds.maxY,
+        viewportHeight: bounds.height,
+        retainedHeight: viewport.contentHeight
+      )
+    )
+    layoutContent()
     let zoomScale = min(
       max(viewport.zoomScale, scrollView.minimumZoomScale),
       scrollView.maximumZoomScale

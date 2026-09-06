@@ -7,9 +7,13 @@ enum ContinuousCanvasGeometry {
 
   static func requiredContentHeight(
     drawingMaximumY maximumY: CGFloat,
-    viewportHeight: CGFloat
+    viewportHeight: CGFloat,
+    retainedHeight: CGFloat = 0
   ) -> CGFloat {
-    let minimumHeight = minimumContentHeight(viewportHeight: viewportHeight)
+    let validRetainedHeight = retainedHeight.isFinite && retainedHeight > 0 ? retainedHeight : 0
+    let minimumHeight = max(
+      minimumContentHeight(viewportHeight: viewportHeight), validRetainedHeight
+    )
     guard maximumY.isFinite, maximumY > 0 else { return minimumHeight }
 
     let writingComfortBuffer = max(640, viewportHeight * 0.8)
