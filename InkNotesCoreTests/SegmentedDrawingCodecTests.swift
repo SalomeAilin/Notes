@@ -6,6 +6,48 @@ import Testing
 
 @Suite("Segmented drawing codec")
 struct SegmentedDrawingCodecTests {
+  @Test("Four-quadrant strokes survive segmented storage and compatible backup unchanged")
+  func fourQuadrantRoundTrip() throws {
+    let fixtureURL = try #require(
+      Bundle.module.url(
+        forResource: "single-stroke-v1", withExtension: "pkdrawing",
+        subdirectory: "Fixtures/BackupV1")
+    )
+    let fixture = try PKDrawing(data: Data(contentsOf: fixtureURL))
+    var drawing = PKDrawing()
+    for offset in [
+      CGPoint(x: -8_000, y: -8_000), CGPoint(x: 8_000, y: -8_000),
+      CGPoint(x: -8_000, y: 8_000), CGPoint(x: 8_000, y: 8_000),
+    ] {
+      drawing.append(
+        fixture.transformed(using: CGAffineTransform(translationX: offset.x, y: offset.y)))
+    }
+    let sourceData = drawing.dataRepresentation()
+    let library = LibraryDocument.starter()
+    let pageID = library.notebooks[0].pages[0].id
+    let snapshot = try SegmentedDrawingCodec.makeSnapshot(pageID: pageID, drawingData: sourceData)
+    let authority = try SegmentedDrawingCodec.decodeAuthority(
+      snapshot.authorityData, expectedPageID: pageID)
+    let restored = try SegmentedDrawingCodec.reconstructDrawingData(authority: authority) { entry in
+      try #require(snapshot.blobsBySHA256[entry.sha256])
+    }
+    #expect(
+      try PKDrawing(data: restored).strokes.map(\.renderBounds)
+        == drawing.strokes.map(\.renderBounds))
+    let exactData = try SegmentedDrawingCodec.reconstructSourceDrawingData(authority: authority) {
+      chunk in
+      try #require(snapshot.blobsBySHA256[chunk.sha256])
+    }
+    #expect(exactData == sourceData)
+    let archive = try BackupArchiveCodec.encodeBestAvailable(
+      library: library, drawings: [pageID: exactData],
+      createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+    let decoded = try BackupArchiveCodec.decode(archive)
+    #expect(decoded.drawings[pageID] == sourceData)
+    #expect(try PKDrawing(data: #require(decoded.drawings[pageID])).bounds == drawing.bounds)
+  }
+
   @Test("Segments preserve stroke order across distant writing regions")
   func roundTripPreservesStrokeOrder() throws {
     let pageID = UUID(uuidString: "11000000-0000-0000-0000-000000000001")!

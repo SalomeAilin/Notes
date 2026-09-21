@@ -17,7 +17,7 @@ enum CanvasInputPolicy: String, CaseIterable {
 private struct CanvasViewport {
   let contentOffset: CGPoint
   let zoomScale: CGFloat
-  let contentHeight: CGFloat
+  let worldBounds: CGRect
 }
 
 @MainActor
@@ -70,6 +70,10 @@ final class PencilCanvasController: ObservableObject {
   func redo() {
     canvasHost?.canvasView.undoManager?.redo()
   }
+
+  func returnToDrawing() {
+    canvasHost?.returnToDrawing()
+  }
 }
 
 struct PencilCanvas: UIViewRepresentable {
@@ -108,13 +112,13 @@ struct PencilCanvas: UIViewRepresentable {
 
   func updateUIView(_ canvasHost: ExpandablePencilCanvasView, context: Context) {
     context.coordinator.parent = self
+    let wasEditable = canvasHost.canvasView.isUserInteractionEnabled
     canvasHost.updateConfiguration(
       background: background,
       inputPolicy: inputPolicy,
       isEditable: isEditable
     )
-    if canvasHost.canvasView.isUserInteractionEnabled != isEditable {
-      canvasHost.canvasView.isUserInteractionEnabled = isEditable
+    if wasEditable != isEditable {
       controller.setToolPickerVisible(isEditable, for: canvasHost)
     }
 
@@ -160,19 +164,27 @@ struct PencilCanvas: UIViewRepresentable {
         parent.drawingData = data
       }
     }
+
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+      canvasHost?.viewportDidChange()
+    }
+
+    func scrollViewDidZoom(_ scrollView: UIScrollView) {
+      canvasHost?.viewportDidChange()
+    }
   }
 }
 
 @MainActor
-final class ExpandablePencilCanvasView: UIView, UIScrollViewDelegate {
+final class ExpandablePencilCanvasView: UIView {
   fileprivate let canvasView = PKCanvasView(frame: .zero)
 
-  private let scrollView = UIScrollView(frame: .zero)
-  private let contentView = UIView(frame: .zero)
   private let paperView = CanvasPaperView(frame: .zero)
-  private var contentHeight: CGFloat = 0
+  private var worldBounds: CGRect = .null
+  private var drawingBounds: CGRect = .null
   private var pendingViewport: CanvasViewport?
   private var hasCompletedInitialLayout = false
+  private var isUpdatingViewport = false
 
   override init(frame: CGRect) {
     super.init(frame: frame)
@@ -180,40 +192,26 @@ final class ExpandablePencilCanvasView: UIView, UIScrollViewDelegate {
     backgroundColor = .secondarySystemBackground
     clipsToBounds = true
 
-    scrollView.delegate = self
-    scrollView.contentInsetAdjustmentBehavior = .never
-    scrollView.alwaysBounceVertical = true
-    scrollView.alwaysBounceHorizontal = false
-    scrollView.isDirectionalLockEnabled = true
-    scrollView.keyboardDismissMode = .interactive
-    scrollView.minimumZoomScale = 0.65
-    scrollView.maximumZoomScale = 3
-    scrollView.decelerationRate = .fast
-    scrollView.showsHorizontalScrollIndicator = false
-    addSubview(scrollView)
-
-    contentView.layer.shadowColor = UIColor.black.cgColor
-    contentView.layer.shadowOpacity = 0.08
-    contentView.layer.shadowRadius = 12
-    contentView.layer.shadowOffset = CGSize(width: 0, height: 4)
-    scrollView.addSubview(contentView)
-
     paperView.isUserInteractionEnabled = false
-    contentView.addSubview(paperView)
+    addSubview(paperView)
 
     canvasView.backgroundColor = .clear
     canvasView.isOpaque = false
     canvasView.maximumSupportedContentVersion = .version2
-    canvasView.isScrollEnabled = false
-    canvasView.alwaysBounceHorizontal = false
-    canvasView.alwaysBounceVertical = false
+    canvasView.isScrollEnabled = true
+    canvasView.alwaysBounceHorizontal = true
+    canvasView.alwaysBounceVertical = true
+    canvasView.isDirectionalLockEnabled = false
+    canvasView.keyboardDismissMode = .interactive
     canvasView.contentInsetAdjustmentBehavior = .never
-    canvasView.minimumZoomScale = 1
-    canvasView.maximumZoomScale = 1
-    canvasView.pinchGestureRecognizer?.isEnabled = false
-    contentView.addSubview(canvasView)
+    canvasView.minimumZoomScale = 0.25
+    canvasView.maximumZoomScale = 3
+    canvasView.showsHorizontalScrollIndicator = false
+    canvasView.showsVerticalScrollIndicator = false
+    addSubview(canvasView)
 
-    accessibilityLabel = "连续书写页面"
+    canvasView.accessibilityLabel = "无限画布"
+    canvasView.accessibilityHint = "可向四周移动并双指缩放；找不到内容时，使用回到笔迹。"
   }
 
   required init?(coder: NSCoder) {
@@ -222,30 +220,31 @@ final class ExpandablePencilCanvasView: UIView, UIScrollViewDelegate {
 
   override func layoutSubviews() {
     super.layoutSubviews()
-    scrollView.frame = bounds
     guard bounds.width > 0, bounds.height > 0 else { return }
-
-    let minimumHeight = ContinuousCanvasGeometry.minimumContentHeight(
-      viewportHeight: bounds.height
-    )
-    let drawingHeight = ContinuousCanvasGeometry.requiredContentHeight(
-      drawingMaximumY: canvasView.drawing.bounds.maxY,
-      viewportHeight: bounds.height
-    )
-    contentHeight = max(contentHeight, minimumHeight, drawingHeight)
-    layoutContent()
+    // Keep both views viewport-sized. Growing paper must not allocate a giant bitmap.
+    let offset = canvasView.contentOffset
+    isUpdatingViewport = true
+    paperView.frame = bounds
+    canvasView.frame = bounds
+    canvasView.contentOffset = offset
+    isUpdatingViewport = false
 
     if !hasCompletedInitialLayout {
       hasCompletedInitialLayout = true
-      applyPendingViewportIfPossible()
+      if pendingViewport != nil {
+        applyPendingViewportIfPossible()
+      } else {
+        returnToDrawing()
+      }
     }
+    viewportDidChange()
   }
 
   fileprivate var currentViewport: CanvasViewport {
     CanvasViewport(
-      contentOffset: scrollView.contentOffset,
-      zoomScale: scrollView.zoomScale,
-      contentHeight: contentHeight
+      contentOffset: canvasView.contentOffset,
+      zoomScale: canvasView.zoomScale,
+      worldBounds: worldBounds
     )
   }
 
@@ -260,6 +259,7 @@ final class ExpandablePencilCanvasView: UIView, UIScrollViewDelegate {
     inputPolicy: CanvasInputPolicy,
     isEditable: Bool
   ) {
+    drawingBounds = drawing.bounds
     canvasView.drawing = drawing
     updateConfiguration(
       background: background,
@@ -277,99 +277,87 @@ final class ExpandablePencilCanvasView: UIView, UIScrollViewDelegate {
     paperView.pageBackground = background
     canvasView.drawingPolicy = inputPolicy.drawingPolicy
     canvasView.isUserInteractionEnabled = isEditable
-    scrollView.panGestureRecognizer.minimumNumberOfTouches =
+    canvasView.panGestureRecognizer.minimumNumberOfTouches =
       inputPolicy == .anyInput ? 2 : 1
   }
 
   fileprivate func applyExternalDrawing(_ drawing: PKDrawing) {
+    drawingBounds = drawing.bounds
     canvasView.drawing = drawing
     expandToFitDrawing()
   }
 
   fileprivate func expandToFitDrawing() {
-    guard bounds.height > 0 else {
-      setNeedsLayout()
-      return
-    }
-    let requiredHeight = ContinuousCanvasGeometry.requiredContentHeight(
-      drawingMaximumY: canvasView.drawing.bounds.maxY,
-      viewportHeight: bounds.height
+    drawingBounds = canvasView.drawing.bounds
+    viewportDidChange()
+  }
+
+  fileprivate func viewportDidChange() {
+    guard hasCompletedInitialLayout, !isUpdatingViewport else { return }
+    isUpdatingViewport = true
+    defer { isUpdatingViewport = false }
+    let offset = canvasView.contentOffset
+    let scale = canvasView.zoomScale
+    worldBounds = ContinuousCanvasGeometry.expandedBounds(
+      retaining: worldBounds,
+      drawing: drawingBounds,
+      visible: ContinuousCanvasGeometry.visibleRect(offset: offset, size: bounds.size, zoom: scale)
     )
-    guard requiredHeight > contentHeight else { return }
-    contentHeight = requiredHeight
-    layoutContent()
-  }
-
-  func viewForZooming(in scrollView: UIScrollView) -> UIView? {
-    contentView
-  }
-
-  func scrollViewDidZoom(_ scrollView: UIScrollView) {
-    centerPaperHorizontally()
-  }
-
-  private func layoutContent() {
-    let contentSize = CGSize(width: bounds.width, height: contentHeight)
-    contentView.frame = CGRect(origin: .zero, size: contentSize)
-    paperView.frame = contentView.bounds
-    canvasView.frame = contentView.bounds
-    canvasView.contentSize = contentSize
-    scrollView.contentSize = contentSize
-    centerPaperHorizontally()
-    paperView.setNeedsDisplay()
-  }
-
-  private func centerPaperHorizontally() {
-    let scaledWidth = contentView.bounds.width * scrollView.zoomScale
-    let horizontalInset = max(0, (scrollView.bounds.width - scaledWidth) / 2)
-    scrollView.contentInset = UIEdgeInsets(
-      top: 0,
-      left: horizontalInset,
-      bottom: 28,
-      right: horizontalInset
+    // Insets expose negative world coordinates without translating the drawing.
+    // PencilKit remains the only scroll/zoom owner, preserving its native undo history.
+    let inset = UIEdgeInsets(
+      top: -worldBounds.minY * scale, left: -worldBounds.minX * scale,
+      bottom: 0, right: 0
     )
+    let size = CGSize(width: worldBounds.maxX * scale, height: worldBounds.maxY * scale)
+    if canvasView.contentInset != inset { canvasView.contentInset = inset }
+    if canvasView.contentSize != size { canvasView.contentSize = size }
+    if canvasView.contentOffset != offset { canvasView.contentOffset = offset }
+    paperView.updateViewport(offset: offset, scale: scale)
   }
 
   private func applyPendingViewportIfPossible() {
     guard hasCompletedInitialLayout, let viewport = pendingViewport else { return }
     pendingViewport = nil
-    contentHeight = max(
-      contentHeight,
-      ContinuousCanvasGeometry.requiredContentHeight(
-        drawingMaximumY: canvasView.drawing.bounds.maxY,
-        viewportHeight: bounds.height,
-        retainedHeight: viewport.contentHeight
-      )
+    worldBounds = viewport.worldBounds
+    isUpdatingViewport = true
+    canvasView.setZoomScale(
+      min(max(viewport.zoomScale, canvasView.minimumZoomScale), canvasView.maximumZoomScale),
+      animated: false
     )
-    layoutContent()
-    let zoomScale = min(
-      max(viewport.zoomScale, scrollView.minimumZoomScale),
-      scrollView.maximumZoomScale
-    )
-    scrollView.setZoomScale(zoomScale, animated: false)
-    let minimumX = -scrollView.adjustedContentInset.left
-    let minimumY = -scrollView.adjustedContentInset.top
-    let maximumX = max(
-      minimumX,
-      contentView.bounds.width * zoomScale - scrollView.bounds.width
-        + scrollView.adjustedContentInset.right
-    )
-    let maximumY = max(
-      minimumY,
-      contentView.bounds.height * zoomScale - scrollView.bounds.height
-        + scrollView.adjustedContentInset.bottom
-    )
-    let restoredOffset = CGPoint(
-      x: min(max(viewport.contentOffset.x, minimumX), maximumX),
-      y: min(max(viewport.contentOffset.y, minimumY), maximumY)
-    )
-    scrollView.setContentOffset(restoredOffset, animated: false)
+    canvasView.contentOffset = viewport.contentOffset
+    isUpdatingViewport = false
+    viewportDidChange()
+  }
+
+  fileprivate func returnToDrawing() {
+    guard hasCompletedInitialLayout else { return }
+    // The union's upper-left corner may be empty when strokes are far apart.
+    // Anchor to an actual stroke instead of sending the user to empty paper.
+    let drawingBounds = canvasView.drawing.strokes.first?.renderBounds ?? .null
+    let origin =
+      drawingBounds.isNull || drawingBounds.isEmpty
+      ? CGPoint.zero : CGPoint(x: drawingBounds.minX - 48, y: drawingBounds.minY - 48)
+    isUpdatingViewport = true
+    canvasView.setZoomScale(1, animated: false)
+    canvasView.contentOffset = origin
+    isUpdatingViewport = false
+    viewportDidChange()
   }
 
 }
 
 @MainActor
 private final class CanvasPaperView: UIView {
+  private var viewportOffset = CGPoint.zero
+  private var viewportScale: CGFloat = 1
+
+  func updateViewport(offset: CGPoint, scale: CGFloat) {
+    guard viewportOffset != offset || viewportScale != scale else { return }
+    viewportOffset = offset
+    viewportScale = scale
+    setNeedsDisplay()
+  }
   var pageBackground: PageBackground = .ruled {
     didSet {
       guard pageBackground != oldValue else { return }
@@ -381,6 +369,7 @@ private final class CanvasPaperView: UIView {
     super.init(frame: frame)
     backgroundColor = .systemBackground
     isOpaque = true
+    contentMode = .redraw
   }
 
   required init?(coder: NSCoder) {
@@ -390,14 +379,22 @@ private final class CanvasPaperView: UIView {
   override func draw(_ rect: CGRect) {
     super.draw(rect)
     guard let context = UIGraphicsGetCurrentContext() else { return }
+    context.saveGState()
+    defer { context.restoreGState() }
+    context.translateBy(x: -viewportOffset.x, y: -viewportOffset.y)
+    context.scaleBy(x: viewportScale, y: viewportScale)
+    let worldRect = ContinuousCanvasGeometry.visibleRect(
+      offset: CGPoint(x: viewportOffset.x + rect.minX, y: viewportOffset.y + rect.minY),
+      size: rect.size, zoom: viewportScale
+    )
 
     switch pageBackground {
     case .blank:
       return
     case .ruled:
-      drawRuledPaper(in: context, dirtyRect: rect)
+      drawRuledPaper(in: context, dirtyRect: worldRect)
     case .grid:
-      drawGridPaper(in: context, dirtyRect: rect)
+      drawGridPaper(in: context, dirtyRect: worldRect)
     }
   }
 

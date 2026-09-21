@@ -1253,7 +1253,7 @@ struct CompatibilityContractTests {
     #expect(editorSource.contains(".id(page.id)"))
   }
 
-  @Test("The writing surface grows as continuous paper without exposing storage details")
+  @Test("The writing surface grows in world coordinates without exposing storage details")
   func writingSurfaceRemainsUserLed() throws {
     let repositoryRoot = repositoryRootURL()
     let canvasSource = try String(
@@ -1270,13 +1270,19 @@ struct CompatibilityContractTests {
     )
 
     #expect(canvasSource.contains("final class ExpandablePencilCanvasView"))
-    #expect(canvasSource.contains("ContinuousCanvasGeometry.requiredContentHeight"))
-    #expect(canvasSource.contains("drawingMaximumY: canvasView.drawing.bounds.maxY"))
-    #expect(canvasSource.contains("scrollView.minimumZoomScale = 0.65"))
-    #expect(canvasSource.contains("scrollView.maximumZoomScale = 3"))
+    #expect(canvasSource.contains("ContinuousCanvasGeometry.expandedBounds"))
+    #expect(canvasSource.contains("drawingBounds = canvasView.drawing.bounds"))
+    #expect(canvasSource.contains("canvasView.minimumZoomScale = 0.25"))
+    #expect(canvasSource.contains("canvasView.maximumZoomScale = 3"))
     #expect(canvasSource.contains("inputPolicy == .anyInput ? 2 : 1"))
-    #expect(canvasSource.contains("contentView.addSubview(paperView)"))
-    #expect(canvasSource.contains("contentView.addSubview(canvasView)"))
+    #expect(canvasSource.contains("addSubview(paperView)"))
+    #expect(canvasSource.contains("addSubview(canvasView)"))
+    #expect(canvasSource.contains("paperView.frame = bounds"))
+    #expect(canvasSource.contains("canvasView.frame = bounds"))
+    #expect(
+      canvasSource.contains("top: -worldBounds.minY * scale, left: -worldBounds.minX * scale"))
+    #expect(!canvasSource.contains("drawing.transformed"))
+    #expect(editorSource.contains("canvasController.returnToDrawing()"))
     #expect(editorSource.contains("pageID: page.id"))
     #expect(editorSource.contains("background: page.background"))
     #expect(!editorSource.contains("PageBackgroundView(background:"))

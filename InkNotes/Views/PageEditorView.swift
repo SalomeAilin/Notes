@@ -94,6 +94,12 @@ struct PageEditorView: View {
       .disabled(!store.canManageBackups)
 
       Menu {
+        Button {
+          canvasController.returnToDrawing()
+        } label: {
+          Label("回到笔迹", systemImage: "scope")
+        }
+        Divider()
         ForEach(PageBackground.allCases) { background in
           Button {
             store.setCurrentPageBackground(background)

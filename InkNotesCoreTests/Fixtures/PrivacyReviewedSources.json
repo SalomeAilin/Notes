@@ -17,7 +17,7 @@
     "InkNotes/Models/BaiduBrokerProtocolV1.swift": "9d639d7fd1c89cd8aae1430b281c1016e9403bb7c98ce3abe2876bcd92da753c",
     "InkNotes/Models/BaiduNetdiskAccount.swift": "4bf01000654ba46a322b0514711e0dc3b15a9f1397fb8348f8a4b56afcc80092",
     "InkNotes/Models/BaiduNetdiskBackup.swift": "d4fb9e16a2053931533418f98910d666feb59f90be957d22688677a9b5be1f56",
-    "InkNotes/Models/ContinuousCanvasGeometry.swift": "be9345d16a1aa3160cc4299a1b2bf935c2312494d063bc74f64ceec71f201a41",
+    "InkNotes/Models/ContinuousCanvasGeometry.swift": "81737103ad7803ef2e7387b2e3fac05f458db9c7eddd912e5a9fb5840df266ef",
     "InkNotes/Models/LibraryDocument.swift": "a78c95733bcf796845e375ee2bffb8a573c5f77f413f1abe4f71e40c382d19f8",
     "InkNotes/Networking/BaiduBackupUploadCoordinator.swift": "9d6ef1f04bfe7dd8e2efbf886656b667f6f87d7eec3c161073789d85ad3a1460",
     "InkNotes/Networking/BaiduHTTPTransport.swift": "61420d52edf7793289d8f6380df7832b319619be2dda9fd6d6df2d4c7f763b41",
@@ -36,9 +36,9 @@
     "InkNotes/Stores/LibraryStore.swift": "670718bed21f396fca6695acbe983a4823500af72075584a714004df917db3a6",
     "InkNotes/Views/BackupTransferView.swift": "2e29a69bbfc8e237df0c164fa26deb53a2bc562d959bdbe423448239351f4245",
     "InkNotes/Views/Canvas/PageBackgroundView.swift": "47c92fee4f6c2b6dedfbe489695605458a0346b3aeb3287d5532d8bce11cfc85",
-    "InkNotes/Views/Canvas/PencilCanvas.swift": "1f2f16745fbe271e43b728a53e22c3c1f88dee35af4053f40cc7661f2b894b3a",
+    "InkNotes/Views/Canvas/PencilCanvas.swift": "d17ad449c28ce748ad51a07577abf206d2a23237c0a6e8d3bdfa1ed8af91f7eb",
     "InkNotes/Views/LibrarySplitView.swift": "7db3e8231c99ed5d8fff15c62c12a5c997a2a8139cdf3e7f56555a1a99e40b83",
-    "InkNotes/Views/PageEditorView.swift": "5739148e630e512b963c90f1daa0ac9c666ea89c3b1523ab688a4f5ceef4b8c9",
+    "InkNotes/Views/PageEditorView.swift": "2b261e3aea38e0e1eb70a0f0bc3028291c79f896c698c5464f25e89f3b1172a5",
     "InkNotes/Views/PageSourceBrowserView.swift": "61676152a12c0d67e45b80f902046a4a03db15e6f6ca13da09a8da63eb7162a4"
   }
 }
