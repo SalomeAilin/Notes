@@ -713,6 +713,7 @@ if [[ ! -x "$notes_xctest_runner" || ! -d "$notes_test_bundle" ]]; then
 fi
 "$notes_xctest_runner" "$notes_test_bundle"
 scripts/test-install-ipad-app.zsh
+zsh scripts/test-ipad-connection.zsh
 scripts/test-brand-candidate.zsh
 scripts/test-baidu-broker-origin.zsh
 assert_oauth_release_marker_scanner_detects_chinese_encodings

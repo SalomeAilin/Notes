@@ -37,6 +37,37 @@ fail() {
   exit 1
 }
 
+# CoreDevice may report a dormant Wi-Fi tunnel as disconnected even when the
+# paired device is reachable. A live, read-only request to the pinned selector
+# is authoritative; an unavailable or unknown state still fails closed.
+notes_verify_live_ipad() {
+  local notes_connection_state="$1"
+  local notes_selector="$2"
+  local notes_probe_json="$notes_temp_dir/live-device-probe.json"
+  case "$notes_connection_state" in
+    connected|disconnected) ;;
+    unavailable) return 1 ;;
+    *) return 1 ;;
+  esac
+  if ! /usr/bin/xcrun devicectl device info apps \
+    --device "$notes_selector" \
+    --bundle-id "$notes_expected_bundle_id" \
+    --json-output "$notes_probe_json" \
+    --omit-deprecated-fields-in-json --quiet --timeout 30 \
+    > /dev/null 2>&1
+  then
+    return 1
+  fi
+  jq -e --arg bundle "$notes_expected_bundle_id" '
+    .info.commandType == "devicectl.device.info.apps"
+    and .info.outcome == "success"
+    and .info.jsonVersion == 5
+    and (.result.apps | type == "array")
+    and (.result.apps | length <= 1)
+    and all(.result.apps[]; .bundleIdentifier == $bundle)
+  ' "$notes_probe_json" > /dev/null 2>&1
+}
+
 while (( $# > 0 )); do
   case "$1" in
     --app)
@@ -492,12 +523,6 @@ if [[ -n "$notes_device_name" ]]; then
     print -rn -- "$notes_device_snapshot" \
       | jq -er '.result.devices[0].properties.connection.state' 2>/dev/null || true
   )"
-  case "$notes_device_connection_state" in
-    connected) ;;
-    unavailable) fail "Requested iPad is not available" ;;
-    disconnected) fail "Requested iPad is not connected" ;;
-    *) fail "Requested iPad connection state is unsupported" ;;
-  esac
   print -rn -- "$notes_device_snapshot" \
     | jq -e \
       'any(.result.devices[0].capabilities[]?; .featureIdentifier == "com.apple.coredevice.feature.installapp")' \
@@ -522,6 +547,8 @@ if [[ -n "$notes_device_name" ]]; then
   [[ "$notes_device_selector" \
     =~ "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$" ]] \
     || fail "Requested iPad CoreDevice selector is invalid"
+  notes_verify_live_ipad "$notes_device_connection_state" "$notes_device_selector" \
+    || fail "Requested iPad live connection could not be verified"
   autoload -Uz is-at-least
   is-at-least "$notes_minimum_os" "$notes_device_os" \
     || fail "Requested iPad OS is below the app minimum"
